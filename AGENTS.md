@@ -26,6 +26,7 @@ Hoy el repo tiene **solo documentación**. Las carpetas `vision/` y `web/` todav
 | [docs/context/08-plan-24h.md](docs/context/08-plan-24h.md) | Querés saber qué hacer ahora, quién hace qué y con qué herramienta. **Guía paso a paso.** |
 | [docs/context/09-convenciones.md](docs/context/09-convenciones.md) | Antes de commitear: estructura del repo, ramas, estilo, variables de entorno. |
 | [docs/context/10-demo-pitch.md](docs/context/10-demo-pitch.md) | Preparás la demo o la presentación final. |
+| [docs/context/11-tareas.md](docs/context/11-tareas.md) | Querés la lista de tareas concretas por persona para arrancar. |
 
 ## Reglas para agentes
 
