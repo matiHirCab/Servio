@@ -95,8 +95,8 @@ def test_id_cambiado_keeps_one_plate_per_position_for_the_rules():
 
 def test_id_cambiado_removes_plate_when_it_stops_coming():
     states = replay(load("id_cambiado"))
-    assert "T1-p2" in states[270].plates
-    assert "T1-p2" not in states[300].plates
+    assert "T1-p2" in states[300].plates  # el suavizado lo retiene una lectura
+    assert "T1-p2" not in states[330].plates
     assert set(states[330].plates) == {"T1-p4"}
     assert states[330].plates["T1-p4"].first_seen == START
 
@@ -180,6 +180,45 @@ def test_inherits_first_seen_but_not_state_since_when_state_differs():
     plate = state.plates["T1-p7"]
     assert plate.first_seen == START
     assert plate.state_since == at(30)
+
+
+def test_dessert_swap_does_not_inherit():
+    # El review del #14: cambian el principal vacío por el postre en el mismo lugar.
+    # El suavizado manda los dos juntos una lectura; vacio → lleno no es el mismo plato.
+    state = run(
+        obs(0, ("T1-p1", "vacio", "centro")),
+        obs(30, ("T1-p1", "vacio", "centro"), ("T1-p2", "lleno", "centro")),
+        obs(60, ("T1-p2", "lleno", "centro")),
+    )
+    plate = state.plates["T1-p2"]
+    assert plate.inherited_from is None
+    assert plate.first_seen == plate.state_since == at(30)
+    assert active_ids(state) == {"T1-p2"}
+
+
+def test_dessert_swap_through_real_smoother():
+    from servio_vision.schemas import Item
+    from servio_vision.smoothing import TableSmoother
+
+    smoother = TableSmoother()
+    state = empty_table("T1")
+    for n, (raw_id, fill) in enumerate([("p1", 0.02), ("p2", 0.9), ("p2", 0.9)]):
+        raw = Item(id=raw_id, fill_ratio=fill, position="centro", confidence=0.9)
+        plates = ((f"T1-{i.id}", i.state, i.position) for i in smoother.update([raw]))
+        state = update_table(state, obs(30 * n, *plates))
+    assert state.plates["T1-p2"].first_seen == at(30)
+
+
+def test_plate_that_moved_into_position_does_not_inherit():
+    # El review del #14: p2 apareció en otro lugar y se corrió al de p1 cuando lo retiraron.
+    state = run(
+        obs(0, ("T1-p1", "comiendo", "centro")),
+        obs(30, ("T1-p1", "comiendo", "centro"), ("T1-p2", "comiendo", "izquierda")),
+        obs(60, ("T1-p2", "comiendo", "centro")),
+    )
+    plate = state.plates["T1-p2"]
+    assert plate.inherited_from is None
+    assert plate.first_seen == at(30)
 
 
 def test_second_plate_in_same_position_is_not_merged():

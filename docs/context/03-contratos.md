@@ -52,7 +52,7 @@ def get_classifier(name: str, **kwargs) -> Classifier: ...   # "fake" | "yolo" |
 | `kind` | `"plate"` | |
 | `state` | PlateState \| None | Si viene `fill_ratio`, se calcula de ahí. |
 | `fill_ratio` | float \| None | Comida que queda, 0–1. |
-| `position` | str | Texto libre ("arriba-izquierda"), para mensajes y debug. |
+| `position` | str | Etiqueta fija de una grilla 3×3 ("arriba-izquierda", "centro"…, `tracking.position_label`). Se usa en mensajes y debug, y `alerts/state.py` la compara por igualdad para reconocer un id cambiado (05, «Estado por plato»): tiene que salir siempre de la misma grilla, no texto libre. |
 | `bbox` | [x, y, w, h] \| None | **Nuevo.** Caja del plato, normalizada 0–1 dentro del recorte de la mesa. La da YOLO; sirve para emparejar ids y para la vista de demo. |
 | `confidence` | float \| None | |
 | `visible` | bool | `false` si algo lo tapa; no cuenta como lectura en el suavizado. |

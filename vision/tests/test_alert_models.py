@@ -151,6 +151,7 @@ def test_id_cambiado_changes_one_id_in_same_position():
             swaps += [(i, old) for old in olds]
     assert len(swaps) == 1
     i, old = swaps[0]
+    assert i + 1 < len(observations), "el cambio de id no puede ser la última lectura"
     assert old in {it.track_id for it in observations[i].items}  # viene junto al nuevo
     assert old not in {it.track_id for it in observations[i + 1].items}  # y después no
 
