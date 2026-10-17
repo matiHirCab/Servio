@@ -8,9 +8,12 @@
 `ultralytics` está en `requirements-yolo.txt` y se importa recién al crear el detector.
 """
 
+import logging
 import os
 import statistics
 from dataclasses import dataclass
+
+logger = logging.getLogger(__name__)
 
 DEFAULT_YOLOE = "yoloe-11s-seg.pt"
 PLATE_PROMPTS = ("plate", "bowl")
@@ -61,12 +64,20 @@ class PlateDetector:
         min_rel: float = 0.35,
         device: str | None = None,
     ):
-        from ultralytics import YOLO, YOLOE
-
         weights = weights or os.environ.get("YOLO_WEIGHTS") or None
-        if weights and os.path.exists(weights):
+        if weights and not os.path.exists(weights):
+            logger.warning(
+                "YOLO_WEIGHTS=%s no existe (¿corrés desde otra carpeta?), uso YOLOE",
+                weights,
+            )
+            weights = None
+        if weights:
+            from ultralytics import YOLO
+
             self.model = YOLO(weights)
         else:
+            from ultralytics import YOLOE  # recién en ultralytics 8.3.99+
+
             self.model = YOLOE(DEFAULT_YOLOE)
             self.model.set_classes(
                 list(PLATE_PROMPTS), self.model.get_text_pe(list(PLATE_PROMPTS))

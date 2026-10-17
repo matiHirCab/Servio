@@ -21,11 +21,29 @@ def _next_number(previous_items: list[Item]) -> int:
     return max(nums, default=0) + 1
 
 
-def match_ids(bboxes: list, previous_items: list[Item]) -> list[str]:
+class IdCounter:
+    """Último número de id usado por mesa. Solo sube: un plato que faltó en una
+    lectura no le deja su número a uno nuevo (el suavizado todavía guarda su pista)."""
+
+    def __init__(self) -> None:
+        self._last: dict[str, int] = {}
+
+    def first_new(self, table_id: str, previous_items: list[Item]) -> int:
+        return max(self._last.get(table_id, 0) + 1, _next_number(previous_items))
+
+    def seen(self, table_id: str, ids: list[str]) -> None:
+        nums = [int(m.group(1)) for i in ids if (m := re.fullmatch(r"p(\d+)", i))]
+        self._last[table_id] = max([self._last.get(table_id, 0), *nums])
+
+
+def match_ids(
+    bboxes: list, previous_items: list[Item], first_new: int | None = None
+) -> list[str]:
     """Id para cada caja ([x, y, w, h] normalizadas 0–1), en el mismo orden.
 
     Se empareja primero el par más cercano; una caja sin pareja cerca es un plato
-    nuevo y recibe el siguiente `p{n}`.
+    nuevo y recibe el siguiente `p{n}` desde `first_new` (por defecto, uno más que
+    el mayor de `previous_items`; usar `IdCounter` para no reutilizar números).
     """
     candidates = []
     for i, b in enumerate(bboxes):
@@ -43,7 +61,7 @@ def match_ids(bboxes: list, previous_items: list[Item]) -> list[str]:
         if ids[i] is None and pid not in used:
             ids[i] = pid
             used.add(pid)
-    n = _next_number(previous_items)
+    n = first_new or _next_number(previous_items)
     for i in range(len(ids)):
         if ids[i] is None:
             ids[i] = f"p{n}"

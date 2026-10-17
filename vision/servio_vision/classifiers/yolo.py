@@ -13,7 +13,7 @@ from PIL import Image
 
 from servio_vision.detector import Detection, PlateDetector
 from servio_vision.schemas import Item, PlateState, TableReport
-from servio_vision.tracking import match_ids, position_label
+from servio_vision.tracking import IdCounter, match_ids, position_label
 
 logger = logging.getLogger(__name__)
 
@@ -32,7 +32,11 @@ def decode(image: bytes) -> Image.Image:
 
 
 def find_plates(
-    detector: PlateDetector, img: Image.Image, previous_items: list[Item]
+    detector: PlateDetector,
+    img: Image.Image,
+    previous_items: list[Item],
+    ids: IdCounter | None = None,
+    table_id: str = "",
 ) -> list[FoundPlate]:
     """Detecta los platos y les asigna ids estables, ordenados de arriba a abajo."""
     dets = detector.detect(img)
@@ -46,19 +50,24 @@ def find_plates(
         )
         for d in dets
     ]
-    ids = match_ids(bboxes, previous_items)
-    plates = [FoundPlate(i, b, d) for i, b, d in zip(ids, bboxes, dets)]
+    first_new = ids.first_new(table_id, previous_items) if ids else None
+    plate_ids = match_ids(bboxes, previous_items, first_new)
+    if ids:
+        ids.seen(table_id, plate_ids)
+    plates = [FoundPlate(i, b, d) for i, b, d in zip(plate_ids, bboxes, dets)]
     plates.sort(key=lambda p: (round(p.bbox[1] * 4), p.bbox[0]))
     return plates
 
 
 def items_from_labels(plates: list[FoundPlate], confidence_factor: float = 1.0):
-    """Items con el estado de la clase de YOLO, o `None` si alguna clase no tiene estado."""
+    """Items con el estado de la clase de YOLO. Saltea las clases sin estado y
+    devuelve `None` si no queda ningún plato con estado (p. ej., YOLOE sin entrenar)."""
     items = []
     for p in plates:
         state = STATE_FROM_LABEL.get(p.detection.label)
         if state is None:
-            return None
+            logger.debug("clase %r sin estado, salteo %s", p.detection.label, p.id)
+            continue
         items.append(
             Item(
                 id=p.id,
@@ -68,17 +77,22 @@ def items_from_labels(plates: list[FoundPlate], confidence_factor: float = 1.0):
                 confidence=round(p.detection.confidence * confidence_factor, 3),
             )
         )
+    if plates and not items:
+        return None
     return items
 
 
 class YoloClassifier:
     def __init__(self, detector: PlateDetector | None = None, **detector_kwargs):
         self.detector = detector or PlateDetector(**detector_kwargs)
+        self.ids = IdCounter()
 
     def classify(
         self, image: bytes, table_id: str, previous_items: list[Item]
     ) -> TableReport | None:
-        plates = find_plates(self.detector, decode(image), previous_items)
+        plates = find_plates(
+            self.detector, decode(image), previous_items, self.ids, table_id
+        )
         items = items_from_labels(plates)
         if items is None:
             logger.warning(

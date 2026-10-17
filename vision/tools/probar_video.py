@@ -55,8 +55,10 @@ def _font(size: int):
 
 
 def label(it) -> str:
-    if not it.visible:
+    if it.state is None:
         return f"{it.id} tapado"
+    if not it.visible:  # tapado ahora: muestra la última lectura
+        return f"{it.id} {it.state} (anterior)"
     if it.fill_ratio is not None:
         return f"{it.id} {it.state} {round(100 * it.fill_ratio)}%"
     return f"{it.id} {it.state}"
@@ -92,7 +94,7 @@ def plate_sheet(img: Image.Image, items, path: Path, side: int = 300) -> None:
         sheet.paste(
             crop, (cx + (side - crop.width) // 2, cy + (side - crop.height) // 2)
         )
-        color = COLORS.get(it.state, "#1565c0") if it.visible else "#616161"
+        color = COLORS.get(it.state, "#616161")
         d.rectangle((cx, cy + side, cx + side - 1, cy + side + bar - 1), fill=color)
         d.text((cx + 8, cy + side + 4), label(it), fill="white", font=big)
         conf = "" if it.confidence is None else f"confianza {it.confidence:.2f}"
@@ -163,9 +165,7 @@ def main() -> None:
         timeline.append(
             {"frame": name, "segundo": round(sec, 1), "report": report.model_dump()}
         )
-        summary = ", ".join(
-            f"{i.id}={i.state if i.visible else 'tapado'}" for i in report.items
-        )
+        summary = ", ".join(f"{i.id}={i.state or 'tapado'}" for i in report.items)
         print(
             f"{name} t={sec:5.1f}s ({took:4.1f}s): {summary or 'sin platos'}",
             flush=True,

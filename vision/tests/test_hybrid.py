@@ -66,7 +66,8 @@ def test_hybrid_uses_claude_fill_ratio(claude):
 
 
 def test_hybrid_hidden_plate_keeps_its_last_reading(claude):
-    """Un plato que ya se vio nunca queda «tapado»: conserva su última lectura."""
+    """Un plato que ya se vio nunca queda «tapado»: conserva su última lectura,
+    con visible=False para que el suavizado no la cuente."""
     det = FakeDetector([Detection((20, 20, 100, 100), 0.9, "plate")])
     clf = HybridClassifier(detector=det)
     claude.answer = PlatesReport(
@@ -80,10 +81,16 @@ def test_hybrid_hidden_plate_keeps_its_last_reading(claude):
     item = second.items[0]
     assert (item.id, item.visible, item.state, item.fill_ratio) == (
         "p1",
-        True,
+        False,
         "lleno",
         0.9,
     )
+    # sigue así en el próximo frame tapado
+    third = clf.classify(_jpeg(), "T1", second.items)
+    assert third.items[0].state == "lleno"
+    # a la tercera lectura seguida sin verlo, queda tapado
+    fourth = clf.classify(_jpeg(), "T1", third.items)
+    assert fourth.items[0].state is None
 
 
 def test_hybrid_hidden_plate_has_no_state(claude):
@@ -135,3 +142,37 @@ def test_yolo_classifier_states_from_labels():
 def test_yolo_classifier_without_trained_weights_returns_none():
     det = FakeDetector([Detection((20, 20, 100, 100), 0.9, "plate")])
     assert YoloClassifier(detector=det).classify(_jpeg(), "T1", []) is None
+
+
+def test_hybrid_fallback_keeps_last_people_present(claude):
+    clf = HybridClassifier(detector=FakeDetector(PLATES))
+    claude.answer = PlatesReport(
+        plates=[
+            PlateEstimate(index=1, fill_ratio=0.5, confidence=0.8),
+            PlateEstimate(index=2, fill_ratio=0.5, confidence=0.8),
+        ],
+        people_present=False,
+    )
+    first = clf.classify(_jpeg(), "T1", [])
+    claude.answer = None  # Claude falla: usa YOLO, pero la mesa sigue sin gente
+    second = clf.classify(_jpeg(), "T1", first.items)
+    assert second.people_present is False
+
+
+def test_hybrid_does_not_reuse_ids_of_missing_plates(claude):
+    clf = HybridClassifier(detector=FakeDetector(PLATES))
+    first = clf.classify(_jpeg(), "T1", [])  # p1 y p2
+    clf.detector = FakeDetector([PLATES[0]])
+    second = clf.classify(_jpeg(), "T1", first.items)  # p2 no se ve
+    clf.detector = FakeDetector(
+        [PLATES[0], Detection((300, 100, 380, 180), 0.8, "food")]
+    )
+    third = clf.classify(_jpeg(), "T1", second.items)
+    # el plato nuevo no hereda el p2 que faltó
+    assert sorted(i.id for i in third.items) == ["p1", "p3"]
+
+
+def test_yolo_skips_unknown_labels():
+    det = FakeDetector([*PLATES, Detection((300, 100, 380, 180), 0.8, "glass")])
+    report = YoloClassifier(detector=det).classify(_jpeg(), "T1", [])
+    assert len(report.items) == 2

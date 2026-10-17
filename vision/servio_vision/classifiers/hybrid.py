@@ -17,13 +17,16 @@ from servio_vision.classifiers import claude_plates
 from servio_vision.classifiers.yolo import decode, find_plates, items_from_labels
 from servio_vision.detector import PlateDetector
 from servio_vision.schemas import Item, TableReport
-from servio_vision.tracking import position_label
+from servio_vision.tracking import IdCounter, position_label
 
 logger = logging.getLogger(__name__)
 
 CROP_MARGIN = 0.10
 CROP_SIDE = 384  # px del lado mayor de cada recorte de plato
 TABLE_SIDE = 1024  # px del lado mayor de la mesa que ve Claude
+# Lecturas seguidas sin ver la comida para mostrar un plato como «tapado». Antes de
+# eso conserva su última lectura (un brazo que pasa no lo tapa).
+HIDDEN_READINGS = 3
 FALLBACK_CONFIDENCE = 0.5  # la confianza de YOLO se multiplica por esto si Claude falla
 
 
@@ -54,6 +57,9 @@ class HybridClassifier:
         **detector_kwargs,
     ):
         self.detector = detector or PlateDetector(**detector_kwargs)
+        self.ids = IdCounter()
+        self.people_present: dict[str, bool] = {}  # último que dijo Claude, por mesa
+        self.hidden: dict[tuple[str, str], int] = {}  # lecturas seguidas sin verlo
         self.claude_kwargs = {
             "provider": provider,
             "model": model,
@@ -64,7 +70,7 @@ class HybridClassifier:
         self, image: bytes, table_id: str, previous_items: list[Item]
     ) -> TableReport | None:
         img = decode(image)
-        plates = find_plates(self.detector, img, previous_items)
+        plates = find_plates(self.detector, img, previous_items, self.ids, table_id)
         if not plates:
             return TableReport(items=[])
         report = claude_plates.estimate_plates(
@@ -78,19 +84,28 @@ class HybridClassifier:
             if items is None:
                 logger.warning("Mesa %s: Claude falló y YOLO no da estado", table_id)
                 return None
-            return TableReport(items=items, notes="sin Claude: estado de YOLO")
-        last = {i.id: i for i in previous_items if i.visible}
+            return TableReport(
+                items=items,
+                people_present=self.people_present.get(table_id, True),
+                notes="sin Claude: estado de YOLO",
+            )
+        self.people_present[table_id] = report.people_present
+        last = {i.id: i for i in previous_items if i.state is not None}
         items = []
         for p, est in zip(plates, report.plates):
+            key = (table_id, p.id)
+            self.hidden[key] = 0 if est.visible else self.hidden.get(key, 0) + 1
             if est.visible:
                 reading = {"fill_ratio": est.fill_ratio, "confidence": est.confidence}
-            elif p.id in last:
-                # tapado ahora pero ya lo vimos: conserva su última lectura
+            elif p.id in last and self.hidden[key] < HIDDEN_READINGS:
+                # tapado hace poco y ya lo vimos: muestra su última lectura, pero
+                # con visible=False para que el suavizado no la cuente como nueva
                 prev = last[p.id]
                 reading = {
                     "fill_ratio": prev.fill_ratio,
                     "state": prev.state,
                     "confidence": prev.confidence,
+                    "visible": False,
                 }
             else:
                 reading = {"visible": False, "confidence": est.confidence}
