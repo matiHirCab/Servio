@@ -105,7 +105,7 @@ Guion de 3 minutos (problema → demo en vivo → cómo funciona YOLO + Claude �
 
 ### MAT-2 · Estado de mesa
 **hora 1–6 · 1 h**
-`alerts/state.py`: por cada `track_id`, `first_seen`, `state`, `state_since`, `last_seen`; un id nuevo en la misma mesa y `position` que un único plato que ya estaba se trata como el mismo plato (alias; ver «Estado por plato» en `05`), y uno que no viene ya está retirado. Función pura `table_status(items)` según `05`.
+`alerts/state.py`: por cada `track_id`, `first_seen`, `state`, `state_since`, `last_seen`; si un plato deja de venir y un id nuevo apareció en su `position` en esa lectura o la anterior, el nuevo hereda sus tiempos (ver «Estado por plato» en `05`); uno que no viene ya está retirado. Función pura `table_status(items)` según `05`.
 
 **Hecho cuando:** tests con el fixture del id cambiado (no reinicia tiempos) y con los 5 casos de `table_status`.
 

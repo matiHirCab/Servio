@@ -1,17 +1,20 @@
 """Estado por plato y estado de mesa (MAT-2). Ver docs/context/05-reglas-alertas.md.
 
 Funciones puras: `update_table(prev, obs)` devuelve un `TableState` nuevo sin tocar
-`prev`.
+`prev`. Los platos se guardan por su `track_id` actual.
 
-Reconciliación de ids («Estado por plato» en 05):
-- Un `track_id` nuevo en la misma `position` que un único plato que ya estaba en la
-  mesa es ese mismo plato: se guarda el alias (nuevo → canónico) y no se reinician
-  `first_seen` ni `state_since`. Pasa venga o no el id viejo en esa lectura, porque el
-  suavizado retiene una lectura al viejo y manda los dos juntos.
-- Si hay más de un candidato (dos platos con esa `position`, o dos ids nuevos), no se
-  empareja: el id nuevo es un plato nuevo.
-- Un plato que no viene en la observación ya está retirado: el suavizado lo saca
-  después de 2 lecturas ausente (03-contratos.md).
+Cambio de id («Estado por plato» en 05). El suavizado, cuando el clasificador cambia
+`p1 → p4`, manda los dos juntos una lectura y después solo `p4`. Entonces:
+- Un id nuevo en la `position` de un plato que sigue en la mesa es **provisional** en esa
+  lectura: `active_plates()` no lo cuenta, así no cambia el estado de la mesa ni
+  dispara avisos.
+- Cuando un plato deja de venir (retirado) y hay un **único** plato reciente (apareció
+  en esta lectura o en la anterior) en su misma `position`, ese plato **hereda**
+  `first_seen` (y `state_since` si tiene el mismo estado).
+- Si viejo y nuevo siguen viniendo, eran dos platos: el nuevo cuenta desde la lectura
+  siguiente, con sus propios tiempos.
+- Un plato que no viene ya está retirado: el suavizado lo saca después de 2 lecturas
+  ausente (03-contratos.md).
 """
 
 from collections import Counter
@@ -20,7 +23,7 @@ from dataclasses import dataclass, field, replace
 from datetime import datetime
 from typing import Literal
 
-from servio_vision.alerts.models import ObservedPlate, TableObservation
+from servio_vision.alerts.models import TableObservation
 from servio_vision.schemas import PlateState
 
 TableStatus = Literal["libre", "servida", "comiendo", "por_terminar", "terminada"]
@@ -30,12 +33,15 @@ TableStatus = Literal["libre", "servida", "comiendo", "por_terminar", "terminada
 class PlateTrack:
     """Un plato de la mesa, con los tiempos que usan las reglas."""
 
-    track_id: str  # canónico: el primer id con el que lo vimos
+    track_id: str
     state: PlateState
     position: str
-    first_seen: datetime
-    state_since: datetime
+    first_seen: datetime  # puede venir heredado de un id anterior
+    state_since: datetime  # idem, si el estado es el mismo
     last_seen: datetime
+    id_since: datetime  # cuándo apareció este track_id
+    provisional: bool = False  # id nuevo en la posición de un plato que sigue
+    inherited_from: str | None = None  # track_id del que heredó los tiempos
 
 
 @dataclass(frozen=True)
@@ -43,9 +49,12 @@ class TableState:
     """Platos de una mesa después de la última observación."""
 
     table_id: str
-    plates: dict[str, PlateTrack] = field(default_factory=dict)  # por id canónico
-    aliases: dict[str, str] = field(default_factory=dict)  # id de la visión → canónico
+    plates: dict[str, PlateTrack] = field(default_factory=dict)
     last_ts: datetime | None = None
+
+    def active_plates(self) -> list[PlateTrack]:
+        """Platos que cuentan para las reglas (sin los provisionales)."""
+        return [p for p in self.plates.values() if not p.provisional]
 
 
 def empty_table(table_id: str) -> TableState:
@@ -58,71 +67,73 @@ def update_table(prev: TableState, obs: TableObservation) -> TableState:
         raise ValueError(f"observación de {obs.table_id} para la mesa {prev.table_id}")
     if prev.last_ts is not None and obs.ts < prev.last_ts:
         raise ValueError(f"ts {obs.ts} anterior a la última lectura {prev.last_ts}")
-
-    aliases = dict(prev.aliases)
-    readings = _resolve(prev, obs.items, aliases)
+    ts = obs.ts
 
     plates: dict[str, PlateTrack] = {}
-    for canonical, item in readings.items():
-        old = prev.plates.get(canonical)
+    for item in obs.items:
+        old = prev.plates.get(item.track_id)
         if old is None:
-            plates[canonical] = PlateTrack(
-                track_id=canonical,
+            plates[item.track_id] = PlateTrack(
+                track_id=item.track_id,
                 state=item.state,
                 position=item.position,
-                first_seen=obs.ts,
-                state_since=obs.ts,
-                last_seen=obs.ts,
+                first_seen=ts,
+                state_since=ts,
+                last_seen=ts,
+                id_since=ts,
             )
         else:
-            plates[canonical] = replace(
+            plates[item.track_id] = replace(
                 old,
                 state=item.state,
                 position=item.position,
-                state_since=old.state_since if item.state == old.state else obs.ts,
-                last_seen=obs.ts,
+                state_since=old.state_since if item.state == old.state else ts,
+                last_seen=ts,
             )
 
-    # Lo que no vino ya está retirado: se va el plato y sus alias.
-    aliases = {new: canon for new, canon in aliases.items() if canon in plates}
-    return TableState(prev.table_id, plates, aliases, obs.ts)
+    _inherit_from_removed(prev, plates, ts)
+    _mark_provisional(plates, ts)
+    return TableState(prev.table_id, plates, ts)
 
 
-def _resolve(
-    prev: TableState, items: list[ObservedPlate], aliases: dict[str, str]
-) -> dict[str, ObservedPlate]:
-    """Lectura de cada plato por id canónico. Agrega a `aliases` los nuevos."""
-    known = set(prev.plates) | set(aliases)
-    new_items = [i for i in items if i.track_id not in known]
-    new_per_position = Counter(i.position for i in new_items)
-    prev_per_position = Counter(p.position for p in prev.plates.values())
-
-    readings: dict[str, ObservedPlate] = {}
-    fresh: set[str] = set()  # canónicos que ya tienen la lectura de un id nuevo
-    for item in items:
-        if item.track_id in aliases:
-            canonical, is_alias = aliases[item.track_id], True
-        elif item.track_id in prev.plates:
-            canonical, is_alias = item.track_id, False
-        elif (
-            new_per_position[item.position] == 1
-            and prev_per_position[item.position] == 1
-        ):
-            canonical = next(
-                p.track_id for p in prev.plates.values() if p.position == item.position
-            )
-            aliases[item.track_id], is_alias = canonical, True
-        else:
-            canonical, is_alias = item.track_id, False  # plato nuevo
-
-        # Si el viejo (retenido por el suavizado) y el nuevo caen en el mismo plato,
-        # gana el nuevo: es la lectura fresca.
-        if canonical in fresh:
+def _inherit_from_removed(
+    prev: TableState, plates: dict[str, PlateTrack], ts: datetime
+) -> None:
+    """Un retirado pasa sus tiempos al único plato reciente en su misma posición."""
+    since = prev.last_ts or ts  # "reciente": apareció en esta lectura o en la anterior
+    removed = [p for tid, p in prev.plates.items() if tid not in plates]
+    removed_per_position = Counter(p.position for p in removed)
+    for old in removed:
+        if removed_per_position[old.position] != 1:
+            continue  # dos retirados en la misma posición: no se sabe cuál es cuál
+        candidates = [
+            p
+            for p in plates.values()
+            if p.position == old.position
+            and p.id_since >= since
+            and p.inherited_from is None
+        ]
+        if len(candidates) != 1:
             continue
-        readings[canonical] = item
-        if is_alias:
-            fresh.add(canonical)
-    return readings
+        new = candidates[0]
+        plates[new.track_id] = replace(
+            new,
+            first_seen=old.first_seen,
+            state_since=old.state_since if new.state == old.state else new.state_since,
+            provisional=False,
+            inherited_from=old.track_id,
+        )
+
+
+def _mark_provisional(plates: dict[str, PlateTrack], ts: datetime) -> None:
+    """Id nuevo en esta lectura en la posición de un plato que sigue: provisional."""
+    staying = {p.position for p in plates.values() if p.id_since < ts}
+    for tid, p in plates.items():
+        provisional = (
+            p.id_since == ts and p.inherited_from is None and p.position in staying
+        )
+        if provisional != p.provisional:
+            plates[tid] = replace(p, provisional=provisional)
 
 
 def table_status(states: Iterable[PlateState]) -> TableStatus:

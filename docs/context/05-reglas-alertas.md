@@ -50,12 +50,16 @@ Función pura `table_status(items)`, evaluada en este orden:
 
 ## Estado por plato
 
-`alerts/state.py` (funciones puras `update_table` y `table_status`) guarda por cada plato: `first_seen`, `state`, `state_since` y `last_seen`.
+`alerts/state.py` (funciones puras `update_table` y `table_status`) guarda cada plato por su `track_id` actual, con `first_seen`, `state`, `state_since` y `last_seen`.
 
-- **Id que cambia:** un `track_id` nuevo en la misma `position` que un plato que ya estaba en la mesa se trata como ese mismo plato: se guarda el alias (por ejemplo `T1-p4 → T1-p1`) y no se reinician `first_seen` ni `state_since`. Vale venga o no el id viejo en esa lectura, porque el suavizado retiene una lectura al viejo y manda los dos juntos.
-- **Solo con un único candidato:** si más de un plato de la mesa comparte esa `position`, o llegan dos ids nuevos con la misma, no se empareja y el nuevo cuenta como plato nuevo, para no pasarle los tiempos al plato equivocado.
+Cuando el clasificador cambia el id de un plato (`p1 → p4`), el suavizado manda los dos juntos una lectura y después solo el nuevo. Para no reiniciar el tiempo del plato y no mezclar platos distintos:
+
+- **Provisional:** un id nuevo en la `position` de un plato que sigue en la mesa no cuenta para las reglas en esa lectura (`active_plates()` lo deja afuera), así no cambia el estado de la mesa ni dispara avisos.
+- **Herencia:** cuando un plato deja de venir y hay un **único** plato reciente (apareció en esa lectura o en la anterior) en su misma `position`, ese plato hereda `first_seen`, y también `state_since` si tiene el mismo estado.
+- **Dos platos:** si el viejo y el nuevo siguen viniendo, eran dos platos (por ejemplo, sirvieron otro en el mismo casillero): el nuevo cuenta desde la lectura siguiente, con sus propios tiempos, y nunca hereda.
+- **Ambigüedad:** con dos candidatos, o dos platos retirados en la misma `position`, nadie hereda.
 - **Retirado:** un plato que no viene en la observación ya está retirado; el suavizado lo saca después de 2 lecturas ausente ([03-contratos.md](03-contratos.md)).
-- **Riesgo conocido:** un plato realmente nuevo que el clasificador ponga en la misma `position` de texto que uno que sigue en la mesa se toma como ese plato. Se puede mejorar emparejando por `bbox`.
+- **Riesgo conocido:** si retiran un plato justo una lectura después de que sirvieron otro en el mismo casillero, el nuevo hereda el tiempo del viejo. Se puede mejorar emparejando por `bbox`.
 
 ## Tests
 

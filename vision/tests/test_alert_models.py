@@ -137,14 +137,16 @@ def test_id_cambiado_changes_one_id_in_same_position():
     # Como el suavizado real: el id nuevo llega junto al viejo (retenido una lectura)
     # en la misma posición, y en la lectura siguiente el viejo ya no viene.
     observations = load("id_cambiado")
-    swaps = 0
-    for prev, curr in itertools.pairwise(observations):
-        prev_ids = {it.track_id: it for it in prev.items}
-        added = [it for it in curr.items if it.track_id not in prev_ids]
-        swaps += sum(
-            1 for a in added if any(p.position == a.position for p in prev.items)
-        )
-    assert swaps == 1
+    swaps = []
+    for i, (prev, curr) in enumerate(itertools.pairwise(observations), start=1):
+        prev_ids = {it.track_id for it in prev.items}
+        for new in (it for it in curr.items if it.track_id not in prev_ids):
+            olds = [p.track_id for p in prev.items if p.position == new.position]
+            swaps += [(i, old) for old in olds]
+    assert len(swaps) == 1
+    i, old = swaps[0]
+    assert old in {it.track_id for it in observations[i].items}  # viene junto al nuevo
+    assert old not in {it.track_id for it in observations[i + 1].items}  # y después no
 
 
 # --- modelos ---
