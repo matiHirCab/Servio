@@ -7,3 +7,6 @@ __pycache__/
 videos/
 datasets/
 .next/
+vision/data/
+vision/models/
+vision/out/

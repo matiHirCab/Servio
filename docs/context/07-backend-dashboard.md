@@ -14,9 +14,10 @@
 | `POST /api/observations` | Recibe la visión, actualiza `items`, corre reglas, dispara notificaciones. Valida `INGEST_TOKEN`. Validar body con Zod. |
 | `GET /api/tables` | Estado actual de cada mesa para el mapa. |
 | `GET /api/alerts` | Alertas (filtro por estado). |
-| `POST /api/alerts/:id/ack` | Marcar desde el dashboard (además de Telegram). |
+| `POST /api/alerts/:id/ack` | "Voy" desde el dashboard (además de Telegram). |
+| `POST /api/alerts/:id/resolve` | "Listo" desde el dashboard (además de Telegram). |
 | `GET /api/metrics` | Métricas agregadas del día. |
-| `POST /api/telegram/webhook` | Comandos `/start`, `/mesa` y botones. |
+| `POST /api/telegram/webhook` | Comandos `/start`, `/mesa` y botones (P2). El `TelegramNotifier` que envía y edita mensajes es de P1. |
 | `POST /api/dev/simulate` | **Solo dev**: genera observaciones falsas para un escenario (mesa que pasa de lleno a vacío en 2 min). Clave para trabajar sin la visión. |
 
 ## Simulador (prioridad alta, hora 1–3)

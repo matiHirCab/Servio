@@ -24,7 +24,7 @@
 
 | Módulo | Carpeta | Tecnología | Dónde corre |
 |---|---|---|---|
-| Visión | `vision/` | Python 3.11, OpenCV (solo captura y recorte), Claude multimodal vía AWS Bedrock. Sin YOLO ni modelos propios. | Laptop con la cámara (edge). Sin GPU. |
+| Visión | `vision/` | Python 3.11, OpenCV (captura y recorte). Clasificación detrás de la interfaz `Classifier`: Claude multimodal vía AWS Bedrock por defecto; YOLO solo si gana la comparativa (ver [04-vision.md](04-vision.md)). | Laptop con la cámara (edge), sin GPU. Si se usa YOLO, se entrena en Colab con GPU e infiere `yolov8n` en la laptop con CPU. |
 | API + reglas + bot | `web/app/api/` | Next.js (App Router, TypeScript) | Vercel |
 | Dashboard | `web/app/` | Next.js + Tailwind + shadcn/ui, polling o SSE | Vercel |
 | Base de datos | — | Postgres (Neon desde el marketplace de Vercel) + Drizzle o Prisma | Nube |
@@ -34,7 +34,7 @@
 
 - **Un solo deploy web (Vercel)** para API, bot y dashboard: menos piezas que se rompen.
 - **La captura corre local** porque la cámara está en el local. Al backend solo sube JSON chiquito (estado de cada plato). A Claude solo se mandan recortes de cada mesa cada 15–30 s, no video.
-- **Solo Claude multimodal, sin YOLO**: cámara fija y cenital, mesas fijas, estados que cambian en minutos. No hace falta detección en tiempo real ni entrenar nada. Detalle y trade-offs en [04-vision.md](04-vision.md).
+- **Claude multimodal por defecto, YOLO a prueba**: cámara fija y cenital, mesas fijas, estados que cambian en minutos, así que no hace falta detección en tiempo real. Claude funciona sin entrenar; un YOLO entrenado se compara contra Claude con el mismo test set y solo entra si gana antes de la hora 12. Los dos van detrás de la misma interfaz `Classifier`, así que el resto del pipeline no cambia. Detalle en [04-vision.md](04-vision.md).
 - **Las reglas viven en el backend**, no en la visión: así se pueden ajustar umbrales sin tocar el modelo, y el dashboard ve lo mismo que el bot.
 - **Contrato JSON fijo** entre visión y backend ([03-contratos.md](03-contratos.md)) para que las 3 personas trabajen en paralelo desde la hora 1 con datos falsos.
 

@@ -12,6 +12,16 @@ type AlertType  = "mesa_por_terminar" | "plato_vacio" | "plato_lleno_mucho" | "b
 type AlertStatus = "abierta" | "en_camino" | "resuelta" | "expirada";
 ```
 
+**Propuestas pendientes (se deciden en T0-1 de [11-tareas.md](11-tareas.md)):** `visible: boolean` por ítem y el `AlertType` `esperando_plato`. Hasta que se aprueben y se anoten acá, no forman parte del contrato.
+
+## Fixtures — `fixtures/`
+
+Ejemplos concretos de este contrato, usados por los tres módulos para trabajar con mocks (lista de archivos en [11-tareas.md](11-tareas.md), T0-2). Si cambiás un contrato, actualizá los fixtures en el mismo PR.
+
+- `fixtures/observations/*.jsonl`: una observación de `POST /api/observations` completa por línea. Es el formato que escribe la visión en `--dry-run` y el que reproduce `web/scripts/simulate.ts`.
+- `fixtures/expected/*.alerts.json`: alertas que el motor tiene que producir para cada escenario.
+- `fixtures/api/*.json`: respuestas de ejemplo de `GET /api/tables`, `/api/alerts` y `/api/metrics`.
+
 ## Zonas de mesas — `vision/config/zones.json`
 
 Coordenadas en píxeles del frame de la cámara (se dibujan una vez con `vision/tools/draw_zones.py`).
@@ -26,6 +36,21 @@ Coordenadas en píxeles del frame de la cámara (se dibujan una vez con `vision/
   ]
 }
 ```
+
+## Visión interna: interfaz `Classifier` (P1 ↔ P3)
+
+Separa el modelo (P1) de la conexión de visión (P3). Vive en `vision/servio_vision/classifier.py`; los modelos Pydantic en `vision/servio_vision/schemas.py` siguen la herramienta `report_table` de [04-vision.md](04-vision.md).
+
+```python
+class Classifier(Protocol):
+    def classify(self, image: bytes, table_id: str, previous_items: list[Item]) -> TableReport | None: ...
+
+def get_classifier(name: str) -> Classifier: ...   # "fake" | "claude" | "yolo"
+```
+
+- `image`: recorte JPEG de la mesa (~512 px). `previous_items`: los ítems de la lectura anterior, para mantener ids.
+- `None` = lectura fallida (se descarta, no cuenta para el suavizado).
+- Implementaciones: `classifiers/fake.py` (P3, sin modelo), `classifiers/claude.py` (P1), `classifiers/yolo.py` (P1, solo si se decide en [04-vision.md](04-vision.md)). Se elige con `main.py --classifier`.
 
 ## Visión → Backend: `POST /api/observations`
 
@@ -88,7 +113,16 @@ Se registra cuántas veces se aplicó la regla 1 (métrica de calidad de la visi
 
 `GET /api/alerts?status=abierta` → lista de alertas.
 
-`GET /api/metrics?from=…&to=…` → `{ avg_meal_minutes, avg_response_seconds, alerts_by_type, plates_returned_full }`.
+`POST /api/alerts/:id/ack` → body `{ "waiter_id": "…" }` (opcional desde el dashboard). Pasa la alerta a `en_camino` y guarda `acked_by`, `acked_at`.
+
+`POST /api/alerts/:id/resolve` → body `{ "waiter_id": "…" }` (opcional). Pasa la alerta a `resuelta` y guarda `resolved_at`.
+
+Las dos responden `200` con la alerta actualizada y disparan `Notifier.update` para editar los mensajes ya enviados.
+
+`GET /api/metrics?from=…&to=…` → `{ avg_meal_minutes, avg_response_seconds, alerts_by_type, plates_returned_full, id_reconciliations, avg_wait_between_courses? }`.
+
+- `id_reconciliations`: cuántas veces se aplicó la regla 1 de la reconciliación (calidad de la visión).
+- `avg_wait_between_courses`: solo si se aprobó `esperando_plato`.
 
 ## Alerta
 
@@ -104,6 +138,22 @@ Se registra cuántas veces se aplicó la regla 1 (métrica de calidad de la visi
 }
 ```
 
+## Backend → Notificaciones: interfaz `Notifier` (P2 ↔ P1)
+
+Vive en `web/lib/notify/types.ts`. P2 la llama; P1 implementa `TelegramNotifier` en `web/lib/notify/telegram.ts`.
+
+```ts
+interface SentMessage { channel: "telegram" | "whatsapp"; chat_id: string; message_id: string }
+
+interface Notifier {
+  send(alert: Alert, waiter: Waiter): Promise<SentMessage>;
+  update(alert: Alert, sent: SentMessage): Promise<void>;   // edita el mensaje según alert.status
+}
+```
+
+- `send`: lo llama `POST /api/observations` por cada alerta **nueva** y cada mozo de la mesa (`table_waiters`). El resultado se guarda en `alert_messages`.
+- `update`: lo llama el backend cuando la alerta cambia de estado: Voy/Listo (desde Telegram o el dashboard) o `expirada` (cuando el motor la devuelve en `expiradas`). Se llama una vez por fila de `alert_messages`.
+
 ## Telegram → Backend: `POST /api/telegram/webhook`
 
 Callback data de los botones: `ack:<alert_id>` ("Voy") y `done:<alert_id>` ("Listo"). Se valida con el header `X-Telegram-Bot-Api-Secret-Token`.
@@ -117,4 +167,5 @@ items         (track_id PK, table_id, kind, state, fill_ratio, first_seen, state
 observations  (id, ts, table_id, payload jsonb)          -- crudo, para métricas y debug
 alerts        (id PK, table_id, type, message, status, created_at, acked_by, acked_at, resolved_at)
 waiters       (id, name, telegram_chat_id, whatsapp_number)
+alert_messages (alert_id, waiter_id, channel, chat_id, message_id, sent_at)   -- un mensaje por mozo; permite editarlo después
 ```

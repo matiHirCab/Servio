@@ -1,6 +1,6 @@
 # 05 — Reglas de alertas
 
-Viven en el backend (`web/lib/rules/`). Se evalúan cada vez que llega una observación. Todos los umbrales en `web/lib/rules/config.ts` para poder cambiarlos rápido en la demo (en la demo usar tiempos cortos).
+Viven en el backend (`web/lib/rules/`). Se evalúan **solo** cuando llega una observación (`POST /api/observations`), nunca en los GET: así varias pestañas del dashboard no generan alertas duplicadas. El refresco forzado de la visión (60 s / demo 20 s, ver [04-vision.md](04-vision.md)) asegura que lleguen observaciones seguido aunque la mesa no cambie. Todos los umbrales en `web/lib/rules/config.ts` para poder cambiarlos rápido en la demo (en la demo usar tiempos cortos).
 
 | Regla | Dispara cuando | Mensaje al mozo | Producción | Demo |
 |---|---|---|---|---|
@@ -38,4 +38,4 @@ Así el color de la mesa en el dashboard y la alerta `mesa_por_terminar` nunca s
 
 ## Tests
 
-Las reglas son funciones puras `(estadoMesa, ahora, config) → Alerta[]`. Escribir tests con tiempos simulados (Vitest). Es lo más fácil de testear y lo que más se rompe.
+El motor es una función pura `(estadoMesa, ahora, config, alertasAbiertas) → { nuevas: Alerta[], expiradas: Alerta[] }`. `nuevas` respeta el cooldown y el agrupado; `expiradas` son las abiertas cuya condición ya no se cumple. `POST /api/observations` guarda las nuevas y llama a `Notifier.send`, y pasa las expiradas a `expirada` y llama a `Notifier.update` (ver [03-contratos.md](03-contratos.md)). Los tests reproducen `fixtures/observations/*.jsonl` y comparan contra `fixtures/expected/`. Escribir tests con tiempos simulados (Vitest). Es lo más fácil de testear y lo que más se rompe.

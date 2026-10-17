@@ -1,11 +1,12 @@
-# 04 — Visión (solo Claude multimodal)
+# 04 — Visión (Claude por defecto, YOLO a prueba)
 
-Decisión del equipo: **no usamos YOLO ni modelos propios**. Toda la visión la hace Claude (multimodal) vía AWS Bedrock (créditos) o la API de Anthropic. La parte en Python solo captura, recorta y arma el pedido.
+La clasificación va detrás de una interfaz única, `Classifier` (ver [03-contratos.md](03-contratos.md)). La implementación **por defecto es Claude multimodal** vía AWS Bedrock (créditos) o la API de Anthropic. En paralelo se evalúa un **YOLO entrenado** con el mismo test set; solo reemplaza o complementa a Claude si gana antes de la hora 12 (ver «Decisión YOLO vs. Claude»). La parte en Python que captura, recorta, suaviza y envía (P3) no depende de cuál se use.
 
 ## Por qué
 
-- Cero entrenamiento, cero dataset: en 2 horas hay clasificación funcionando.
-- Claude entiende "plato a medio comer" sin que le enseñemos; con YOLO había que entrenar un clasificador igual.
+- **Claude por defecto:** cero entrenamiento; entiende "plato a medio comer" sin que le enseñemos y da los 4 estados (`lleno`, `comiendo`, `por_terminar`, `vacio`). En 2 horas hay clasificación funcionando.
+- **YOLO a prueba:** un YOLO preentrenado (COCO) no sirve tal cual (no tiene "plato" ni sabe si está lleno), pero entrenado con el dataset de Roboflow (`food` / `finished_food`) puede ser más rápido y barato. Vale la pena tener el dato real para decidir y para el pitch.
+- **Interfaz única:** como los dos devuelven un `TableReport`, cambiar de uno a otro es un flag (`--classifier`), no un cambio de pipeline.
 - La cámara es fija y cenital, las mesas no se mueven: no necesitamos detección ni tracking en tiempo real. Un estado cada 15–30 s por mesa alcanza (un plato no pasa de lleno a vacío en segundos).
 
 ## Trade-offs a tener en cuenta
@@ -93,35 +94,66 @@ Aunque las llamadas son espaciadas, Claude puede dudar entre dos estados vecinos
 
 ## Estructura sugerida
 
+Dueños por carpeta en [09-convenciones.md](09-convenciones.md).
+
 ```
 vision/
-  main.py               # loop: captura → recorte → Claude → envío
-  config/zones.json
+  main.py               # loop: captura → recorte → classify() → suavizado → envío   (P3)
+  config/zones.json     # (P3)
   servio_vision/
-    capture.py          # webcam / RTSP / archivo de video
-    zones.py            # recortes por mesa
-    change.py           # detector de cambio
-    claude_client.py    # llamada a Bedrock (boto3) o API de Anthropic, tool use
-    prompt.py
-    smoothing.py
-    client.py           # POST al backend (modo --dry-run que imprime)
+    schemas.py          # Pydantic de report_table: Item, TableReport               (P1, contrato)
+    classifier.py       # Protocol Classifier + get_classifier(name)                (P1, contrato)
+    classifiers/
+      fake.py           # sin modelo: script por tiempo o replay de fixtures        (P3)
+      claude.py         # Bedrock (boto3) o API de Anthropic, tool use              (P1)
+      yolo.py           # solo si se decide usar YOLO                               (P1)
+    prompt.py           # (P1)
+    capture.py          # carpeta / video / webcam / URL                            (P3)
+    zones.py            # recortes por mesa                                         (P3)
+    change.py           # detector de cambio                                        (P3)
+    smoothing.py        # (P3)
+    client.py           # POST al backend; --dry-run escribe .jsonl                 (P3)
   tools/
-    draw_zones.py
-    record.py           # grabar videos de prueba
-    eval.py             # corre el prompt sobre frames etiquetados a mano y da % de acierto
-  requirements.txt      # opencv-python, boto3 (o anthropic), pydantic, httpx
+    draw_zones.py       # (P3)
+    build_eval_set.py   # recortes y labels desde el dataset de Roboflow            (P1)
+    eval.py             # acierto de estado sobre un set etiquetado                 (P1)
+    id_stability.py     # estabilidad de ids sobre un video, sin el pipeline        (P1)
+    yolo_baseline.ipynb # entrenamiento de YOLO en Colab con GPU                    (P1)
+  tests/                # pytest
+  data/                 # ignorado: roboflow/, eval/, videos/
+  models/               # ignorado: pesos de YOLO
+  out/                  # ignorado: crops/, obs.jsonl
+  requirements.txt      # opencv-python, boto3, anthropic, pydantic, httpx
+  requirements-yolo.txt # ultralytics (aparte, para que el CI no instale torch)
 ```
 
-`python main.py --source videos/mesa1.mp4 --dry-run` tiene que funcionar sin backend.
+`python main.py --source data/videos/mesa1.mp4 --classifier fake --dry-run` tiene que funcionar sin backend ni modelo.
 
-## Evaluar el prompt (importante)
+## Evaluar el clasificador (importante)
 
-Sacar ~40 frames de los videos, etiquetarlos a mano (estado real de cada plato) y correr `tools/eval.py` cada vez que se cambia el prompt. Es la única forma de saber si un cambio mejoró. `eval.py` reporta dos métricas:
+Es la única forma de saber si un cambio mejoró. Hay dos fuentes de datos:
+
+- **Fotos del dataset de Roboflow** (*AI Smart Restaurant Surveillance*, CC BY 4.0): `food` / `finished_food` ya etiquetados. Se separa un **test split** (15 %) que no se usa para iterar el prompt ni para entrenar YOLO; el resto (`dev`) es para iterar. Sirve para lleno vs. vacío, no para estados intermedios.
+- **Videos cenitales** (YouTube para probar, y el video de nuestra mesa para el ajuste fino): para estabilidad de ids y la línea de tiempo de estados.
+
+`tools/eval.py` y `tools/id_stability.py` reportan:
 
 - **% de acierto de estado** por plato.
 - **Estabilidad de ids**: sobre secuencias de frames consecutivos del mismo video, % de objetos que conservan su id entre lecturas. Si es baja, la reconciliación del backend (ver [03-contratos.md](03-contratos.md)) trabaja de más y los tiempos de las alertas se vuelven poco confiables.
  Probar también si mandar el frame a mayor resolución o con un modelo más grande (Sonnet) mejora lo suficiente como para pagar la diferencia.
 
+## Decisión YOLO vs. Claude
+
+Tarea P1-7 de [11-tareas.md](11-tareas.md), con tiempo límite de 1 h 30. Se entrena `yolov8n` en Colab con GPU sobre `dev` y se compara contra Claude en el mismo test split. Tabla de resultados en `vision/README.md`: acierto, latencia por imagen, costo por 1.000 imágenes, tiempo de armado y si da estados intermedios.
+
+| Resultado | Qué hacemos |
+|---|---|
+| Claude ≥ YOLO, o diferencia chica | Seguimos solo con Claude. |
+| YOLO claramente mejor y **antes de la hora 12** | `classifiers/yolo.py` detrás de `Classifier` (o híbrido: YOLO detecta y da lleno/vacío, Claude solo para estados intermedios). Inferencia de `yolov8n` en la laptop con CPU. |
+| YOLO claramente mejor, pero **después de la hora 12** | Seguimos con Claude; el híbrido queda como roadmap en el pitch. |
+
+**Decisión tomada:** _(completar en la hora 12)_
+
 ## Futuro (roadmap, no MVP)
 
-Si el producto escala, un detector local liviano (por ejemplo YOLO) puede filtrar frames y llamar a Claude solo cuando hace falta, para bajar costo. No es necesario para la hackathon.
+Si el producto escala, un detector local liviano (YOLO entrenado con datos de restaurantes reales) puede filtrar frames y llamar a Claude solo cuando hace falta, para bajar costo por mesa.
