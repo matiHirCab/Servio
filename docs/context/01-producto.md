@@ -16,10 +16,10 @@ Una cámara cenital (en el techo) mira el salón. Servio:
 
    | Estado | Significado |
    |---|---|
-   | `lleno` | Recién servido, casi intacto (>75 % de comida). |
-   | `comiendo` | En consumo (≈30–75 %). |
-   | `por_terminar` | Queda poco (<30 %). |
-   | `vacio` | Sin comida o solo restos. |
+   | `lleno` | Recién servido, casi intacto (> 80 % de comida). |
+   | `comiendo` | En consumo (30–80 %). No dispara ningún aviso. |
+   | `por_terminar` | Queda poco (5–30 %). |
+   | `vacio` | Sin comida o solo restos (< 5 %). |
 
 3. Le manda un **mensaje al mozo** por Telegram cuando hay que actuar.
 4. Guarda todo y muestra **métricas** al dueño/encargado en un dashboard.
