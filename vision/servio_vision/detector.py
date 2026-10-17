@@ -34,7 +34,7 @@ def _iou(a, b) -> float:
     return inter / (union + 1e-9)
 
 
-def _contained(a, b, threshold: float = 0.8) -> bool:
+def _contained(a, b, threshold: float = 0.7) -> bool:
     ix = max(0.0, min(a[2], b[2]) - max(a[0], b[0]))
     iy = max(0.0, min(a[3], b[3]) - max(a[1], b[1]))
     smaller = min((a[2] - a[0]) * (a[3] - a[1]), (b[2] - b[0]) * (b[3] - b[1]))

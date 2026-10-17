@@ -7,6 +7,9 @@ from servio_vision.schemas import Item
 
 # Una caja nueva es el mismo plato si su centro está a menos de esto × el lado de la caja.
 MAX_SHIFT = 0.5
+# Lecturas que se recuerda un plato que YOLO dejó de ver: si vuelve a aparecer en
+# su lugar dentro de ese plazo, recupera su id en vez de recibir uno nuevo.
+MAX_MISSING = 3
 
 
 def _center(bbox) -> tuple[float, float]:
@@ -22,18 +25,41 @@ def _next_number(previous_items: list[Item]) -> int:
 
 
 class IdCounter:
-    """Último número de id usado por mesa. Solo sube: un plato que faltó en una
-    lectura no le deja su número a uno nuevo (el suavizado todavía guarda su pista)."""
+    """Memoria de ids por mesa.
+
+    - El número de id solo sube: un plato que faltó en una lectura no le deja su
+      número a uno nuevo (el suavizado todavía guarda su pista).
+    - Recuerda dónde estaba cada plato hasta `MAX_MISSING` lecturas después de
+      que YOLO lo dejó de ver, para devolverle su id si reaparece ahí.
+    """
 
     def __init__(self) -> None:
         self._last: dict[str, int] = {}
+        self._reading: dict[str, int] = {}
+        self._where: dict[str, dict[str, tuple]] = {}  # mesa -> id -> (bbox, lectura)
 
     def first_new(self, table_id: str, previous_items: list[Item]) -> int:
         return max(self._last.get(table_id, 0) + 1, _next_number(previous_items))
 
-    def seen(self, table_id: str, ids: list[str]) -> None:
+    def remembered(self, table_id: str, previous_items: list[Item]) -> list[Item]:
+        """Platos que faltaron hace poco y no están en `previous_items`."""
+        present = {i.id for i in previous_items}
+        now = self._reading.get(table_id, 0)
+        return [
+            Item(id=pid, position=position_label(bbox), bbox=bbox, visible=False)
+            for pid, (bbox, reading) in self._where.get(table_id, {}).items()
+            if pid not in present and now - reading <= MAX_MISSING
+        ]
+
+    def seen(self, table_id: str, ids: list[str], bboxes: list | None = None) -> None:
         nums = [int(m.group(1)) for i in ids if (m := re.fullmatch(r"p(\d+)", i))]
         self._last[table_id] = max([self._last.get(table_id, 0), *nums])
+        now = self._reading[table_id] = self._reading.get(table_id, 0) + 1
+        where = self._where.setdefault(table_id, {})
+        for pid, bbox in zip(ids, bboxes or []):
+            where[pid] = (bbox, now)
+        for pid in [p for p, (_, r) in where.items() if now - r > MAX_MISSING]:
+            del where[pid]
 
 
 def match_ids(

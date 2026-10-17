@@ -43,6 +43,15 @@ python tools/probar_video.py "C:/Users/tomas/Downloads/video mesa platos ia.mp4"
 
 Cada corrida va a su carpeta (`out/video/run1`, `run2`, ...) con cada frame dibujado (`f_NNN.jpg`), la hoja con el recorte de cada plato y su clasificación (`f_NNN_platos.jpg`) y `linea_de_tiempo.json`.
 
+Para medir qué tan estables son los ids (TOM: estabilidad de ids), solo con YOLO y sin gastar Claude:
+
+```
+python tools/id_stability.py "C:/Users/tomas/Downloads/video mesa platos ia.mp4" --cada 0.5
+python tools/id_stability.py out/video/run1/linea_de_tiempo.json
+```
+
+Imprime los ids de cada frame y `conservan`: qué fracción de los platos de un frame sigue con el mismo id en el siguiente. Un plato que YOLO deja de ver hasta 3 lecturas recupera su id si reaparece en su lugar (`MAX_MISSING` en `tracking.py`).
+
 ## Resultados
 
 _(Tomás: mAP de YOLO, acierto del `hybrid`, latencia, costo y tamaño mínimo de plato; cita del dataset de Roboflow.)_
