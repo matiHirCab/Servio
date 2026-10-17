@@ -7,7 +7,13 @@ Lee `out/eventos.jsonl` (03-contratos.md, «Log») y muestra, por mesa:
 - cuánto tardaron en promedio los avisos en resolverse.
 Al final, los totales.
 
-    python tools/resumen.py [--file out/eventos.jsonl] [--image out/resumen.png]
+El log no se borra entre corridas (se agrega al final), así que por defecto
+se resume solo la **última corrida**: la que empieza en la última línea cuya
+hora es anterior a la de la línea previa (cada corrida escribe en orden de
+tiempo). Con `--all` se resume todo el archivo. Dos corridas en vivo seguidas
+no se pueden separar así: antes de la demo, conviene borrar el log.
+
+    python tools/resumen.py [--file out/eventos.jsonl] [--image out/resumen.png] [--all]
 """
 
 import argparse
@@ -40,7 +46,7 @@ HEADERS = [
 @dataclass
 class TableSummary:
     meals: list[float] = field(default_factory=list)  # segundos de cada comida
-    meal_in_progress: bool = False
+    meals_in_progress: int = 0
     alerts: Counter = field(default_factory=Counter)  # tipo → avisos abiertos
     reminders: int = 0
     resolve_times: list[float] = field(default_factory=list)  # segundos
@@ -51,8 +57,29 @@ def _ts(value: str) -> datetime:
 
 
 def load_events(path: Path) -> list[dict]:
+    """Eventos del log, en el orden del archivo. Saltea líneas rotas (corrida cortada)."""
+    events = []
     lines = Path(path).read_text(encoding="utf-8").splitlines()
-    return [json.loads(line) for line in lines if line.strip()]
+    for number, line in enumerate(lines, start=1):
+        if not line.strip():
+            continue
+        try:
+            event = json.loads(line)
+            _ts(event["ts"])
+        except (ValueError, KeyError, TypeError):
+            print(f"Aviso: salteo la línea {number} de {path}, no es un evento válido.")
+            continue
+        events.append(event)
+    return events
+
+
+def last_run(events: list[dict]) -> list[dict]:
+    """Eventos desde el comienzo de la última corrida (ver docstring del módulo)."""
+    start = 0
+    for i in range(1, len(events)):
+        if _ts(events[i]["ts"]) < _ts(events[i - 1]["ts"]):
+            start = i
+    return events[start:]
 
 
 def summarize(events: list[dict]) -> dict[str, TableSummary]:
@@ -81,7 +108,7 @@ def summarize(events: list[dict]) -> dict[str, TableSummary]:
             )
 
     for table_id in meal_start:
-        tables[table_id].meal_in_progress = True
+        tables[table_id].meals_in_progress = 1
     return dict(sorted(tables.items()))
 
 
@@ -91,35 +118,40 @@ def _minutes(seconds: list[float]) -> str:
     return f"{sum(seconds) / len(seconds) / 60:.1f} min"
 
 
-def _row(name: str, s: TableSummary) -> list[str]:
-    meals = str(len(s.meals)) + (" (+1 en curso)" if s.meal_in_progress else "")
+def _row(name: str, s: TableSummary, other: bool) -> list[str]:
+    meals = str(len(s.meals))
+    if s.meals_in_progress:
+        meals += f" (+{s.meals_in_progress} en curso)"
+    others = sum(n for t, n in s.alerts.items() if t not in ALERT_TYPES)
     return [
         name,
         meals,
         _minutes(s.meals),
         *(str(s.alerts[t]) for t in ALERT_TYPES),
+        *([str(others)] if other else []),
         str(s.reminders),
         _minutes(s.resolve_times),
     ]
 
 
 def rows(tables: dict[str, TableSummary]) -> list[list[str]]:
-    """Filas de la tabla (con encabezado y una fila de totales al final)."""
+    """Filas de la tabla (con encabezado y una fila de totales al final).
+
+    Si hubo avisos de un tipo que la tabla no conoce, se agrega una columna "Otros".
+    """
     total = TableSummary()
     for s in tables.values():
         total.meals += s.meals
-        total.meal_in_progress |= s.meal_in_progress
+        total.meals_in_progress += s.meals_in_progress
         total.alerts.update(s.alerts)
         total.reminders += s.reminders
         total.resolve_times += s.resolve_times
-    body = [_row(table_id, s) for table_id, s in tables.items()]
-    if total.meal_in_progress:
-        in_progress = sum(s.meal_in_progress for s in tables.values())
-        total_row = _row("Total", total)
-        total_row[1] = f"{len(total.meals)} (+{in_progress} en curso)"
-    else:
-        total_row = _row("Total", total)
-    return [HEADERS, *body, total_row]
+    other = any(t not in ALERT_TYPES for t in total.alerts)
+    headers = list(HEADERS)
+    if other:
+        headers.insert(HEADERS.index("Recordatorios"), "Otros")
+    body = [_row(table_id, s, other) for table_id, s in tables.items()]
+    return [headers, *body, _row("Total", total, other)]
 
 
 def format_table(table: list[list[str]]) -> str:
@@ -205,6 +237,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--image", type=Path, help="guardar también la tabla como imagen"
     )
+    parser.add_argument("--all", action="store_true", help="todas las corridas del log")
     args = parser.parse_args(argv)
 
     if hasattr(sys.stdout, "reconfigure"):
@@ -212,7 +245,10 @@ def main(argv: list[str] | None = None) -> int:
     if not args.file.exists():
         print(f"No existe {args.file}: corré primero main.py o la vista de demo.")
         return 2
-    table = rows(summarize(load_events(args.file)))
+    events = load_events(args.file)
+    if not args.all:
+        events = last_run(events)
+    table = rows(summarize(events))
     print(format_table(table))
     if args.image:
         render_image(table, args.image)

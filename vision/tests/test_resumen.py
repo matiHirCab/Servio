@@ -50,11 +50,11 @@ EVENTS = [
 def test_summary_per_table():
     tables = resumen.summarize(EVENTS)
     t1, t2 = tables["T1"], tables["T2"]
-    assert t1.meals == [600.0] and not t1.meal_in_progress
+    assert t1.meals == [600.0] and t1.meals_in_progress == 0
     assert t1.alerts == {"plato_lleno_mucho": 1, "plato_vacio": 1}
     assert t1.reminders == 1
     assert t1.resolve_times == [120.0, 120.0]
-    assert t2.meals == [] and t2.meal_in_progress
+    assert t2.meals == [] and t2.meals_in_progress == 1
     assert t2.alerts == {"mesa_por_terminar": 1}
     assert t2.resolve_times == []  # sigue abierto
 
@@ -93,3 +93,30 @@ def test_cli_without_log(tmp_path, capsys):
 
 def test_strip_accents():
     assert resumen._strip_accents("Duración vacíos") == "Duracion vacios"
+
+
+def test_only_last_run_by_default(tmp_path, capsys):
+    rehearsal = [obs(0, "T1", 2), obs(30, "T1", 0)]  # ensayo: 30 min de video
+    demo = [obs(1, "T1", 2), obs(6, "T1", 0)]  # la demo vuelve a empezar
+    log = tmp_path / "eventos.jsonl"
+    log.write_text("\n".join(json.dumps(e) for e in rehearsal + demo), encoding="utf-8")
+    assert resumen.last_run(resumen.load_events(log)) == demo
+    resumen.main(["--file", str(log)])
+    assert "5.0 min" in capsys.readouterr().out
+    resumen.main(["--file", str(log), "--all"])
+    assert "6.0 min" in capsys.readouterr().out  # mezclado: la comida "dura" 6 min
+
+
+def test_broken_line_is_skipped(tmp_path, capsys):
+    log = tmp_path / "eventos.jsonl"
+    good = json.dumps(obs(1, "T1", 2))
+    log.write_text(good + "\n" + '{"event": "observ', encoding="utf-8")
+    assert len(resumen.load_events(log)) == 1
+    assert "salteo la línea 2" in capsys.readouterr().out
+
+
+def test_unknown_alert_type_gets_its_own_column():
+    events = [*EVENTS, alert("alert_opened", 7, "T2", "a9", "cuenta")]
+    table = resumen.rows(resumen.summarize(events))
+    assert "Otros" in table[0]
+    assert table[-1][table[0].index("Otros")] == "1"
