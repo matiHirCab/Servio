@@ -52,4 +52,9 @@ def get_classifier(name: str, **kwargs: Any) -> Classifier:
                 f"El clasificador {name!r} todavía no está implementado ({module_name})."
             ) from e
         raise  # falta una dependencia del clasificador (ej. boto3)
-    return getattr(module, class_name)(**kwargs)
+    cls = getattr(module, class_name, None)
+    if cls is None:
+        raise NotImplementedError(
+            f"{module_name} no define la clase {class_name!r} que espera el registro."
+        )
+    return cls(**kwargs)
