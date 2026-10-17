@@ -6,10 +6,9 @@ Cada `--interval` segundos (30 por defecto, tiempo del video):
 - Las mesas se clasifican en paralelo (una llamada por mesa), así una lectura
   no tarda la suma de todas.
 - Una mesa cuya lectura falla (`None` o error) no manda observación esa vez.
-- Mientras `alerts.process()` no exista (MAT-5), cada observación se imprime
-  como una línea JSON en stdout (el mismo formato que `fixtures/observations/`):
-  `python main.py ... > out/obs.jsonl` deja un archivo reproducible. Los logs
-  van a stderr.
+- Cada observación va a `alerts.process()` (MAT-5), que la escribe en
+  `out/eventos.jsonl` (líneas `"event": "observation"`, junto con los avisos):
+  ese log es lo que reproduce `tools/replay.py`. Los logs van a stderr.
 
     python main.py --source data/videos/demo.mp4 --classifier fake
     python main.py --source data/videos/demo.mp4 --classifier hybrid --demo --speed 10
@@ -27,7 +26,7 @@ from pathlib import Path
 import numpy as np
 
 from servio_vision import alerts
-from servio_vision.alerts.config import AlertConfig, load_config
+from servio_vision.alerts.config import DEFAULT_INTERVAL, AlertConfig, load_config
 from servio_vision.alerts.models import TableObservation
 from servio_vision.capture import open_source
 from servio_vision.classifier import Classifier, available_classifiers, get_classifier
@@ -37,9 +36,7 @@ from servio_vision.zones import DEFAULT_ZONES, Zones, crop_table, load_zones, to
 
 logger = logging.getLogger("servio")
 
-DEFAULT_INTERVAL = 30.0
-
-ObservationHandler = Callable[[TableObservation], None]
+ObservationHandler = Callable[[TableObservation], object]
 
 
 class Pipeline:
@@ -124,26 +121,11 @@ class Pipeline:
         )
 
 
-def print_observation(observation: TableObservation) -> None:
-    print(observation.model_dump_json(), flush=True)
-
-
 def observation_handler(config: AlertConfig, no_telegram: bool) -> ObservationHandler:
-    """`alerts.process` si ya existe (MAT-5); si no, imprimir la observación.
-
-    Si `alerts` define `configure(config, telegram=...)`, se le pasan los umbrales
-    ya resueltos (`--interval`, `--demo`) para que no use otros.
-    """
-    process = getattr(alerts, "process", None)
-    if process is None:
-        logger.info("alerts.process() todavía no existe: imprimo las observaciones")
-        return print_observation
-    configure = getattr(alerts, "configure", None)
-    if configure is not None:
-        configure(config, telegram=not no_telegram)
-    else:
-        logger.warning("alerts no tiene configure(): no recibe --interval ni --demo")
-    return process
+    """`alerts.process`, ya configurado con los umbrales resueltos (`--interval`,
+    `--demo`) y con Telegram o consola según `--no-telegram`."""
+    alerts.configure(config, telegram=not no_telegram)
+    return alerts.process
 
 
 def classifier_kwargs(args: argparse.Namespace) -> dict:

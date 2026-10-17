@@ -69,6 +69,7 @@ El motor es una función pura en `alerts/engine.py`: `evaluate(table, now, confi
 - Usa `table.active_plates()` (sin los provisionales) y los umbrales de `config.py`.
 - Recordatorios a `created_at + R × n`, hasta `max_reminders`.
 - Las lecturas seguidas sin gente las cuenta `TableState.people_absent_readings` (`alerts/state.py`).
-- Agrupar en un solo mensaje los avisos de una mesa queda para `process()` (MAT-5).
+- `alerts.process(observation)` (`alerts/processor.py`) une todo: actualiza el estado, corre el motor, manda, recuerda o edita, y escribe el log. Los avisos de una mesa que se abren en la misma evaluación van en un solo mensaje, y lo mismo sus recordatorios (en un mensaje nuevo). Al cerrar se edita el mensaje en el que se abrió: si ya están cerrados todos sus avisos, con "✅ ya resuelto" al final; si no, solo la línea cerrada lleva "✅".
+- Si Telegram falla al abrir, el aviso queda abierto sin `telegram_message_id` (no se reintenta) y al cerrarse no se edita nada.
 
 Los tests (`tests/test_alert_engine.py`) reproducen `fixtures/observations/*.jsonl` lectura por lectura con los umbrales de producción y comparan exactamente contra `fixtures/expected/*.alerts.json` (pytest).

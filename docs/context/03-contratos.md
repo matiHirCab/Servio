@@ -114,4 +114,13 @@ Los modelos de la observación de mesa (`TableObservation`, `ObservedPlate`) y d
 
 ## Log — `vision/out/eventos.jsonl`
 
-Una línea por observación (`{"event": "observation", ...}`) y por aviso (`{"event": "alert_opened" | "alert_reminder" | "alert_resolved", ...}`). Sirve para revisar una corrida y para reproducirla con `vision/tools/replay.py`.
+Una línea JSON por evento, en el orden en que pasan. Lo escribe `alerts.process()` (`alerts/processor.py`). El archivo se **agrega** (no se pisa): varias corridas quedan una detrás de otra; borralo antes de la corrida de la demo si querés una sola.
+
+- Observación: `{"event": "observation", ...}` con los campos de la observación de mesa. Sin `event`, la línea valida como `TableObservation`. Se escribe antes de aplicarla, así queda aunque `alerts` la rechace (por ejemplo, un `ts` que va hacia atrás).
+- Aviso: `{"event": "alert_opened" | "alert_reminder" | "alert_resolved", "ts": ..., ...}`: `ts` de la observación que lo produjo, los campos del `Alert` (ya con `status`, `reminders_sent` y `telegram_message_id` de ese momento) y `text`, lo que se mandó (abrir, recordar) o cómo quedó el mensaje editado (cerrar); `null` al cerrar un aviso cuyo mensaje no se pudo mandar (no hubo nada que editar). Cada aviso se escribe apenas se manda o edita.
+
+```json
+{"event": "alert_opened", "ts": "2026-10-17T20:07:00Z", "id": "T1-plato_vacio-1792267620", "table_id": "T1", "type": "plato_vacio", "message": "🧹 Mesa 1: hay platos vacíos para retirar.", "created_at": "2026-10-17T20:07:00Z", "status": "abierta", "reminders_sent": 0, "telegram_message_id": 2, "text": "🧹 Mesa 1: hay platos vacíos para retirar."}
+```
+
+Sirve para revisar una corrida, para reproducirla con `vision/tools/replay.py` y para el resumen de la demo.

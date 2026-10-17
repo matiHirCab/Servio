@@ -15,6 +15,9 @@ PROD_T2 = 10 * 60  # plato_lleno_mucho: plato en `lleno` hace ≥ T2
 PROD_REMINDER = 3 * 60  # R: recordatorio si la condición sigue
 MAX_REMINDERS = 2
 
+# Segundos entre lecturas por defecto (`--interval` de main.py, 04-vision.md).
+DEFAULT_INTERVAL = 30
+
 # El suavizado necesita 2 lecturas para aceptar un cambio: es lo mínimo observable.
 MIN_READINGS = 2
 

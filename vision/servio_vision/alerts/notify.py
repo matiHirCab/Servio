@@ -4,7 +4,7 @@ Solo envío, con `httpx` directo a la Bot API: `send` abre un mensaje en el grup
 devuelve su `message_id`; `edit` lo reescribe (al cerrar, con `resolved_text`).
 Si Telegram falla se loguea y se sigue: nunca lanza, así el loop no se frena.
 
-El agrupado por mesa y guardar el `message_id` en el `Alert` son de `process()` (MAT-5).
+El agrupado por mesa y guardar el `message_id` en el `Alert` son de `processor.py`.
 """
 
 import logging

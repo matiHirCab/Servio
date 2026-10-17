@@ -24,7 +24,7 @@ Con `httpx` directo a `https://api.telegram.org/bot<token>/<método>`, sin libre
 - `resolved_text(text)` agrega `"\n\n✅ ya resuelto"` al texto original, para el `edit` al cerrar.
 - `ConsoleNotifier` es el modo `--no-telegram`: imprime `[telegram #n] …` y devuelve ids que suben, así `process()` funciona igual.
 - `get_notifier(telegram)`: con `telegram=False`, o si faltan las variables (con un warning), usa la consola.
-- Agrupar por mesa y guardar el `message_id` en el `Alert` lo hace `process()` (MAT-5).
+- Agrupar por mesa y guardar el `message_id` en el `Alert` lo hace `alerts/processor.py` (ver «Tests» en [05-reglas-alertas.md](05-reglas-alertas.md)). `alerts.configure(config, telegram=...)` carga el `.env` de la raíz y elige el notifier con `get_notifier`.
 
 ## Prueba
 
