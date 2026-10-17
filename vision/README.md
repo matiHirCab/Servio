@@ -49,6 +49,7 @@ python -m servio_vision.classifiers.claude_plates mesa.jpg plato1.jpg plato2.jpg
 
 - Sin `YOLO_WEIGHTS` usa YOLOE preentrenado con los prompts `plate` y `bowl` (`imgsz=1280`, lo que funcionó en las pruebas: 11/11 platos en el video de IA). Encuentra los platos pero no su estado, así que sin Claude la lectura se descarta.
 - Con `YOLO_WEIGHTS` (el `yolov8n` entrenado con `food` / `finished_food`), si Claude falla usa el estado de YOLO con confianza más baja. Es también lo que usa `--classifier yolo`.
+- Si YOLO deja de encontrar un plato que ya conocía, el `hybrid` igual le manda a Claude el recorte de su última caja, hasta 3 lecturas seguidas. Si Claude lo ve, sigue con su id y su lectura; si tampoco lo ve, muestra la última lectura y después deja de mostrarlo.
 - Probar sobre un video (un frame por segundo, el frame entero como una mesa):
 
 ```bash
@@ -56,7 +57,7 @@ pip install -r requirements.txt -r requirements-yolo.txt
 python tools/probar_video.py "C:/Users/tomas/Downloads/video mesa platos ia.mp4" --max-frames 5
 ```
 
-Cada corrida va a su carpeta (`out/video/run1`, `run2`, ...) con cada frame dibujado (`f_NNN.jpg`), la hoja con el recorte de cada plato y su clasificación (`f_NNN_platos.jpg`) y `linea_de_tiempo.json`.
+Con `hybrid` las llamadas a Claude de varios frames van en paralelo (`--paralelo 4` por defecto; `--paralelo 1` para una a la vez). Cada corrida va a su carpeta (`out/video/run1`, `run2`, ...) con cada frame dibujado (`f_NNN.jpg`), la hoja con el recorte de cada plato y su clasificación (`f_NNN_platos.jpg`) y `linea_de_tiempo.json`.
 
 Para medir qué tan estables son los ids (TOM: estabilidad de ids), solo con YOLO y sin gastar Claude:
 

@@ -176,3 +176,87 @@ def test_yolo_skips_unknown_labels():
     det = FakeDetector([*PLATES, Detection((300, 100, 380, 180), 0.8, "glass")])
     report = YoloClassifier(detector=det).classify(_jpeg(), "T1", [])
     assert len(report.items) == 2
+
+
+def _answer(*visible, fill=0.5):
+    return PlatesReport(
+        plates=[
+            PlateEstimate(index=n, fill_ratio=fill, confidence=0.8, visible=v)
+            for n, v in enumerate(visible, 1)
+        ]
+    )
+
+
+def test_hybrid_asks_claude_about_a_plate_yolo_lost(claude):
+    """YOLO deja de ver un plato: igual se le manda a Claude su último recorte, y si
+    Claude lo ve sigue con su id y su lectura."""
+    clf = HybridClassifier(detector=FakeDetector(PLATES))
+    claude.answer = _answer(True, True)
+    first = clf.classify(_jpeg(), "T1", [])
+    clf.detector = FakeDetector([PLATES[0]])  # YOLO pierde p2 (x=20)
+    claude.answer = _answer(True, True, fill=0.2)
+    second = clf.classify(_jpeg(), "T1", first.items)
+    assert len(claude.calls[1]) == 2
+    assert sorted((i.id, i.state) for i in second.items) == [
+        ("p1", "por_terminar"),
+        ("p2", "por_terminar"),
+    ]
+    p2 = next(i for i in second.items if i.id == "p2")
+    assert p2.bbox == pytest.approx((0.05, 0.1, 0.2, 0.4))
+
+
+def test_hybrid_lost_plate_that_claude_does_not_see_keeps_last_reading(claude):
+    clf = HybridClassifier(detector=FakeDetector(PLATES))
+    claude.answer = _answer(True, True, fill=0.9)
+    first = clf.classify(_jpeg(), "T1", [])
+    clf.detector = FakeDetector([PLATES[0]])
+    claude.answer = _answer(True, False)
+    second = clf.classify(_jpeg(), "T1", first.items)
+    p2 = next(i for i in second.items if i.id == "p2")
+    assert (p2.state, p2.visible) == ("lleno", False)
+
+
+def test_hybrid_lost_plate_nobody_sees_is_dropped(claude):
+    """Perdido por YOLO y tapado para Claude tres veces: no se muestra «tapado»,
+    se deja de mostrar (lo más probable es que se lo hayan llevado)."""
+    clf = HybridClassifier(detector=FakeDetector([PLATES[1]]))
+    claude.answer = _answer(True)
+    items = clf.classify(_jpeg(), "T1", []).items
+    clf.detector = FakeDetector([])
+    claude.answer = _answer(False)
+    for _ in range(2):
+        items = clf.classify(_jpeg(), "T1", items).items
+        assert [i.id for i in items] == ["p1"]
+    assert clf.classify(_jpeg(), "T1", items).items == []
+
+
+def test_hybrid_stops_asking_about_a_lost_plate(claude):
+    clf = HybridClassifier(detector=FakeDetector([PLATES[1]]))
+    claude.answer = _answer(True)
+    items = clf.classify(_jpeg(), "T1", []).items
+    clf.detector = FakeDetector([])
+    for _ in range(hybrid.LOST_READINGS):
+        items = clf.classify(_jpeg(), "T1", items).items
+    calls = len(claude.calls)
+    assert clf.classify(_jpeg(), "T1", items).items == []
+    assert len(claude.calls) == calls  # sin platos que leer, no llama a Claude
+
+
+def test_hybrid_lost_plate_found_again_keeps_its_id(claude):
+    clf = HybridClassifier(detector=FakeDetector(PLATES))
+    claude.answer = _answer(True, True)
+    first = clf.classify(_jpeg(), "T1", [])
+    clf.detector = FakeDetector([PLATES[0]])
+    second = clf.classify(_jpeg(), "T1", first.items)
+    clf.detector = FakeDetector(PLATES)
+    third = clf.classify(_jpeg(), "T1", second.items)
+    assert sorted(i.id for i in third.items) == ["p1", "p2"]
+
+
+def test_prepare_does_not_wait_for_claude(claude):
+    """La lectura siguiente se puede preparar antes de terminar la anterior."""
+    clf = HybridClassifier(detector=FakeDetector(PLATES))
+    a = clf.prepare(_jpeg(), "T1")
+    b = clf.prepare(_jpeg(), "T1")
+    assert [p.id for p in a.plates] == [p.id for p in b.plates]
+    assert claude.calls == []

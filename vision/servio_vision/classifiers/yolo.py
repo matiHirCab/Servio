@@ -24,7 +24,7 @@ STATE_FROM_LABEL: dict[str, PlateState] = {"food": "lleno", "finished_food": "va
 class FoundPlate:
     id: str
     bbox: tuple[float, float, float, float]  # normalizada 0–1
-    detection: Detection
+    detection: Detection | None  # None: plato que YOLO perdió (lo agrega el hybrid)
 
 
 def decode(image: bytes) -> Image.Image:
