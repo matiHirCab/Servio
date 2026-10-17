@@ -1,6 +1,7 @@
 """Tests de la tabla de lo que pasó (tools/resumen.py)."""
 
 import json
+import pathlib
 import sys
 from pathlib import Path
 
@@ -9,11 +10,24 @@ import resumen
 
 
 def obs(minute: float, table: str, plates: int) -> dict:
-    items = [{"track_id": f"{table}-p{i}"} for i in range(plates)]
+    """Observación válida según el contrato (`TableObservation`)."""
+    items = [
+        {
+            "track_id": f"{table}-p{i}",
+            "state": "lleno",
+            "fill_ratio": 0.9,
+            "confidence": 0.9,
+            "position": f"pos{i}",
+        }
+        for i in range(plates)
+    ]
     return {
         "event": "observation",
+        "schema_version": 1,
+        "camera_id": "cam-1",
         "ts": _ts(minute),
         "table_id": table,
+        "people_present": True,
         "items": items,
     }
 
@@ -95,24 +109,67 @@ def test_strip_accents():
     assert resumen._strip_accents("Duración vacíos") == "Duracion vacios"
 
 
-def test_only_last_run_by_default(tmp_path, capsys):
-    rehearsal = [obs(0, "T1", 2), obs(30, "T1", 0)]  # ensayo: 30 min de video
-    demo = [obs(1, "T1", 2), obs(6, "T1", 0)]  # la demo vuelve a empezar
+def _write(tmp_path, events) -> pathlib.Path:
     log = tmp_path / "eventos.jsonl"
-    log.write_text("\n".join(json.dumps(e) for e in rehearsal + demo), encoding="utf-8")
-    assert resumen.last_run(resumen.load_events(log)) == demo
+    log.write_text("\n".join(json.dumps(e) for e in events), encoding="utf-8")
+    return log
+
+
+def test_only_last_run_by_default(tmp_path, capsys):
+    # ensayo: 30 min de video (lecturas cada 5 min, sin huecos que corten la corrida)
+    rehearsal = [*(obs(m, "T1", 2) for m in range(0, 30, 5)), obs(30, "T1", 0)]
+    demo = [obs(1, "T1", 2), obs(6, "T1", 0)]  # la hora vuelve atrás: otra corrida
+    log = _write(tmp_path, rehearsal + demo)
+    assert resumen.load_runs(log) == [rehearsal, demo]
     resumen.main(["--file", str(log)])
     assert "5.0 min" in capsys.readouterr().out
     resumen.main(["--file", str(log), "--all"])
-    assert "6.0 min" in capsys.readouterr().out  # mezclado: la comida "dura" 6 min
+    out = capsys.readouterr().out
+    assert "| 2 " in out and "17.5 min" in out  # (30 + 5) / 2, sin mezclar corridas
+
+
+def test_last_run_starts_at_run_started(tmp_path, capsys):
+    started = {"event": "run_started", "started_at": _ts(0), "config": {}}
+    first = [obs(1, "T1", 2), obs(4, "T1", 0)]
+    second = [obs(5, "T1", 2), obs(12, "T1", 0)]  # la hora no vuelve atrás
+    log = _write(tmp_path, [started, *first, started, *second])
+    assert resumen.load_runs(log) == [first, second]
+    resumen.main(["--file", str(log)])
+    out = capsys.readouterr().out
+    assert "7.0 min" in out and "salteo" not in out
+    resumen.main(["--file", str(log), "--all"])
+    assert "5.0 min" in capsys.readouterr().out  # (3 + 7) / 2
+
+
+def test_alerts_stay_with_their_run(tmp_path):
+    started = {"event": "run_started", "started_at": _ts(0), "config": {}}
+    first = [obs(1, "T1", 2), alert("alert_opened", 2, "T1", "a1", "plato_vacio")]
+    second = [obs(1, "T1", 2)]  # misma hora de video que la primera corrida
+    log = _write(tmp_path, [started, *first, started, *second])
+    last = resumen.summarize_runs(resumen.load_runs(log)[-1:])
+    assert last["T1"].alerts == {}
+
+
+def test_fixture_lines_without_event_are_observations(tmp_path):
+    lines = [obs(1, "T1", 2), obs(5, "T1", 0)]
+    for line in lines:
+        del line["event"]
+    [run] = resumen.load_runs(_write(tmp_path, lines))
+    assert resumen.summarize(run)["T1"].meals == [240.0]
+
+
+def test_backwards_observation_is_ignored():
+    events = [obs(0, "T1", 2), obs(4, "T1", 2), obs(2, "T1", 0), obs(10, "T1", 0)]
+    tables = resumen.summarize(events)
+    assert tables["T1"].meals == [600.0]  # la de los 2 min no corta la comida
 
 
 def test_broken_line_is_skipped(tmp_path, capsys):
     log = tmp_path / "eventos.jsonl"
     good = json.dumps(obs(1, "T1", 2))
     log.write_text(good + "\n" + '{"event": "observ', encoding="utf-8")
-    assert len(resumen.load_events(log)) == 1
-    assert "salteo la línea 2" in capsys.readouterr().out
+    assert len(resumen.load_runs(log)[0]) == 1
+    assert "eventos.jsonl:2: línea inválida" in capsys.readouterr().out
 
 
 def test_unknown_alert_type_gets_its_own_column():
@@ -120,18 +177,3 @@ def test_unknown_alert_type_gets_its_own_column():
     table = resumen.rows(resumen.summarize(events))
     assert "Otros" in table[0]
     assert table[-1][table[0].index("Otros")] == "1"
-
-
-def test_last_run_starts_at_run_started(tmp_path, capsys):
-    started = {"event": "run_started", "started_at": _ts(0), "config": {}}
-    first = [started, obs(1, "T1", 2), obs(4, "T1", 0)]
-    second = [started, obs(5, "T1", 2), obs(12, "T1", 0)]  # la hora no vuelve atrás
-    log = tmp_path / "eventos.jsonl"
-    log.write_text("\n".join(json.dumps(e) for e in first + second), encoding="utf-8")
-    events = resumen.load_events(log)
-    assert resumen.last_run(events) == second[1:]
-    resumen.main(["--file", str(log)])
-    out = capsys.readouterr().out
-    assert "7.0 min" in out and "salteo" not in out
-    resumen.main(["--file", str(log), "--all"])
-    assert "5.0 min" in capsys.readouterr().out  # (3 + 7) / 2

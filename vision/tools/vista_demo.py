@@ -259,9 +259,6 @@ class _Recorder:
 
 
 def run(args) -> int:
-    if args.interval <= 0:
-        logger.error("--interval tiene que ser mayor a 0 (vino %s)", args.interval)
-        return 2
     try:
         source = open_view_source(args.source, args.interval)
     except OSError as e:
@@ -284,6 +281,7 @@ def run(args) -> int:
     ref_clock, ref_s = time.monotonic(), 0.0
     last = None  # (frame, ts, video_s) del último frame mostrado
     interrupted = False
+    failed = False
 
     def finish_pending() -> None:
         nonlocal pending
@@ -345,13 +343,14 @@ def run(args) -> int:
                 if last is not None:
                     recorder.write(render(*last))
             except Exception:
-                logger.exception("No se pudo agregar la última lectura")
+                logger.exception("Falló la última lectura")
+                failed = True
         worker.shutdown(wait=not interrupted, cancel_futures=True)
         pipeline.close()
         recorder.close()
         cv2.destroyAllWindows()
     logger.info("%d lecturas", state.readings)
-    return 0 if state.readings else 1
+    return 0 if state.readings and not failed else 1
 
 
 def main(argv: list[str] | None = None) -> int:

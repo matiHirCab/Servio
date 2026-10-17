@@ -7,11 +7,15 @@ Lee `out/eventos.jsonl` (03-contratos.md, «Log») y muestra, por mesa:
 - cuánto tardaron en promedio los avisos en resolverse.
 Al final, los totales.
 
-El log no se borra entre corridas (se agrega al final), así que por defecto
-se resume solo la **última corrida**: desde la última línea `run_started`, que
-escribe `alerts.configure()` al arrancar. Si el log no tiene esa línea (logs
-viejos), la corrida empieza donde la hora vuelve atrás. Con `--all` se resume
-todo el archivo.
+El log no se borra entre corridas (se agrega al final). Las corridas se
+cortan con la misma regla que `tools/replay.py` (de Matías): en cada
+`run_started` y, en logs sin esa línea, cuando el `ts` vuelve atrás o salta
+más de `RUN_GAP_READINGS` lecturas. Los avisos van con la corrida en la que
+aparecen en el archivo. Por defecto se resume la última corrida; con `--all`,
+todas (cada una por separado y sumadas).
+
+Acepta también `fixtures/observations/*.jsonl` (líneas sin `event`, que son
+observaciones). Una línea inválida se avisa y se saltea.
 
     python tools/resumen.py [--file out/eventos.jsonl] [--image out/resumen.png] [--all]
 """
@@ -25,10 +29,16 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from replay import RUN_GAP_READINGS, Run, _continues
+
+from servio_vision.alerts.config import DEFAULT_INTERVAL
+from servio_vision.alerts.models import TableObservation
+
 VISION_DIR = Path(__file__).resolve().parents[1]
 DEFAULT_LOG = VISION_DIR / "out" / "eventos.jsonl"
 
-RUN_STARTED = "run_started"  # primera línea de cada corrida (alerts.configure)
 ALERT_TYPES = {
     "mesa_por_terminar": "Por terminar",
     "plato_vacio": "Platos vacíos",
@@ -52,51 +62,72 @@ class TableSummary:
     reminders: int = 0
     resolve_times: list[float] = field(default_factory=list)  # segundos
 
+    def add(self, other: "TableSummary") -> None:
+        self.meals += other.meals
+        self.meals_in_progress += other.meals_in_progress
+        self.alerts.update(other.alerts)
+        self.reminders += other.reminders
+        self.resolve_times += other.resolve_times
+
 
 def _ts(value: str) -> datetime:
     return datetime.fromisoformat(value)
 
 
-def load_events(path: Path) -> list[dict]:
-    """Eventos del log, en el orden del archivo. Saltea líneas rotas (corrida cortada)."""
-    events = []
+def load_runs(path: Path, interval: float = DEFAULT_INTERVAL) -> list[list[dict]]:
+    """Corta el log en corridas (regla de `replay.read_runs`); cada una con sus eventos
+    en el orden del archivo, sin la línea `run_started`."""
+    max_gap = RUN_GAP_READINGS * interval
+    runs: list[tuple[Run, list[dict]]] = []
     lines = Path(path).read_text(encoding="utf-8").splitlines()
     for number, line in enumerate(lines, start=1):
         if not line.strip():
             continue
         try:
-            event = json.loads(line)
-            if event.get("event") != RUN_STARTED:
-                _ts(event["ts"])
-        except (ValueError, KeyError, TypeError, AttributeError):
-            print(f"Aviso: salteo la línea {number} de {path}, no es un evento válido.")
+            data = json.loads(line)
+            if not isinstance(data, dict):
+                raise TypeError("no es un objeto JSON")
+            kind = data.get("event", "observation")
+            if kind == "run_started":
+                runs.append((Run(marked=True), []))
+                continue
+            if kind == "observation":
+                fields = {k: v for k, v in data.items() if k != "event"}
+                obs = TableObservation.model_validate(fields)
+                if not runs or not _continues(runs[-1][0], obs, max_gap):
+                    runs.append((Run(), []))
+                runs[-1][0].observations.append(obs)
+                event = {**data, "event": "observation"}
+            else:
+                _ts(data["ts"])
+                if not runs:
+                    runs.append((Run(), []))
+                event = data
+        except (ValueError, TypeError, KeyError) as error:
+            print(f"Aviso: {path}:{number}: línea inválida, la salteo ({error}).")
             continue
-        events.append(event)
-    return events
-
-
-def last_run(events: list[dict]) -> list[dict]:
-    """Eventos de la última corrida, sin la línea `run_started` (ver docstring)."""
-    starts = [i for i, e in enumerate(events) if e["event"] == RUN_STARTED]
-    if starts:
-        return events[starts[-1] + 1 :]
-    start = 0
-    for i in range(1, len(events)):
-        if _ts(events[i]["ts"]) < _ts(events[i - 1]["ts"]):
-            start = i
-    return events[start:]
+        runs[-1][1].append(event)
+    return [events for _, events in runs if events]
 
 
 def summarize(events: list[dict]) -> dict[str, TableSummary]:
+    """Resumen de una corrida, recorriendo los eventos en el orden del archivo.
+
+    Una observación con `ts` anterior a la última de su mesa se ignora: `alerts` la
+    escribe en el log aunque la rechace, y cortaría una comida por la mitad.
+    """
     tables: dict[str, TableSummary] = defaultdict(TableSummary)
     meal_start: dict[str, datetime] = {}
+    last_obs: dict[str, datetime] = {}
     opened_at: dict[str, datetime] = {}  # id del aviso → cuándo se abrió
 
-    events = [e for e in events if e["event"] != RUN_STARTED]
-    for event in sorted(events, key=lambda e: _ts(e["ts"])):
+    for event in events:
         table_id, kind, ts = event["table_id"], event["event"], _ts(event["ts"])
         summary = tables[table_id]
         if kind == "observation":
+            if table_id in last_obs and ts < last_obs[table_id]:
+                continue
+            last_obs[table_id] = ts
             has_plates = bool(event["items"])
             if has_plates and table_id not in meal_start:
                 meal_start[table_id] = ts
@@ -115,6 +146,15 @@ def summarize(events: list[dict]) -> dict[str, TableSummary]:
 
     for table_id in meal_start:
         tables[table_id].meals_in_progress = 1
+    return dict(sorted(tables.items()))
+
+
+def summarize_runs(runs: list[list[dict]]) -> dict[str, TableSummary]:
+    """Cada corrida por separado (no se mezclan comidas ni avisos) y después sumadas."""
+    tables: dict[str, TableSummary] = defaultdict(TableSummary)
+    for events in runs:
+        for table_id, summary in summarize(events).items():
+            tables[table_id].add(summary)
     return dict(sorted(tables.items()))
 
 
@@ -147,11 +187,7 @@ def rows(tables: dict[str, TableSummary]) -> list[list[str]]:
     """
     total = TableSummary()
     for s in tables.values():
-        total.meals += s.meals
-        total.meals_in_progress += s.meals_in_progress
-        total.alerts.update(s.alerts)
-        total.reminders += s.reminders
-        total.resolve_times += s.resolve_times
+        total.add(s)
     other = any(t not in ALERT_TYPES for t in total.alerts)
     headers = list(HEADERS)
     if other:
@@ -246,15 +282,17 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--all", action="store_true", help="todas las corridas del log")
     args = parser.parse_args(argv)
 
-    if hasattr(sys.stdout, "reconfigure"):
-        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    for stream in (sys.stdout, sys.stderr):  # consola de Windows (cp1252)
+        if hasattr(stream, "reconfigure"):
+            stream.reconfigure(encoding="utf-8", errors="replace")
     if not args.file.exists():
         print(f"No existe {args.file}: corré primero main.py o la vista de demo.")
         return 2
-    events = load_events(args.file)
-    if not args.all:
-        events = last_run(events)
-    table = rows(summarize(events))
+    runs = load_runs(args.file)
+    if not runs:
+        print(f"{args.file} no tiene eventos.")
+        return 1
+    table = rows(summarize_runs(runs if args.all else runs[-1:]))
     print(format_table(table))
     if args.image:
         render_image(table, args.image)
