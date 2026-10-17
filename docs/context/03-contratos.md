@@ -20,7 +20,7 @@ type AlertStatus = "abierta" | "en_camino" | "resuelta" | "expirada";
 Ejemplos concretos de este contrato, usados por los tres módulos para trabajar con mocks (lista de archivos en [11-tareas.md](11-tareas.md), T0-2). Si cambiás un contrato, actualizá los fixtures en el mismo PR.
 
 - `fixtures/observations/*.jsonl`: una observación de `POST /api/observations` completa por línea. Es el formato que escribe la visión en `--dry-run` y el que reproduce `web/scripts/simulate.ts`.
-- `fixtures/expected/*.alerts.json`: alertas que el motor tiene que producir para cada escenario.
+- `fixtures/expected/*.alerts.json`: alertas que el motor tiene que producir para cada escenario: `{ at_seconds, type, table_id, expired_at_seconds? }`, con segundos contados desde la primera lectura (umbrales de producción).
 - `fixtures/api/*.json`: respuestas de ejemplo de `GET /api/tables`, `/api/alerts` y `/api/metrics`.
 
 ## Zonas de mesas — `vision/config/zones.json`
@@ -89,11 +89,11 @@ Header: `Authorization: Bearer ${INGEST_TOKEN}`
 
 Claude no garantiza ids estables. Antes de correr las reglas, el backend reconcilia los ítems de cada mesa:
 
-1. Un ítem que **desaparece** y, en la misma lectura, **aparece** otro con el mismo `kind` y la misma `position` en esa mesa, se trata como el **mismo objeto**: se conserva el `track_id` viejo, `first_seen` y `state_since` no se reinician.
+1. Un ítem que **desaparece** y, en la misma lectura, **aparece** otro con el mismo `kind` y la misma `position` en esa mesa, se trata como el **mismo objeto**: se conserva el `track_id` viejo, `first_seen` y `state_since` no se reinician. El backend guarda el alias (id nuevo → `track_id` viejo, por ejemplo `T1-p4 → T1-p1`) y las lecturas siguientes con el id nuevo se mapean directo, sin volver a aplicar la regla.
 2. Si no hay coincidencia, el ítem nuevo es un objeto nuevo (`first_seen = ts`).
 3. Un ítem ausente en 2 lecturas seguidas se marca `removed_at`.
 
-Se registra cuántas veces se aplicó la regla 1 (métrica de calidad de la visión).
+Se registra cuántas veces se aplicó la regla 1, es decir, cuántos alias nuevos se crearon (métrica de calidad de la visión). Un id que cambia una vez cuenta 1, aunque la visión lo siga mandando en las lecturas siguientes.
 
 ## Backend → Dashboard
 

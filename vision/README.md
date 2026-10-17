@@ -8,7 +8,7 @@ Estado: solo el contrato en código (`servio_vision/contracts.py`) con sus tests
 
 ```bash
 python3.11 -m venv .venv && source .venv/bin/activate
-pip install -r requirements.txt
+pip install -r requirements-dev.txt   # requirements.txt + pytest y ruff
 python main.py --source data/videos/mesa1.mp4 --classifier fake --dry-run --out out/obs.jsonl
 ```
 

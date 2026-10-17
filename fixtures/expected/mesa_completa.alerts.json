@@ -1,4 +1,4 @@
 [
-  { "at_seconds": 130, "type": "mesa_por_terminar", "table_id": "T1" },
-  { "at_seconds": 240, "type": "plato_vacio", "table_id": "T1" }
+  { "at_seconds": 130, "type": "mesa_por_terminar", "table_id": "T1", "expired_at_seconds": 180 },
+  { "at_seconds": 240, "type": "plato_vacio", "table_id": "T1", "expired_at_seconds": 320 }
 ]

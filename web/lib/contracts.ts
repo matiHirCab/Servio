@@ -10,21 +10,23 @@ export const AlertStatus = z.enum(["abierta", "en_camino", "resuelta", "expirada
 export const TableStatus = z.enum(["libre", "servida", "comiendo", "por_terminar", "terminada"]);
 
 const ratio = z.number().min(0).max(1);
-const isoDate = z.string().datetime();
+// ISO 8601 con zona (Z o -03:00); sin zona se rechaza.
+const isoDate = z.string().datetime({ offset: true });
 
 export const ItemSchema = z.object({
   track_id: z.string().min(1),
   kind: ItemKind,
   state: PlateState,
   confidence: ratio,
-  fill_ratio: ratio.optional(),
-  position: z.string().optional(),
+  // nullish: Pydantic serializa los opcionales ausentes como null.
+  fill_ratio: ratio.nullish(),
+  position: z.string().nullish(),
 });
 
 export const TableReadingSchema = z.object({
   table_id: z.string().min(1),
-  // Si falta se asume true (ver 03-contratos.md).
-  people_present: z.boolean().optional(),
+  // Si falta (o es null) se asume true (ver 03-contratos.md).
+  people_present: z.boolean().nullish(),
   items: z.array(ItemSchema),
 });
 

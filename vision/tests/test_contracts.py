@@ -10,6 +10,16 @@ OBSERVATIONS = Path(__file__).resolve().parents[2] / "fixtures" / "observations"
 START = datetime(2026, 10, 17, 20, 0, 0, tzinfo=UTC)
 
 
+def observation(ts="2026-10-17T20:00:00Z", **item):
+    base = {"track_id": "T1-p1", "kind": "plate", "state": "lleno", "confidence": 0.9}
+    return {
+        "schema_version": 1,
+        "camera_id": "cam-1",
+        "ts": ts,
+        "tables": [{"table_id": "T1", "items": [{**base, **item}]}],
+    }
+
+
 @pytest.mark.parametrize("path", sorted(OBSERVATIONS.glob("*.jsonl")), ids=lambda p: p.name)
 def test_observaciones_cumplen_contrato(path: Path):
     lines = path.read_text(encoding="utf-8").splitlines()
@@ -19,25 +29,32 @@ def test_observaciones_cumplen_contrato(path: Path):
         assert obs.ts == START + timedelta(seconds=10 * i)
 
 
-def test_hay_fixtures():
-    assert len(list(OBSERVATIONS.glob("*.jsonl"))) == 3
+def test_estan_los_escenarios_de_t0_2():
+    names = {p.name for p in OBSERVATIONS.glob("*.jsonl")}
+    assert {"mesa_completa.jsonl", "plato_lleno_mucho.jsonl", "id_cambiado.jsonl"} <= names
 
 
-def test_rechaza_schema_version_desconocida():
+def test_acepta_null_en_opcionales_y_ts_con_offset():
+    data = observation(ts="2026-10-17T17:00:00-03:00", fill_ratio=None, position=None)
+    data["tables"][0]["people_present"] = None
+    Observation.model_validate(data)
+
+
+def test_ida_y_vuelta_por_json():
+    # Lo que serializa la visión tiene que volver a validar (y en web/ lo valida Zod).
+    obs = Observation.model_validate(observation())
+    assert Observation.model_validate_json(obs.model_dump_json()) == obs
+
+
+@pytest.mark.parametrize(
+    "data",
+    [
+        pytest.param({**observation(), "schema_version": 2}, id="schema_version"),
+        pytest.param(observation(kind="drink"), id="kind_fuera_de_alcance"),
+        pytest.param(observation(ts="2026-10-17T20:00:00"), id="ts_sin_zona"),
+        pytest.param(observation(confidence="0.8"), id="confidence_string"),
+    ],
+)
+def test_rechaza(data):
     with pytest.raises(ValidationError):
-        Observation.model_validate(
-            {"schema_version": 2, "camera_id": "cam-1", "ts": "2026-10-17T20:00:00Z", "tables": []}
-        )
-
-
-def test_rechaza_kind_fuera_de_alcance():
-    item = {"track_id": "T1-d1", "kind": "drink", "state": "vacio", "confidence": 0.9}
-    with pytest.raises(ValidationError):
-        Observation.model_validate(
-            {
-                "schema_version": 1,
-                "camera_id": "cam-1",
-                "ts": "2026-10-17T20:00:00Z",
-                "tables": [{"table_id": "T1", "items": [item]}],
-            }
-        )
+        Observation.model_validate(data)
