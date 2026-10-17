@@ -179,7 +179,7 @@ Video desde arriba (cenital o en alto), con varias mesas y platos que se van vac
 
 ### JES-6 · Loop cada 30 s
 **hora 1–6 · 1 h 30 · depende de: JES-2, JES-4, JES-5**
-`main.py --source … --classifier fake|yolo|hybrid|claude [--demo] [--no-telegram]`: un frame cada `--interval` s (30 por defecto, `04`), recorte y clasificación de cada mesa, suavizado y armado de la observación de mesa (`03`). Mientras MAT-5 no esté, imprime las observaciones.
+`main.py --source … --classifier fake|yolo|hybrid|claude [--demo] [--no-telegram]`: un frame cada `--interval` s (30 por defecto, `04`), recorte y clasificación de cada mesa, suavizado y armado de la observación de mesa (`03`). Cada observación va a `alerts.process()` (MAT-5), que la escribe en `out/eventos.jsonl`.
 
 **Hecho cuando:** con `--classifier fake` sobre un video imprime una observación por mesa cada 30 s de video, con el formato de `03`.
 

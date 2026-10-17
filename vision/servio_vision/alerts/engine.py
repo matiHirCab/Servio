@@ -1,8 +1,8 @@
 """Motor de reglas (MAT-3). Ver docs/context/05-reglas-alertas.md.
 
 `evaluate(table, now, config, open_alerts)` es pura: con el estado de una mesa decide qué
-avisos abrir, cuáles recordar y cuáles cerrar. No manda nada; eso lo hace `process()`
-(MAT-5), que además agrupa en un solo mensaje los avisos de la misma mesa.
+avisos abrir, cuáles recordar y cuáles cerrar. No manda nada; eso lo hace `processor.py`
+(`alerts.process()`), que además agrupa en un solo mensaje los avisos de la misma mesa.
 
 Por cada `(mesa, tipo)` hay como máximo un aviso abierto:
 - condición sí y no hay aviso abierto → se abre;
