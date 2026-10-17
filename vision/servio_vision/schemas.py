@@ -15,14 +15,14 @@ ItemKind = Literal["plate"]  # solo platos de comida: bebidas fuera de alcance
 PlateState = Literal["lleno", "comiendo", "por_terminar", "vacio"]
 
 # Umbrales de fill_ratio (fracción de comida que queda) entre estados.
-FULL_MIN = 0.80  # > 0.80 → lleno
-EATING_MIN = 0.30  # 0.30–0.80 → comiendo (no dispara avisos)
+FULL_MIN = 0.75  # >= 0.75 → lleno
+EATING_MIN = 0.30  # 0.30–0.75 → comiendo (no dispara avisos)
 EMPTY_MAX = 0.05  # 0.05–0.30 → por_terminar · < 0.05 → vacio
 
 
 def state_from_fill_ratio(fill_ratio: float) -> PlateState:
     """Estado de un plato según cuánta comida le queda (0 a 1)."""
-    if fill_ratio > FULL_MIN:
+    if fill_ratio >= FULL_MIN:
         return "lleno"
     if fill_ratio >= EATING_MIN:
         return "comiendo"

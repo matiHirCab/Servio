@@ -258,7 +258,7 @@ def test_rejects(data):
 
 
 @pytest.mark.parametrize(
-    ("fill_ratio", "state"), [(0.80, "comiendo"), (0.05, "por_terminar")]
+    ("fill_ratio", "state"), [(0.74, "comiendo"), (0.05, "por_terminar")]
 )
 def test_accepts_fill_ratio_on_threshold(fill_ratio, state):
     TableObservation.model_validate(with_plate(fill_ratio=fill_ratio, state=state))
