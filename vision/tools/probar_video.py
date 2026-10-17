@@ -3,7 +3,7 @@
 Saca un frame cada `--cada` segundos, lo clasifica como una sola mesa (el frame
 entero) pasándole los platos de la lectura anterior, y guarda cada frame dibujado
 (`f_NNN.jpg`), una hoja con el recorte de cada plato y su clasificación
-(`f_NNN_platos.jpg`) y `linea_de_tiempo.json`. Sirve para TOM-7/TOM-8 antes de tener el loop de Jessica.
+(`f_NNN_platos.jpg`) y `linea_de_tiempo.json`, cada corrida en su carpeta (`out/video/run1`, `run2`, ...). Sirve para TOM-7/TOM-8 antes de tener el loop de Jessica.
 
 Uso (desde vision/):
   python tools/probar_video.py "C:/Users/tomas/Downloads/video mesa platos ia.mp4"
@@ -126,6 +126,16 @@ def draw(img: Image.Image, items, path: Path) -> None:
     img.save(path, quality=85)
 
 
+def next_run_dir(base: Path) -> Path:
+    """Carpeta nueva para esta corrida: base/run1, base/run2, ..."""
+    taken = [
+        int(d.name[3:])
+        for d in base.glob("run*")
+        if d.is_dir() and d.name[3:].isdigit()
+    ]
+    return base / f"run{max(taken, default=0) + 1}"
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("video")
@@ -137,8 +147,9 @@ def main() -> None:
 
     logging.basicConfig(level=logging.WARNING)
     classifier = get_classifier(a.classifier)
-    out = Path(a.out)
-    out.mkdir(parents=True, exist_ok=True)
+    out = next_run_dir(Path(a.out))
+    out.mkdir(parents=True)
+    print(f"Guardando en {out}", flush=True)
 
     previous, timeline = [], []
     for n, (sec, img) in enumerate(frames(a.video, a.cada, a.max_frames), 1):

@@ -41,7 +41,7 @@ pip install -r requirements.txt -r requirements-yolo.txt
 python tools/probar_video.py "C:/Users/tomas/Downloads/video mesa platos ia.mp4" --max-frames 5
 ```
 
-Deja cada frame dibujado y `linea_de_tiempo.json` en `out/video/`.
+Cada corrida va a su carpeta (`out/video/run1`, `run2`, ...) con cada frame dibujado (`f_NNN.jpg`), la hoja con el recorte de cada plato y su clasificación (`f_NNN_platos.jpg`) y `linea_de_tiempo.json`.
 
 ## Resultados
 
