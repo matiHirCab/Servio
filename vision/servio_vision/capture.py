@@ -5,6 +5,8 @@ Todas las fuentes se recorren igual: `for frame, ts in open_source(...)`.
 - `ts`: `datetime` con zona UTC.
   - Video: tiempo del video sumado a `start` (no el reloj), para que los
     umbrales de las reglas tengan sentido aunque se reproduzca más rápido.
+    Si el video dice unos fps imposibles (los `.asf` de cámaras de seguridad
+    dicen 1000), se avanza por el tiempo de cada frame en vez de por fps.
   - Carpeta: una foto cada `interval` segundos a partir de `start`.
   - Cámara o URL del celular: reloj real.
 
@@ -14,6 +16,7 @@ Prueba manual:
 
 import argparse
 import logging
+import math
 import sys
 import time
 from collections.abc import Iterator
@@ -27,6 +30,7 @@ logger = logging.getLogger(__name__)
 
 IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png", ".webp", ".bmp"}
 STREAM_PREFIXES = ("http://", "https://", "rtsp://", "rtmp://")
+MAX_PLAUSIBLE_FPS = 120  # más que esto es un dato roto del contenedor
 
 Frame = tuple[np.ndarray, datetime]
 
@@ -65,28 +69,69 @@ def read_video(
     if not cap.isOpened():
         raise OSError(f"No se pudo abrir el video: {path}")
     fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
-    step = max(1, round(interval * fps))  # frames entre lecturas
     pacer = _Pacer(speed)
-    index = 0  # índice del próximo frame que devuelve cap.grab()
-    target = 0
     try:
-        while True:
-            # grab() avanza sin decodificar: saltar así es más rápido y
-            # más preciso que buscar por tiempo con CAP_PROP_POS_MSEC.
-            while index < target:
-                if not cap.grab():
-                    return
-                index += 1
-            ok, frame = cap.read()
-            if not ok:
-                return
-            index += 1
-            video_seconds = target / fps
-            pacer.wait(video_seconds)
-            yield frame, start + timedelta(seconds=video_seconds)
-            target += step
+        if fps > MAX_PLAUSIBLE_FPS:
+            logger.warning(
+                "El video dice %.0f fps; avanzo por el tiempo de cada frame", fps
+            )
+            yield from _read_video_by_time(cap, interval, pacer, start)
+        else:
+            yield from _read_video_by_fps(cap, fps, interval, pacer, start)
     finally:
         cap.release()
+
+
+def _read_video_by_fps(
+    cap: cv2.VideoCapture,
+    fps: float,
+    interval: float,
+    pacer: "_Pacer",
+    start: datetime,
+) -> Iterator[Frame]:
+    step = max(1, round(interval * fps))  # frames entre lecturas
+    index = 0  # índice del próximo frame que devuelve cap.grab()
+    target = 0
+    while True:
+        # grab() avanza sin decodificar: saltar así es más rápido y
+        # más preciso que buscar por tiempo con CAP_PROP_POS_MSEC.
+        while index < target:
+            if not cap.grab():
+                return
+            index += 1
+        ok, frame = cap.read()
+        if not ok:
+            return
+        index += 1
+        video_seconds = target / fps
+        pacer.wait(video_seconds)
+        yield frame, start + timedelta(seconds=video_seconds)
+        target += step
+
+
+def _read_video_by_time(
+    cap: cv2.VideoCapture, interval: float, pacer: "_Pacer", start: datetime
+) -> Iterator[Frame]:
+    """Para videos con fps falsos: el tiempo de cada frame sale de
+    CAP_PROP_POS_MSEC, que en esos contenedores sí es el real."""
+    target = 0.0  # segundo del video de la próxima lectura
+    last = 0.0
+    while True:
+        if not cap.grab():
+            return
+        seconds = cap.get(cv2.CAP_PROP_POS_MSEC) / 1000
+        # algunos frames vienen sin tiempo (0): se toma el del anterior
+        seconds = max(seconds, last)
+        last = seconds
+        if seconds < target:
+            continue
+        ok, frame = cap.retrieve()
+        if not ok:
+            return
+        pacer.wait(seconds)
+        yield frame, start + timedelta(seconds=seconds)
+        # si el video salta más de un intervalo, no repite el frame
+        target = (math.floor(seconds / interval) + 1) * interval
 
 
 def read_folder(

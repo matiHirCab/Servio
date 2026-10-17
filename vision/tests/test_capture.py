@@ -7,6 +7,7 @@ import cv2
 import numpy as np
 import pytest
 
+from servio_vision import capture
 from servio_vision.capture import open_source
 
 START = datetime(2026, 10, 17, 20, 0, tzinfo=UTC)
@@ -40,6 +41,73 @@ def test_video_speed_paces_playback(tmp_path):
     elapsed = time.monotonic() - t0
     assert len(frames) == 3
     assert elapsed >= 0.2  # 2 s de video a 10x ≈ 0,2 s
+
+
+class FakeBrokenFpsCapture:
+    """Como el .asf de una cámara de seguridad: dice 1000 fps, pero cada frame
+    trae su tiempo real (~16 fps) y algunos vienen sin tiempo (0)."""
+
+    def __init__(self, path):
+        # frame n a n/16 s; el brillo codifica n
+        self.times = [n * 1000 / 16 for n in range(16 * 10)]
+        self.times[32] = 0.0  # 2 s: sin tiempo
+        self.times[33] = 0.0
+        self.pos = -1
+        self.released = False
+
+    def isOpened(self):
+        return True
+
+    def get(self, prop):
+        if prop == cv2.CAP_PROP_FPS:
+            return 1000.0
+        if prop == cv2.CAP_PROP_POS_MSEC:
+            return self.times[self.pos]
+        return 0.0
+
+    def grab(self):
+        self.pos += 1
+        return self.pos < len(self.times)
+
+    def retrieve(self):
+        return True, np.full((4, 4, 3), self.pos, dtype=np.uint8)
+
+    def release(self):
+        self.released = True
+
+
+def test_video_with_broken_fps_uses_frame_times(tmp_path, monkeypatch):
+    video = tmp_path / "camara.asf"
+    video.write_bytes(b"")
+    captures = []
+
+    def fake(path):
+        captures.append(FakeBrokenFpsCapture(path))
+        return captures[-1]
+
+    monkeypatch.setattr(capture.cv2, "VideoCapture", fake)
+    frames = list(open_source(str(video), interval=2.5, start=START))
+    # una lectura cada 2,5 s de los 10 s del video, con su tiempo real
+    assert [ts for _, ts in frames] == [
+        START + timedelta(seconds=s) for s in (0, 2.5, 5, 7.5)
+    ]
+    assert [int(frame[0, 0, 0]) for frame, _ in frames] == [0, 40, 80, 120]
+    assert captures[0].released
+
+
+def test_video_with_broken_fps_does_not_repeat_on_gaps(tmp_path, monkeypatch):
+    video = tmp_path / "camara.asf"
+    video.write_bytes(b"")
+
+    class Gappy(FakeBrokenFpsCapture):
+        def __init__(self, path):
+            super().__init__(path)
+            # salta de 1 s a 9 s: no tiene que repetir el frame para 2,5, 5 y 7,5
+            self.times = [0.0, 500.0, 1000.0, 9000.0, 9500.0]
+
+    monkeypatch.setattr(capture.cv2, "VideoCapture", Gappy)
+    frames = list(open_source(str(video), interval=2.5, start=START))
+    assert [ts for _, ts in frames] == [START, START + timedelta(seconds=9)]
 
 
 def test_folder_uses_artificial_ts(tmp_path):
