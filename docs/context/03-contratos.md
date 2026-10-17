@@ -85,7 +85,7 @@ Lo que el pipeline le pasa a `alerts` después de suavizar, una por mesa y por l
 - `ts`: en un video, el tiempo del video (no el reloj), para que los umbrales tengan sentido.
 - `track_id`: `{table_id}-{id del Item}`.
 - Solo platos visibles y ya suavizados. Un plato ausente en 2 lecturas seguidas deja de venir.
-- Cadencia: una observación por mesa cada 15–30 s (demo: 5–10 s), y como mínimo cada 60 s (demo: 20 s) aunque la mesa no cambie, para que las reglas por tiempo corran.
+- Cadencia: una observación por mesa cada **30 s** (`--interval`), haya cambiado o no la mesa. En un video, son 30 s del video: con `--speed` se ven más rápido.
 
 ## Aviso (Matías → Telegram)
 

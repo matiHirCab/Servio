@@ -52,22 +52,19 @@ Herramienta `report_plates`:
 | Riesgo | Mitigación |
 |---|---|
 | **Muchas mesas en un plano** → platos chicos | Recortar desde el frame original (no achicado); YOLO recorta cada plato antes de mandarlo a Claude. Probar temprano con el video de la demo qué tamaño mínimo de plato funciona. |
-| **Latencia de Claude** (1–3 s) | Muestreamos cada 15–30 s; llamadas asíncronas, el loop no espera. |
-| **Costo** | Una llamada por mesa, solo si el recorte cambió; recortes chicos; Haiku. |
+| **Latencia de Claude** (1–3 s) | Miramos cada 30 s: sobra tiempo para clasificar todas las mesas antes de la próxima lectura. |
+| **Costo** | Una llamada por mesa cada 30 s; recortes chicos; Haiku. |
 | **Rate limits de Bedrock** | Pedir aumento de cuota temprano; API de Anthropic como respaldo. |
 | **Sin internet** | `--classifier yolo` (solo YOLO) o reproducir un log con `tools/replay.py`. |
 | **Manos que tapan** | `visible: false` → no cuenta en el suavizado. |
 
 ## Cadencias
 
-| Qué | Producción | Modo demo |
-|---|---|---|
-| Captura de frame | 1 s | 1 s |
-| Llamada al clasificador por mesa (si el recorte cambió) | 15–30 s | 5–10 s |
-| Refresco forzado sin cambios | 60 s | 20 s |
-| Observación a `alerts` | tras cada lectura | tras cada lectura |
+Una sola cadencia: **se mira cada 30 s** (`--interval 30`, configurable). En cada lectura se clasifican todas las mesas y sale una observación por mesa a `alerts`, haya cambiado o no. Sin detector de cambio: a esta cadencia no hace falta ahorrar llamadas.
 
-Modo demo con `DEMO_MODE=true` o `--demo` (el flag le gana). Los umbrales de [05-reglas-alertas.md](05-reglas-alertas.md) deben ser ≥ 2 × la cadencia de llamada.
+- En un **video**, son 30 s *del video*. Para que la demo no dure de más, se reproduce acelerado con `--speed` (por ejemplo `--speed 10`: una lectura cada 3 s de reloj); los tiempos de las reglas siguen contando en tiempo de video.
+- Como el suavizado pide **2 lecturas seguidas** para aceptar un cambio, un cambio de estado se confirma recién a los **60 s**. Todo umbral de [05-reglas-alertas.md](05-reglas-alertas.md) (también los de demo) debe ser ≥ 2 × `interval`.
+- `--demo` (o `DEMO_MODE=true`, el flag le gana) solo cambia los umbrales de las reglas, no la cadencia.
 
 ## Video y cámara
 
@@ -78,15 +75,14 @@ Modo demo con `DEMO_MODE=true` o `--demo` (el flag le gana). Los umbrales de [05
 ## Pipeline
 
 ```
-frame (1 s) → recorte por mesa → ¿cambió? → classify() → suavizado → observación → alerts
+frame (cada 30 s) → recorte por mesa → classify() → suavizado → observación → alerts
 ```
 
 1. **Zonas**: polígono por mesa en `config/zones.json`, dibujado con `tools/draw_zones.py`.
 2. **Recorte**: el rectángulo de la mesa desde el frame original, JPEG calidad 85.
-3. **Detector de cambio**: diferencia media de píxeles contra el último recorte clasificado; si es chica no se llama, salvo el refresco forzado.
-4. **Clasificador**: `--classifier fake|yolo|hybrid|claude`.
-5. **Suavizado** (abajo).
-6. **Observación** a `alerts.process()` y al log.
+3. **Clasificador**: `--classifier fake|yolo|hybrid|claude`.
+4. **Suavizado** (abajo).
+5. **Observación** a `alerts.process()` y al log.
 
 ### Suavizado
 
@@ -109,7 +105,7 @@ vision/
       yolo.py, hybrid.py, claude.py   # (Tomás)
     tracking.py              # emparejar cajas con ids anteriores (Tomás)
     prompt.py                # (Tomás)
-    capture.py, zones.py, change.py, smoothing.py   # (Jessica)
+    capture.py, zones.py, smoothing.py   # (Jessica)
     alerts/                  # estado de mesa, reglas, Telegram, log (Matías)
   tools/
     draw_zones.py            # (Jessica)

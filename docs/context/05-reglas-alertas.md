@@ -21,7 +21,7 @@ El mozo no responde, así que el antispam es por tiempo:
 
 ## Umbrales y cadencia
 
-Las observaciones llegan cada 15–30 s (demo: 5–10 s) y el suavizado exige 2 lecturas para aceptar un cambio, así que el tiempo mínimo observable es ≈ 2 × cadencia. Todo umbral de demo debe ser ≥ 2 × la cadencia; `config.py` lo valida al arrancar.
+Las observaciones llegan cada 30 s (en un video, 30 s del video; ver [04-vision.md](04-vision.md)) y el suavizado exige 2 lecturas para aceptar un cambio, así que el tiempo mínimo observable es ≈ 2 × cadencia. Todo umbral de demo debe ser ≥ 2 × la cadencia; `config.py` lo valida al arrancar.
 
 ## `people_present`
 

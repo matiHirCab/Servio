@@ -83,7 +83,7 @@ Con el video de la demo, ver desde qué tamaño de plato YOLO deja de detectar y
 
 ### TOM-8 · Ajuste fino sobre el video de la demo
 **hora 12–16 · 1 h 15 · depende de: JES-8**
-Correr todo sobre el video final y revisar en `out/eventos.jsonl` la línea de tiempo de cada mesa. Ajustar el prompt; con Jessica, el umbral de cambio y la cadencia.
+Correr todo sobre el video final y revisar en `out/eventos.jsonl` la línea de tiempo de cada mesa. Ajustar el prompt; con Jessica, la cadencia (`--interval`) y el `--speed` de la demo.
 
 **Hecho cuando:** cada mesa del video pasa por los estados en orden, sin saltos raros ni ids que cambien.
 
@@ -177,11 +177,11 @@ Video desde arriba (cenital o en alto), con varias mesas y platos que se van vac
 
 **Hecho cuando:** `pytest tests/test_smoothing.py` pasa con un caso por regla.
 
-### JES-6 · Loop con cadencias
+### JES-6 · Loop cada 30 s
 **hora 1–6 · 1 h 30 · depende de: JES-2, JES-4, JES-5**
-`main.py --source … --classifier fake|yolo|hybrid|claude [--demo] [--no-telegram]`: frame cada 1 s, detector de cambio por mesa (`change.py`), llamada al clasificador según las cadencias de `04` (asíncrona), suavizado y armado de la observación de mesa (`03`). Mientras MAT-5 no esté, imprime las observaciones.
+`main.py --source … --classifier fake|yolo|hybrid|claude [--demo] [--no-telegram]`: un frame cada `--interval` s (30 por defecto, `04`), recorte y clasificación de cada mesa, suavizado y armado de la observación de mesa (`03`). Mientras MAT-5 no esté, imprime las observaciones.
 
-**Hecho cuando:** con `--classifier fake` sobre un video imprime observaciones con el formato de `03` y respeta las cadencias.
+**Hecho cuando:** con `--classifier fake` sobre un video imprime una observación por mesa cada 30 s de video, con el formato de `03`.
 
 ### JES-7 · Integración
 **hora 6–12 · 30 min · depende de: JES-6, MAT-5, TOM-5**

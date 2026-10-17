@@ -12,7 +12,7 @@ python main.py --source data/videos/demo.mp4 --classifier fake --no-telegram
 ```
 
 - `--classifier fake|yolo|hybrid|claude`: `fake` no usa modelo; `hybrid` (YOLO + Claude) es el de la demo; `yolo` es el plan B sin internet.
-- `--demo` (o `DEMO_MODE=true`): cadencias y umbrales cortos. El flag le gana a la variable.
+- `--demo` (o `DEMO_MODE=true`): umbrales de demo (la cadencia es siempre `--interval`, 30 s). El flag le gana a la variable.
 - `--no-telegram`: imprime los avisos en vez de mandarlos.
 - Cada corrida deja `out/eventos.jsonl`; se puede reproducir con `python tools/replay.py --file out/eventos.jsonl`.
 
