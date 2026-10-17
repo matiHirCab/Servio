@@ -6,6 +6,7 @@ from pathlib import Path
 
 import cv2
 import numpy as np
+import pytest
 
 from servio_vision.schemas import Item
 from servio_vision.zones import TableZone, Zones, save_zones
@@ -145,3 +146,37 @@ def test_overlay_boxes_match_crop_at_frame_edge():
     # bbox x de 0.25 a 0.75 del recorte (ancho 101) → bordes en x=25 y x=76
     assert tuple(image[100, 25]) == vista_demo.PLATE_COLORS["vacio"]
     assert tuple(image[100, 76]) == vista_demo.PLATE_COLORS["vacio"]
+
+
+def test_interval_below_one_second_is_rejected(tmp_path, monkeypatch, caplog, capsys):
+    with pytest.raises(SystemExit) as exit_info:
+        _run(tmp_path, monkeypatch, caplog, _video(tmp_path), "--interval", "0.3")
+    assert exit_info.value.code == 2
+    assert "tiene que ser al menos 1" in capsys.readouterr().err
+
+
+def test_recorder_keeps_each_photo_for_the_interval(tmp_path):
+    out = tmp_path / "fotos.mp4"
+    recorder = vista_demo._Recorder(out, fps=1 / 1.5)  # carpeta con --interval 1.5
+    recorder.write(np.zeros((20, 40, 3), np.uint8))
+    recorder.close()
+    recorded = cv2.VideoCapture(str(out))
+    frames = recorded.get(cv2.CAP_PROP_FRAME_COUNT)
+    fps = recorded.get(cv2.CAP_PROP_FPS)
+    recorded.release()
+    assert frames / fps == 1.5
+
+
+def test_failing_pipeline_still_closes_the_recording(tmp_path, monkeypatch, caplog):
+    def broken(self, frame, ts):
+        raise RuntimeError("se rompió")
+
+    monkeypatch.setattr(vista_demo.Pipeline, "process_frame", broken)
+    out = tmp_path / "demo.mp4"
+    with pytest.raises(RuntimeError):
+        _run(tmp_path, monkeypatch, caplog, _video(tmp_path), "--record", str(out))
+    recorded = cv2.VideoCapture(str(out))
+    assert (
+        recorded.get(cv2.CAP_PROP_FRAME_COUNT) > 0
+    )  # el video quedó cerrado y legible
+    recorded.release()

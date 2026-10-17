@@ -142,6 +142,15 @@ def demo_enabled(flag: bool) -> bool:
     return flag or os.getenv("DEMO_MODE", "").strip().lower() in {"1", "true", "yes"}
 
 
+def interval_seconds(raw: str) -> float:
+    """`--interval`: segundos, al menos 1 (los umbrales de alerts se cuentan en
+    segundos enteros)."""
+    value = float(raw)
+    if value < 1:
+        raise argparse.ArgumentTypeError(f"tiene que ser al menos 1 (vino {raw})")
+    return value
+
+
 def build_parser(
     description: str = "Servio: loop principal.",
 ) -> argparse.ArgumentParser:
@@ -151,9 +160,9 @@ def build_parser(
     parser.add_argument("--zones", type=Path, default=DEFAULT_ZONES)
     parser.add_argument(
         "--interval",
-        type=float,
+        type=interval_seconds,
         default=DEFAULT_INTERVAL,
-        help="segundos entre lecturas (tiempo del video)",
+        help="segundos entre lecturas (tiempo del video, mínimo 1)",
     )
     parser.add_argument(
         "--speed", type=float, help="reproducir el video a esta velocidad"
@@ -169,6 +178,11 @@ def build_parser(
 
 
 def setup_logging() -> None:
+    # La consola de Windows (cp1252) no puede escribir los emojis de los avisos:
+    # sin esto, el aviso impreso con --no-telegram tira UnicodeEncodeError.
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            stream.reconfigure(encoding="utf-8", errors="replace")
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s %(levelname)s %(message)s",

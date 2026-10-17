@@ -17,6 +17,15 @@ python main.py --source data/videos/demo.mp4 --classifier fake --no-telegram
 - Cada corrida deja `out/eventos.jsonl`; se puede reproducir (plan B de la demo) con `python tools/replay.py --file out/eventos.jsonl --speed 10` (`--no-telegram` para imprimir). Como el log se agrega, el replay lo corta en corridas (`run_started`) y reproduce la última con los umbrales con que se hizo (`--run N` para otra, `--all` para todas). También acepta un fixture: `--file ../fixtures/observations/mesa_completa.jsonl`, con umbrales de producción (`--demo` para los de demo). Escribe su propio log en `out/replay.jsonl` (se pisa en cada replay).
 - **Prueba punta a punta de los avisos (MAT-7):** `python main.py --source <video> --classifier fake --demo --speed 10 --limit 20` manda al grupo los tres tipos de aviso de cada mesa en ~1 min. El fake no mira la imagen, así que sirve cualquier video con sus zonas, pero tiene que durar al menos 10 min (`--limit 20` × 30 s); si es más corto, el loop corta antes y faltan avisos. Pensado para 2 mesas: cada mesa siguiente arranca su ciclo 3 lecturas más tarde, así que con más mesas subí `--limit` (+3 por mesa, y el video en proporción). Con Telegram usá siempre `--speed`: sin él el video corre a tope y se pasa el límite de ~20 mensajes por minuto del grupo. Cada mesa suma ~10 mensajes y ediciones por ciclo, así que con 4 mesas o más bajá a `--speed 5` o menos. El mismo recorrido, sin Telegram ni video, está en `tests/test_integration_alerts.py`.
 
+## Tests
+
+```bash
+pytest -q                              # sin Telegram: los avisos salen por consola
+SERVIO_TEST_TELEGRAM=1 pytest -q       # con el Telegram del .env: manda mensajes reales al grupo
+```
+
+Los tests nunca escriben en el `out/eventos.jsonl` real: cada uno usa una carpeta temporal (`tests/conftest.py`).
+
 ## Vista de la demo (pantalla dividida)
 
 - **Izquierda:** `tools/vista_demo.py`, con los mismos flags que `main.py`. Muestra el video con cada mesa coloreada por estado y la caja de cada plato.
@@ -31,6 +40,15 @@ python tools/vista_demo.py --source data/videos/demo.mp4 --classifier fake --rec
 - **`--speed`:** a diferencia de `main.py`, sin `--speed` la vista reproduce en tiempo real (es para mirar). Después de una pausa o de esperar al modelo, el video retoma su ritmo sin adelantarse.
 - **Grabar en vivo:** con la cámara, la grabación puede quedar más rápida que la realidad si el loop va más lento que los fps de la cámara. Para el plan B, grabar sobre el video.
 - **Colores de mesa:** gris libre · azul servida · verde comiendo · amarillo por terminar · rojo terminada. Los platos usan los mismos colores según su estado.
+
+## Tabla de lo que pasó (cierre de la demo)
+
+`tools/resumen.py` lee `out/eventos.jsonl` y arma una tabla por mesa: comidas y su duración media, avisos de cada tipo, recordatorios y cuánto tardaron los avisos en resolverse, con los totales al final. Con `--image`, la tabla sale también como imagen para la última slide.
+
+```bash
+python tools/resumen.py                              # out/eventos.jsonl de la última corrida
+python tools/resumen.py --image out/resumen.png
+```
 
 ## Claude
 
