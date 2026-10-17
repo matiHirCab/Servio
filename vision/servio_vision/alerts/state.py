@@ -51,6 +51,9 @@ class TableState:
     table_id: str
     plates: dict[str, PlateTrack] = field(default_factory=dict)
     last_ts: datetime | None = None
+    people_present: bool = True
+    # Lecturas seguidas con people_present=false: plato_lleno_mucho se cierra con 2 (05).
+    people_absent_readings: int = 0
 
     def active_plates(self) -> list[PlateTrack]:
         """Platos que cuentan para las reglas (sin los provisionales)."""
@@ -93,7 +96,11 @@ def update_table(prev: TableState, obs: TableObservation) -> TableState:
 
     _inherit_from_removed(prev, plates, ts)
     _mark_provisional(plates, ts)
-    return TableState(prev.table_id, plates, ts)
+    if ts == prev.last_ts:  # la misma lectura otra vez: no cuenta de nuevo
+        absent = prev.people_absent_readings
+    else:
+        absent = 0 if obs.people_present else prev.people_absent_readings + 1
+    return TableState(prev.table_id, plates, ts, obs.people_present, absent)
 
 
 def _inherit_from_removed(
