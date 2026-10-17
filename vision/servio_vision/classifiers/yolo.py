@@ -50,10 +50,10 @@ def find_plates(
         )
         for d in dets
     ]
-    first_new = ids.first_new(table_id, previous_items) if ids else None
-    plate_ids = match_ids(bboxes, previous_items, first_new)
     if ids:
-        ids.seen(table_id, plate_ids)
+        plate_ids = ids.assign(table_id, bboxes, previous_items)
+    else:
+        plate_ids = match_ids(bboxes, previous_items)
     plates = [FoundPlate(i, b, d) for i, b, d in zip(plate_ids, bboxes, dets)]
     plates.sort(key=lambda p: (round(p.bbox[1] * 4), p.bbox[0]))
     return plates

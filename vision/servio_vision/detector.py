@@ -46,7 +46,7 @@ def filter_detections(dets: list[Detection], min_rel: float = 0.35) -> list[Dete
     que el plato típico (mitades de palta, aceitunas…)."""
     kept: list[Detection] = []
     for d in sorted(dets, key=lambda d: -d.confidence):
-        if all(_iou(d.box, k.box) < 0.5 and not _contained(d.box, k.box) for k in kept):
+        if all(_iou(d.box, k.box) < 0.4 and not _contained(d.box, k.box) for k in kept):
             kept.append(d)
     if not kept:
         return []

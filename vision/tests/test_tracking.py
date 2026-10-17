@@ -2,7 +2,7 @@
 
 from servio_vision.detector import Detection, filter_detections
 from servio_vision.schemas import Item
-from servio_vision.tracking import match_ids, position_label
+from servio_vision.tracking import IdCounter, match_ids, position_label
 
 
 def _item(pid, bbox):
@@ -46,3 +46,53 @@ def test_filter_drops_duplicates_and_small_boxes():
     ]
     kept = filter_detections(dets)
     assert [d.box for d in kept] == [(0, 0, 100, 100), (200, 0, 300, 100)]
+
+
+def _track(counter, frames):
+    """Corre `IdCounter.assign` (lo que usa `find_plates`) sobre frames de cajas."""
+    previous, out = [], []
+    for bboxes in frames:
+        ids = counter.assign("T1", bboxes, previous)
+        previous = [
+            Item(id=i, position="centro", bbox=b, visible=False)
+            for i, b in zip(ids, bboxes)
+        ]
+        out.append(ids)
+    return out
+
+
+def test_plate_missing_for_a_few_readings_gets_its_id_back():
+    a, b = (0.1, 0.1, 0.2, 0.2), (0.6, 0.6, 0.2, 0.2)
+    ids = _track(IdCounter(), [[a, b], [a], [a], [a, b]])
+    assert ids[-1] == ["p1", "p2"]
+
+
+def test_plate_missing_too_long_gets_a_new_id():
+    a, b = (0.1, 0.1, 0.2, 0.2), (0.6, 0.6, 0.2, 0.2)
+    ids = _track(IdCounter(), [[a, b], [a], [a], [a], [a], [a, b]])
+    assert ids[-1] == ["p1", "p3"]
+
+
+def test_plate_on_the_table_wins_over_a_remembered_one():
+    # se llevan p2 y p1 se corre hacia donde estaba p2: sigue siendo p1
+    p1, p2 = (0.40, 0.40, 0.2, 0.2), (0.48, 0.40, 0.2, 0.2)
+    ids = _track(IdCounter(), [[p1, p2], [p1], [(0.47, 0.40, 0.2, 0.2)]])
+    assert ids[-1] == ["p1"]
+
+
+def test_filter_drops_overlapping_duplicate_of_the_same_plate():
+    # dos cajas del mismo plato en el video de IA (frame 4): IoU 0,43
+    dets = [
+        Detection((718, 274, 805, 420), 0.8, "plate"),
+        Detection((699, 298, 772, 418), 0.6, "bowl"),
+    ]
+    assert len(filter_detections(dets)) == 1
+
+
+def test_filter_keeps_small_plate_partly_under_a_big_one():
+    # plato de pan detrás de un plato grande, tapado en un 75 %
+    dets = [
+        Detection((0, 0, 100, 100), 0.9, "plate"),
+        Detection((70, 0, 110, 40), 0.8, "plate"),
+    ]
+    assert len(filter_detections(dets, min_rel=0.1)) == 2
