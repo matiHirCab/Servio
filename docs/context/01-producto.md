@@ -16,8 +16,8 @@ Una cámara en alto mira el salón. Servio:
 
    | Estado | Comida que queda | ¿Avisa? |
    |---|---|---|
-   | `lleno` | > 80 % | Sí, si sigue así mucho rato |
-   | `comiendo` | 30–80 % | No |
+   | `lleno` | ≥ 75 % | Sí, si sigue así mucho rato |
+   | `comiendo` | 30–75 % | No |
    | `por_terminar` | 5–30 % | Sí |
    | `vacio` | < 5 % | Sí |
 
