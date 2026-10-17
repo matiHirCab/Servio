@@ -7,11 +7,14 @@ Todo lo que cruza entre módulos está definido acá. Si lo cambiás, cambialo a
 ```ts
 type ItemKind   = "plate";            // solo platos de comida: bebidas fuera de alcance
 type PlateState = "lleno" | "comiendo" | "por_terminar" | "vacio";
-type AlertType  = "mesa_por_terminar" | "plato_vacio" | "plato_lleno_mucho";
+// según fill_ratio (comida que queda): lleno > 0.80 · comiendo 0.30–0.80 · por_terminar 0.05–0.30 · vacio < 0.05
+type AlertType  = "mesa_por_terminar" | "plato_vacio" | "plato_lleno_mucho" | "esperando_plato";
 type AlertStatus = "abierta" | "en_camino" | "resuelta" | "expirada";
 ```
 
-**Propuestas pendientes (se deciden en T0-1 de [11-tareas.md](11-tareas.md)):** `visible: boolean` por ítem y el `AlertType` `esperando_plato`. Hasta que se aprueben y se anoten acá, no forman parte del contrato.
+**Decidido en T0-1 ([11-tareas.md](11-tareas.md)):** entran las dos propuestas.
+- `visible: boolean` por ítem, solo **dentro de la visión** (`report_table` / `TableReport`, ver [04-vision.md](04-vision.md)): la visión descarta los no visibles antes de suavizar, así que **no** viaja en `POST /api/observations`.
+- `AlertType` `esperando_plato` (regla en [05-reglas-alertas.md](05-reglas-alertas.md)).
 
 ## Fixtures — `fixtures/`
 
@@ -117,10 +120,10 @@ Se registra cuántas veces se aplicó la regla 1 (métrica de calidad de la visi
 
 Las dos responden `200` con la alerta actualizada y disparan `Notifier.update` para editar los mensajes ya enviados.
 
-`GET /api/metrics?from=…&to=…` → `{ avg_meal_minutes, avg_response_seconds, alerts_by_type, plates_returned_full, id_reconciliations, avg_wait_between_courses? }`.
+`GET /api/metrics?from=…&to=…` → `{ avg_meal_minutes, avg_response_seconds, alerts_by_type, plates_returned_full, id_reconciliations, avg_wait_between_courses }`.
 
 - `id_reconciliations`: cuántas veces se aplicó la regla 1 de la reconciliación (calidad de la visión).
-- `avg_wait_between_courses`: solo si se aprobó `esperando_plato`.
+- `avg_wait_between_courses`: minutos promedio que una mesa con gente pasa sin platos entre que se retiran unos y llega el siguiente (diferencial "tiempo entre platos").
 
 ## Alerta
 
