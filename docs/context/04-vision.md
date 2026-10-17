@@ -5,7 +5,7 @@
 ## Por qué los dos
 
 - **YOLO** (`yolov8n` entrenado con el dataset de Roboflow): encuentra cada plato rápido, en la laptop con CPU, y da su caja. Con la caja se mantiene el mismo id para el mismo plato entre lecturas y se recorta el plato a buena resolución aunque haya muchas mesas en el plano. Solo distingue `food` / `finished_food`, así que no alcanza para los estados intermedios.
-- **Claude** (Haiku en Bedrock, o la API de Anthropic): mira el recorte de cada plato y estima `fill_ratio` (cuánta comida queda), que da los 4 estados sin entrenar nada.
+- **Claude** (Haiku por `claude -p` con la suscripción del equipo, o la API de Anthropic si hay key): mira el recorte de cada plato y estima `fill_ratio` (cuánta comida queda), que da los 4 estados sin entrenar nada.
 - **Plan B:** si Claude no responde, el `hybrid` usa la clase de YOLO (`food` → `lleno`, `finished_food` → `vacio`). Si YOLO no está entrenado a tiempo, se usa `claude` con el recorte de la mesa entera.
 
 ## Clasificador `hybrid` (el de la demo)
@@ -54,7 +54,7 @@ Herramienta `report_plates`:
 | **Muchas mesas en un plano** → platos chicos | Recortar desde el frame original (no achicado); YOLO recorta cada plato antes de mandarlo a Claude. Probar temprano con el video de la demo qué tamaño mínimo de plato funciona. |
 | **Latencia de Claude** (1–3 s) | Muestreamos cada 15–30 s; llamadas asíncronas, el loop no espera. |
 | **Costo** | Una llamada por mesa, solo si el recorte cambió; recortes chicos; Haiku. |
-| **Rate limits de Bedrock** | Pedir aumento de cuota temprano; API de Anthropic como respaldo. |
+| **Límites de uso de la suscripción** (`claude -p`) | Una llamada por mesa y solo si el recorte cambió; usar la cuenta Max para la demo; API de Anthropic como respaldo. |
 | **Sin internet** | `--classifier yolo` (solo YOLO) o reproducir un log con `tools/replay.py`. |
 | **Manos que tapan** | `visible: false` → no cuenta en el suavizado. |
 
@@ -118,7 +118,7 @@ vision/
     vista_demo.py            # (Jessica, opcional)
   tests/
   data/ models/ out/         # ignorados por git
-  requirements.txt           # opencv-python, pydantic, boto3, anthropic, httpx
+  requirements.txt           # opencv-python, pydantic, httpx (anthropic solo si CLAUDE_PROVIDER=anthropic)
   requirements-yolo.txt      # ultralytics
 ```
 

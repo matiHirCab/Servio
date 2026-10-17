@@ -18,7 +18,7 @@ Los tres programan en Python, así que cualquiera puede cubrir a otro si se trab
 
 1. Leer `AGENTS.md`, `01-producto.md` y `03-contratos.md`. No discutir más de 20 min.
 2. T0: Tomás ajusta `schemas.py` (campo `bbox`) y el registro de clasificadores; Matías escribe los fixtures y el modelo `Alert`; Jessica revisa los modelos con Tomás y **arranca a conseguir el video de la demo**.
-3. Accesos: Tomás (Claude en Bedrock o Anthropic), Matías (bot de Telegram y grupo "Mozos").
+3. Accesos: Tomás (Claude Code logueado para `claude -p`), Matías (bot de Telegram y grupo "Mozos").
 
 ## Hora 1–6 · Cada parte funciona sola
 
