@@ -1,23 +1,32 @@
 # 05 — Reglas de avisos
 
-Viven en `vision/servio_vision/alerts/` (Matías). Se evalúan cada vez que llega una observación de mesa. Umbrales en `alerts/config.py`, con valores de producción y de demo (`DEMO_MODE` / `--demo`).
+Viven en `vision/servio_vision/alerts/` (Matías). Se evalúan cada vez que llega una observación de mesa. Umbrales en `alerts/config.py`, con valores de producción y de demo (`DEMO_MODE` / `--demo`). Todos son configurables (ver «Umbrales configurables»).
 
 ## Avisos
 
 | Aviso | Se abre cuando | Mensaje | Producción | Demo |
 |---|---|---|---|---|
 | `mesa_por_terminar` | El estado de la mesa **pasa a** `por_terminar` (ver «Estado de mesa») | "🍽️ Mesa 3 está terminando." | — | — |
-| `plato_vacio` | Un plato está en `vacio` hace ≥ T1 | "🧹 Mesa 3: hay platos vacíos para retirar." | T1 = 60 s | 10 s |
-| `plato_lleno_mucho` | Un plato está en `lleno` hace ≥ T2 desde que apareció **y** `people_present` no es `false` | "❓ Mesa 3: un plato sigue lleno hace 12 min. ¿Está todo bien?" | T2 = 10 min | 45 s |
+| `plato_vacio` | Un plato está en `vacio` hace ≥ T1 | "🧹 Mesa 3: hay platos vacíos para retirar." | T1 = 60 s | 2 × `interval` |
+| `plato_lleno_mucho` | Un plato está en `lleno` hace ≥ T2 desde que apareció **y** `people_present` no es `false` | "❓ Mesa 3: un plato sigue lleno hace 12 min. ¿Está todo bien?" | T2 = 10 min | 2 × `interval` |
 
 ## Sin respuesta del mozo: recordatorio y cierre
 
 El mozo no responde, así que el antispam es por tiempo:
 
 - **Un aviso abierto por `(mesa, tipo)`.** Mientras esté abierto no se manda otro igual.
-- **Recordatorio:** si la condición sigue después de R minutos, se manda un recordatorio ("Mesa 3: los platos vacíos siguen sin retirar hace 4 min"). Producción R = 3 min, demo 30 s. Máximo 2 recordatorios.
+- **Recordatorio:** si la condición sigue después de R minutos, se manda un recordatorio ("Mesa 3: los platos vacíos siguen sin retirar hace 4 min"). Producción R = 3 min, demo 2 × `interval`. Máximo 2 recordatorios.
 - **Cierre:** cuando la condición deja de cumplirse (retiraron el plato, la mesa dejó de estar por terminar), el aviso pasa a `resuelta` y se edita el mensaje original con "✅ ya resuelto".
 - **Agrupar:** si en la misma evaluación se abren varios avisos de la misma mesa, se manda un solo mensaje con todo.
+
+## Umbrales configurables
+
+Los umbrales cuentan **tiempo de video** (el `ts` de las observaciones), así que `--speed` acelera la demo en el reloj pero no la acorta: con un video corto, lo que hace falta son umbrales cortos.
+
+- **Producción:** T1 = 60 s, T2 = 10 min, R = 3 min.
+- **Demo (`--demo`):** cada umbral vale por defecto `2 × interval`, lo mínimo que el suavizado puede confirmar. Con `--interval 30` son 60 s; con `--interval 15`, 30 s (para videos cortos).
+- **A mano:** `--t1`, `--t2` y `--reminder` (o `ALERT_T1`, `ALERT_T2`, `ALERT_REMINDER` en `.env`) fijan cualquier umbral; el flag le gana a la variable.
+- `config.py` recibe el `interval` del loop y no arranca si algún umbral queda por debajo de `2 × interval`.
 
 ## Umbrales y cadencia
 

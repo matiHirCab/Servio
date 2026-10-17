@@ -15,6 +15,7 @@ FIXTURES = Path(__file__).resolve().parents[2] / "fixtures"
 OBSERVATIONS = FIXTURES / "observations"
 EXPECTED = FIXTURES / "expected"
 START = datetime(2026, 10, 17, 20, 0, 0, tzinfo=UTC)
+INTERVAL = 30  # segundos entre lecturas, como el pipeline (04-vision.md)
 SCENARIOS = ["mesa_completa", "plato_lleno_mucho", "id_cambiado"]
 
 
@@ -85,7 +86,7 @@ def test_observations_match_contract(path: Path):
     observations = load(path.stem)
     assert observations
     for i, obs in enumerate(observations):
-        assert obs.ts == START + timedelta(seconds=10 * i)
+        assert obs.ts == START + timedelta(seconds=INTERVAL * i)
         for item in obs.items:
             assert item.track_id.startswith(f"{obs.table_id}-")
 
