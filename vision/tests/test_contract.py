@@ -79,3 +79,40 @@ def test_unknown_classifier():
 def test_not_implemented_yet():
     with pytest.raises(NotImplementedError):
         get_classifier("yolo")
+
+
+def test_fill_ratio_overrides_state():
+    item = Item(
+        id="p1", state="lleno", fill_ratio=0.02, position="centro", confidence=0.9
+    )
+    assert item.state == "vacio"
+
+
+def test_hidden_plate_without_state():
+    item = Item(id="p1", position="centro", visible=False)
+    assert item.state is None
+
+
+def test_visible_plate_needs_state_and_confidence():
+    with pytest.raises(ValidationError):
+        Item(id="p1", position="centro", confidence=0.9)
+    with pytest.raises(ValidationError):
+        Item(id="p1", state="lleno", position="centro")
+
+
+def test_non_plate_items_are_dropped():
+    plate = {"id": "p1", "state": "lleno", "position": "centro", "confidence": 0.9}
+    glass = {"id": "d1", "kind": "drink", "state": "llena", "position": "centro"}
+    report = TableReport.model_validate({"items": [plate, glass]})
+    assert [i.id for i in report.items] == ["p1"]
+
+
+def test_missing_class_is_clear(monkeypatch):
+    from servio_vision import classifier
+
+    # el módulo existe pero no define la clase registrada
+    monkeypatch.setitem(
+        classifier._REGISTRY, "empty", "servio_vision.schemas:NoSuchClass"
+    )
+    with pytest.raises(NotImplementedError, match="NoSuchClass"):
+        get_classifier("empty")
