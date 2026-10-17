@@ -334,3 +334,30 @@ def test_rejects_going_back_in_time():
 )
 def test_table_status(states, status):
     assert table_status(states) == status
+
+
+# --- people_present ---
+
+
+def test_counts_consecutive_readings_without_people():
+    def reading(seconds: int, people: bool) -> TableObservation:
+        return obs(seconds).model_copy(update={"people_present": people})
+
+    state = empty_table("T1")
+    counts = []
+    for seconds, people in [
+        (0, True),
+        (30, False),
+        (60, False),
+        (90, True),
+        (120, False),
+    ]:
+        state = update_table(state, reading(seconds, people))
+        counts.append((state.people_present, state.people_absent_readings))
+    assert counts == [(True, 0), (False, 1), (False, 2), (True, 0), (False, 1)]
+
+
+def test_repeated_reading_does_not_count_twice():
+    no_people = obs(30).model_copy(update={"people_present": False})
+    once = run(obs(0), no_people)
+    assert update_table(once, no_people).people_absent_readings == 1

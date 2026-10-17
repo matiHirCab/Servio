@@ -64,4 +64,11 @@ Cuando el clasificador cambia el id de un plato (`p1 → p4`), el suavizado mand
 
 ## Tests
 
-El motor es una función pura `(estado_mesa, ahora, config, avisos_abiertos) → { abrir, recordar, cerrar }`. Los tests reproducen `fixtures/observations/*.jsonl` con tiempo simulado y comparan contra `fixtures/expected/*.alerts.json` (pytest).
+El motor es una función pura en `alerts/engine.py`: `evaluate(table, now, config, open_alerts) → EngineResult(opened, reminded, resolved)`, por mesa.
+
+- Usa `table.active_plates()` (sin los provisionales) y los umbrales de `config.py`.
+- Recordatorios a `created_at + R × n`, hasta `max_reminders`.
+- Las lecturas seguidas sin gente las cuenta `TableState.people_absent_readings` (`alerts/state.py`).
+- Agrupar en un solo mensaje los avisos de una mesa queda para `process()` (MAT-5).
+
+Los tests (`tests/test_alert_engine.py`) reproducen `fixtures/observations/*.jsonl` lectura por lectura con los umbrales de producción y comparan exactamente contra `fixtures/expected/*.alerts.json` (pytest).
