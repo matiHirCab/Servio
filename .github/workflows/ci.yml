@@ -1,0 +1,41 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  vision:
+    # Para usar runners de Tenki, cambiar `runs-on` por la etiqueta que indique su documentación.
+    runs-on: ubuntu-latest
+    if: hashFiles('vision/requirements.txt') != ''
+    defaults:
+      run:
+        working-directory: vision
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install -r requirements.txt ruff pytest
+      - run: ruff check .
+      - run: ruff format --check .
+      - run: pytest -q
+        continue-on-error: true  # quitar cuando existan tests
+
+  web:
+    runs-on: ubuntu-latest
+    if: hashFiles('web/package.json') != ''
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - run: npm ci
+      - run: npm run lint
+      - run: npx tsc --noEmit
+      - run: npx vitest run --passWithNoTests

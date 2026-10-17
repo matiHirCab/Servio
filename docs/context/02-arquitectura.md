@@ -8,7 +8,7 @@
        ▼
  ┌──────────────────────────┐        POST /api/observations   ┌───────────────────────────┐
  │ vision/  (Python, local) │ ─────────────────────────────▶  │ web/  (Next.js en Vercel) │
- │ - captura                │        (cada 2–5 s, JSON)       │ - API routes              │
+ │ - captura                │        (cada 15–30 s, JSON)       │ - API routes              │
  │ - recorte por mesa       │                                 │ - motor de reglas         │
  │ - Claude visión (estado) │                                 │ - dashboard               │
  │ - suavizado              │                                 │ - webhook Telegram        │
@@ -43,10 +43,10 @@
 1. `vision/` lee un frame cada ~1 s.
 2. Recorta cada mesa por su zona; si el recorte cambió (y cada 15–30 s), se lo manda a Claude, que devuelve los platos/bebidas con su estado en JSON. Se suaviza.
 3. Después de cada lectura manda una **observación** por mesa: lista de ítems con id de seguimiento, tipo, estado y confianza.
-4. El backend guarda la observación, actualiza el estado de cada ítem (`first_seen`, `state_since`) y corre las reglas.
+4. El backend guarda la observación, **reconcilia ids** (un ítem que cambia de id en la misma posición sigue siendo el mismo; ver [03-contratos.md](03-contratos.md)), actualiza el estado de cada ítem (`first_seen`, `state_since`) y corre las reglas.
 5. Si una regla dispara (y no está en cooldown) crea una **alerta** y la manda por Telegram.
 6. El mozo toca "Voy" / "Listo" → webhook → se actualiza la alerta → sirve para medir tiempo de respuesta.
-7. El dashboard consulta `/api/tables` y `/api/alerts` cada 2 s (o SSE) y muestra el mapa.
+7. El dashboard consulta `/api/tables` y `/api/alerts` cada 2 s (o SSE) y muestra el mapa. El polling es más rápido que las lecturas a propósito: así un cambio de alerta (Voy/Listo) se ve enseguida.
 
 ## Uso de los recursos que tenemos
 

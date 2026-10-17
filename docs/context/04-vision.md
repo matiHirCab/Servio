@@ -19,7 +19,18 @@ Decisión del equipo: **no usamos YOLO ni modelos propios**. Toda la visión la 
 | **Respuestas inconsistentes** | Salida JSON forzada (tool use / structured output), `temperature: 0`, y suavizado en el backend (ver abajo). |
 | **Depende de internet** | Plan B en la demo: video grabado + respuestas cacheadas, o el simulador. |
 
-Cuenta rápida de costo: con 4 mesas, una llamada cada 20 s solo si hubo cambio, son unas pocas miles de llamadas por día de servicio. Calcular el número real con los precios vigentes de Bedrock para el modelo elegido el día 1 y anotarlo acá; para la hackathon los créditos de AWS sobran.
+**Pendiente día 1:** reemplazar la cuenta de abajo por el número real. Cuenta rápida de costo: con 4 mesas, una llamada cada 20 s solo si hubo cambio, son unas pocas miles de llamadas por día de servicio. Calcular el número real con los precios vigentes de Bedrock para el modelo elegido el día 1 y anotarlo acá; para la hackathon los créditos de AWS sobran.
+
+## Cadencias (una sola tabla)
+
+| Qué | Producción | Modo demo |
+|---|---|---|
+| Captura de frame | 1 s | 1 s |
+| Llamada a Claude por mesa (si el recorte cambió) | 15–30 s | 5–10 s |
+| Refresco forzado sin cambios | 60 s | 20 s |
+| Observación al backend | tras cada lectura | tras cada lectura |
+
+Los umbrales de [05-reglas-alertas.md](05-reglas-alertas.md) deben ser ≥ 2 × la cadencia de llamada a Claude.
 
 ## Setup de cámara
 
@@ -77,7 +88,7 @@ Herramienta (JSON schema) `report_table`:
 
 Aunque las llamadas son espaciadas, Claude puede dudar entre dos estados vecinos. Por cada item:
 - Solo aceptar un cambio de estado si aparece en **2 lecturas seguidas**.
-- Los estados solo avanzan (`lleno → comiendo → por_terminar → vacio`); un retroceso se ignora (si es un plato nuevo, va a tener otro id).
+- Los estados avanzan (`lleno → comiendo → por_terminar → vacio`). Un **retroceso** (por ejemplo `vacio → comiendo`) y un **salto de más de un estado** (por ejemplo `lleno → vacio`) se aceptan solo si aparecen en **3 lecturas seguidas** con `confidence ≥ 0.8`. Así un error de Claude no deja un plato atascado en `vacio`, y un plato que el cliente vuelve a llenar o que sigue en consumo se corrige solo.
 - Si un item falta en una lectura, mantenerlo; si falta en 2 seguidas, se considera retirado.
 
 ## Estructura sugerida
@@ -105,7 +116,11 @@ vision/
 
 ## Evaluar el prompt (importante)
 
-Sacar ~40 frames de los videos, etiquetarlos a mano (estado real de cada plato) y correr `tools/eval.py` cada vez que se cambia el prompt. Es la única forma de saber si un cambio mejoró. Probar también si mandar el frame a mayor resolución o con un modelo más grande (Sonnet) mejora lo suficiente como para pagar la diferencia.
+Sacar ~40 frames de los videos, etiquetarlos a mano (estado real de cada plato) y correr `tools/eval.py` cada vez que se cambia el prompt. Es la única forma de saber si un cambio mejoró. `eval.py` reporta dos métricas:
+
+- **% de acierto de estado** por plato.
+- **Estabilidad de ids**: sobre secuencias de frames consecutivos del mismo video, % de objetos que conservan su id entre lecturas. Si es baja, la reconciliación del backend (ver [03-contratos.md](03-contratos.md)) trabaja de más y los tiempos de las alertas se vuelven poco confiables.
+ Probar también si mandar el frame a mayor resolución o con un modelo más grande (Sonnet) mejora lo suficiente como para pagar la diferencia.
 
 ## Futuro (roadmap, no MVP)
 

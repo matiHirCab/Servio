@@ -15,7 +15,7 @@ La 3.ª suscripción Pro queda de **reserva**: cuando alguien llega al límite d
 ## Hora 0–1 · Arranque (los tres juntos)
 
 1. Clonar el repo, leer `AGENTS.md` y `01-producto.md`, acordar el alcance. No discutir más de 20 min.
-2. Revisar y congelar [03-contratos.md](03-contratos.md). Desde acá cada uno trabaja con mocks.
+2. Revisar y congelar [03-contratos.md](03-contratos.md). Antes de congelar, confirmar los puntos que más pegan después: reconciliación de ids, `people_present` como campo de mesa, `table_waiters`, `schema_version`, cadencia 15–30 s y la regla única de `tableStatus()` en [05-reglas-alertas.md](05-reglas-alertas.md). Desde acá cada uno trabaja con mocks.
 3. Crear en GitHub los issues por persona (pueden salir de este archivo) y un Project board.
 4. **P2**: crear el proyecto en Vercel conectado al repo (`web/`), agregar Postgres, crear el bot de Telegram en @BotFather, crear el grupo "Mozos".
 5. **P1**: activar Bedrock en AWS (pedir acceso al modelo Claude Haiku en la región), pedir aumento de cuota de requests si hace falta, crear un bucket S3 para videos de prueba.
@@ -28,14 +28,14 @@ La 3.ª suscripción Pro queda de **reserva**: cuando alguien llega al límite d
 1. `vision/` con `capture.py` leyendo video grabado y webcam/celular.
 2. `draw_zones.py` + `zones.json` + recorte por mesa.
 3. Recorte → Claude en Bedrock con tool use → JSON validado con Pydantic.
-4. Etiquetar ~40 frames a mano y armar `tools/eval.py` para medir el % de acierto del prompt.
+4. Etiquetar ~40 frames a mano y armar `tools/eval.py` para medir el % de acierto del prompt **y la estabilidad de ids** entre lecturas consecutivas. Compartir el resultado con P2 antes de la hora 6: define cuánto trabajo hace la reconciliación del backend.
 5. `client.py` con `--dry-run` imprimiendo el JSON del contrato.
 
 **P2 — Backend**
 1. Scaffold Next.js en `web/`, schema de DB, migración.
 2. `POST /api/observations` guardando ítems.
 3. **Simulador** (`scripts/simulate.ts`) → se lo pasa a P3 apenas esté.
-4. Motor de reglas como funciones puras + tests con Vitest.
+4. Motor de reglas como funciones puras (incluida `tableStatus()` y la reconciliación de ids) + tests con Vitest.
 5. `TelegramNotifier` mandando un mensaje de prueba al grupo.
 
 **P3 — Dashboard**
