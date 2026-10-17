@@ -6,7 +6,8 @@ estima cuánta comida queda en cada uno.
    `IdCounter` lo recuerda (`MAX_MISSING` lecturas): si Claude lo ve, sigue con su id
    y su lectura.
 3. Cada plato se recorta con 10 % de margen.
-4. Una llamada a Claude por mesa (`claude_plates.estimate_plates`) con la mesa y los platos.
+4. Una llamada a Claude por mesa (`claude_plates.estimate_plates`) con la mesa y los platos;
+   cada plato que ya tiene referencia (su recorte recién servido) la lleva al lado.
 5. Si Claude falla, usa el estado de la clase de YOLO con confianza más baja; si el
    detector no da estado (YOLOE sin entrenar), la lectura se descarta (`None`).
 
@@ -29,7 +30,7 @@ from servio_vision.classifiers.yolo import (
     items_from_labels,
 )
 from servio_vision.detector import PlateDetector
-from servio_vision.schemas import EMPTY_MAX, Item, TableReport
+from servio_vision.schemas import EMPTY_MAX, FULL_MIN, Item, TableReport
 from servio_vision.tracking import IdCounter, position_label
 
 logger = logging.getLogger(__name__)
@@ -46,6 +47,12 @@ FALLBACK_CONFIDENCE = 0.5  # la confianza de YOLO se multiplica por esto si Clau
 # un plato vacío: por eso una lectura de un plato perdido que dice vacío o que baja más
 # que esto de golpe no se toma como vista.
 LOST_MAX_DROP = 0.3
+# Referencia: el recorte de un plato recién servido, que va a Claude junto al actual para
+# que mida contra lo que se sirvió. Se toma solo en las primeras lecturas visibles del plato
+# y si Claude lo ve lleno: un id nuevo a mitad de comida (p. ej., tras perder el plato) no
+# adopta como «lleno» un plato medio comido. Si Claude dice que la referencia es de otra
+# comida (`same_plate=False`, ids cambiados), se descarta.
+REFERENCE_READINGS = 3
 
 
 def _jpeg(img: Image.Image, side: int) -> bytes:
@@ -85,6 +92,7 @@ class Prepared:
     lost: set[str]  # ids de los platos que YOLO no vio en esta lectura
     table_jpeg: bytes
     plate_jpegs: list[bytes]
+    references: list[bytes | None]  # por plato, su recorte recién servido
 
     @property
     def seen_items(self) -> list[Item]:
@@ -111,6 +119,8 @@ class HybridClassifier:
         self.people_present: dict[str, bool] = {}  # último que dijo Claude, por mesa
         self.hidden: dict[tuple[str, str], int] = {}  # lecturas seguidas sin verlo
         self.lost: dict[str, set[str]] = {}  # por mesa, perdidos en la última lectura
+        self.references: dict[tuple[str, str], bytes] = {}  # ver REFERENCE_READINGS
+        self.readings: dict[tuple[str, str], int] = {}  # lecturas visibles por plato
         self.claude_kwargs = {
             "provider": provider,
             "model": model,
@@ -144,6 +154,7 @@ class HybridClassifier:
             lost=self.lost[table_id],
             table_jpeg=_jpeg(img, TABLE_SIDE) if everything else b"",
             plate_jpegs=[_jpeg(_crop(img, p.bbox), CROP_SIDE) for p in everything],
+            references=[self.references.get((table_id, p.id)) for p in everything],
         )
 
     def ask(self, prepared: Prepared) -> claude_plates.PlatesReport | None:
@@ -154,6 +165,7 @@ class HybridClassifier:
             prepared.table_jpeg,
             prepared.plate_jpegs,
             prepared.table_id,
+            references=prepared.references,
             **self.claude_kwargs,
         )
 
@@ -181,12 +193,14 @@ class HybridClassifier:
         self.people_present[table_id] = report.people_present
         last = {i.id: i for i in previous_items if i.state is not None}
         items = []
-        for p, est in zip(prepared.plates, report.plates):
+        for p, est, crop in zip(prepared.plates, report.plates, prepared.plate_jpegs):
             key = (table_id, p.id)
             visible = est.visible
             if visible and p.id in prepared.lost:
                 visible = not _looks_taken(est.fill_ratio, last.get(p.id))
             self.hidden[key] = 0 if visible else self.hidden.get(key, 0) + 1
+            if visible and p.id not in prepared.lost:
+                self._update_reference(key, est, crop)
             if visible:
                 reading = {"fill_ratio": est.fill_ratio, "confidence": est.confidence}
             elif p.id in last and self.hidden[key] < HIDDEN_READINGS:
@@ -213,3 +227,16 @@ class HybridClassifier:
                 )
             )
         return TableReport(items=items, people_present=report.people_present)
+
+    def _update_reference(self, key, est: claude_plates.PlateEstimate, crop: bytes):
+        if not est.same_plate and self.references.pop(key, None) is not None:
+            logger.info("Mesa %s %s: la referencia es de otra comida, se descarta", *key)
+            # no toma otra: lo de ahora puede ser un plato medio comido que se ve lleno
+            self.readings[key] = REFERENCE_READINGS
+        n = self.readings[key] = self.readings.get(key, 0) + 1
+        if (
+            key not in self.references
+            and n <= REFERENCE_READINGS
+            and est.fill_ratio >= FULL_MIN
+        ):
+            self.references[key] = crop

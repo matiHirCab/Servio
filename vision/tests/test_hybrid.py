@@ -37,10 +37,11 @@ PLATES = [
 @pytest.fixture
 def claude(monkeypatch):
     """Claude falso: devuelve `fake.answer` (None = Claude falló) y guarda los recortes."""
-    fake = SimpleNamespace(answer=None, calls=[])
+    fake = SimpleNamespace(answer=None, calls=[], references=[])
 
     def estimate(table, plates, table_id, **kwargs):
         fake.calls.append(plates)
+        fake.references.append(kwargs.get("references"))
         return fake.answer
 
     monkeypatch.setattr(claude_plates, "estimate_plates", estimate)
@@ -309,3 +310,62 @@ def test_hybrid_plates_seen_last_win_over_lost_ones(claude):
     found = next(i for i in third.items if i.bbox[0] == pytest.approx(130 / 400))
     assert found.id == id_a
     assert id_b != id_a
+
+
+def _one(fill, same_plate=True, visible=True):
+    return PlatesReport(
+        plates=[
+            PlateEstimate(
+                index=1,
+                fill_ratio=fill,
+                confidence=0.8,
+                visible=visible,
+                same_plate=same_plate,
+            )
+        ]
+    )
+
+
+def test_hybrid_sends_the_served_plate_as_reference(claude):
+    """La primera lectura llena queda de referencia y viaja en las siguientes."""
+    clf = HybridClassifier(detector=FakeDetector([PLATES[0]]))
+    claude.answer = _one(0.95)
+    first = clf.classify(_jpeg(), "T1", [])
+    assert claude.references[0] == [None]
+    claude.answer = _one(0.33)
+    clf.classify(_jpeg(), "T1", first.items)
+    assert claude.references[1] == claude.calls[0]
+
+
+def test_hybrid_no_reference_from_a_half_eaten_or_hidden_plate(claude):
+    clf = HybridClassifier(detector=FakeDetector([PLATES[0]]))
+    previous = []
+    for answer in (_one(0.95, visible=False), _one(0.5)):
+        claude.answer = answer
+        previous = clf.classify(_jpeg(), "T1", previous).items
+    clf.classify(_jpeg(), "T1", previous)
+    assert claude.references[-1] == [None]
+
+
+def test_hybrid_no_reference_after_the_first_readings(claude):
+    """Un plato que recién se ve lleno tarde (¿id cambiado a mitad de comida?) no
+    toma referencia."""
+    clf = HybridClassifier(detector=FakeDetector([PLATES[0]]))
+    previous = []
+    for fill in [0.5] * hybrid.REFERENCE_READINGS + [0.95]:
+        claude.answer = _one(fill)
+        previous = clf.classify(_jpeg(), "T1", previous).items
+    clf.classify(_jpeg(), "T1", previous)
+    assert claude.references[-1] == [None]
+
+
+def test_hybrid_drops_a_reference_of_other_food(claude):
+    """Si Claude dice que la referencia es de otra comida, no se manda más."""
+    clf = HybridClassifier(detector=FakeDetector([PLATES[0]]))
+    claude.answer = _one(0.95)
+    previous = clf.classify(_jpeg(), "T1", []).items
+    claude.answer = _one(0.9, same_plate=False)
+    previous = clf.classify(_jpeg(), "T1", previous).items
+    clf.classify(_jpeg(), "T1", previous)
+    assert claude.references[1] is not None and claude.references[1][0] is not None
+    assert claude.references[2] == [None]

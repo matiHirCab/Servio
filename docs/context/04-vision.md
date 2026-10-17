@@ -14,7 +14,8 @@ Por cada llamada a `classify(recorte_mesa, table_id, items_anteriores)`:
 
 1. **YOLO** detecta los platos en el recorte de la mesa → cajas + clase + confianza.
 2. **Ids:** empareja cada caja con los `items_anteriores` por distancia entre centros (`servio_vision/tracking.py`). Si no hay pareja cerca, es un plato nuevo (`p{n}` siguiente).
-3. **Claude:** una sola llamada por mesa con el recorte de la mesa (para `people_present`) y los recortes de cada plato numerados (con 10 % de margen). Devuelve, por plato, `fill_ratio`, `confidence` y `visible`.
+3. **Claude:** una sola llamada por mesa con el recorte de la mesa (para `people_present`) y los recortes de cada plato numerados (con 10 % de margen). Devuelve, por plato, `fill_ratio`, `confidence`, `visible` y `same_plate`.
+   - **Referencia:** cada plato manda también su recorte *recién servido*, para que Claude mida contra lo que se sirvió (sin ella, 1 galletita entera de 3 parecía «intacto»). Se toma en las primeras 3 lecturas visibles del plato y solo si Claude lo ve lleno (≥ 0,75): un id nuevo a mitad de comida no adopta un plato medio comido como «lleno». Si Claude dice `same_plate: false` (la referencia es de otra comida, p. ej. ids cambiados), se descarta y ese id no toma otra.
 4. Arma el `TableReport` con `id`, `bbox`, `position` (derivada de la caja), `fill_ratio` y el estado.
 5. Si Claude falla o tarda más de 10 s: estado según la clase de YOLO, con confianza más baja.
 
@@ -57,7 +58,7 @@ Herramienta `report_plates`:
 | **Costo** | Una llamada por mesa cada 30 s; recortes chicos; Haiku. |
 | **Límites de uso de la suscripción** (`claude -p`) | Una llamada por mesa cada 30 s; usar la cuenta Max para la demo; API de Anthropic como respaldo. |
 | **Sin internet** | `--classifier yolo` (solo YOLO) o reproducir un log con `tools/replay.py`. |
-| **Manos que tapan** | Claude marca `visible: false` solo si no ve la comida; el plato conserva su última lectura con `visible: false` (`hybrid`) y no cuenta en el suavizado. |
+| **Manos que tapan** | Una mano, brazo o cubierto agarrado encima de la comida inflaba el `fill_ratio`. Claude marca `visible: false` en ese caso (una mano en el borde no cuenta); el plato conserva su última lectura con `visible: false` (`hybrid`) y no cuenta en el suavizado ni en la votación. |
 
 ## Cadencias
 

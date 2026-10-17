@@ -53,6 +53,18 @@ def test_three_plates(backend):
     assert calls[0]["timeout_s"] == 15.0
 
 
+def test_reference_goes_before_its_plate(backend):
+    calls, answers = backend
+    answers.append(_answer(2))
+    estimate_plates(b"mesa", [b"p1", b"p2"], "T1", references=[None, b"ref2"])
+    images = [
+        claude_plates.base64.b64decode(b["source"]["data"])
+        for b in calls[0]["content"]
+        if b["type"] == "image"
+    ]
+    assert images == [b"mesa", b"p1", b"ref2", b"p2"]
+
+
 def test_retries_once_then_succeeds(backend):
     calls, answers = backend
     answers += [ClaudeCallError("timeout"), _answer(2)]
