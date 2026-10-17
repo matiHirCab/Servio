@@ -14,7 +14,7 @@ python main.py --source data/videos/demo.mp4 --classifier fake --no-telegram
 - `--classifier fake|yolo|hybrid|claude`: `fake` no usa modelo; `hybrid` (YOLO + Claude) es el de la demo; `yolo` es el plan B sin internet.
 - `--demo` (o `DEMO_MODE=true`): umbrales de demo (la cadencia es siempre `--interval`, 30 s). El flag le gana a la variable.
 - `--no-telegram`: imprime los avisos en vez de mandarlos.
-- Cada corrida deja `out/eventos.jsonl`; se puede reproducir (plan B de la demo) con `python tools/replay.py --file out/eventos.jsonl --speed 10` (`--demo` si la corrida usó umbrales de demo, `--no-telegram` para imprimir). También acepta un fixture: `--file ../fixtures/observations/mesa_completa.jsonl`. El replay escribe su propio log en `out/replay.jsonl`.
+- Cada corrida deja `out/eventos.jsonl`; se puede reproducir (plan B de la demo) con `python tools/replay.py --file out/eventos.jsonl --speed 10` (`--demo` si la corrida usó umbrales de demo, `--no-telegram` para imprimir). También acepta un fixture: `--file ../fixtures/observations/mesa_completa.jsonl`. Como el log se agrega, el replay lo corta en corridas y reproduce la última (`--run N` para otra, `--all` para todas). Escribe su propio log en `out/replay.jsonl` (se pisa en cada replay).
 
 ## Claude
 

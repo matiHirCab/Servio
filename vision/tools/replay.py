@@ -5,12 +5,18 @@ respetan los tiempos de sus `ts`, divididos por `--speed`. Acepta las dos formas
 03-contratos.md: `fixtures/observations/*.jsonl` (una observación por línea) y
 `out/eventos.jsonl` (se toman las líneas `"event": "observation"`, el resto se saltea).
 
-El log de la reproducción va a `out/replay.jsonl` (no a `eventos.jsonl`, así reproducir
-el log de una corrida no le agrega líneas al mismo archivo).
+`eventos.jsonl` se agrega corrida tras corrida y cada una arranca con la hora real, así
+que el archivo se corta en corridas: empieza una nueva cuando el `ts` vuelve atrás o salta
+más de `RUN_GAP_READINGS` lecturas. Por defecto se reproduce la última; `--run N` elige
+otra y `--all` las pasa todas, cada una con estado nuevo y sin esperar entre ellas.
+
+El log de la reproducción va a `out/replay.jsonl` y se pisa en cada replay (no va a
+`eventos.jsonl`, así reproducir el log de una corrida no le agrega líneas al mismo archivo).
 
 Uso (desde vision/):
   python tools/replay.py --file ../fixtures/observations/mesa_completa.jsonl --speed 10
   python tools/replay.py --file out/eventos.jsonl --demo --no-telegram
+  python tools/replay.py --file out/eventos.jsonl --run 1
 """
 
 import argparse
@@ -27,10 +33,14 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from servio_vision import alerts
 from servio_vision.alerts.config import DEFAULT_INTERVAL, load_config
 from servio_vision.alerts.models import TableObservation
+from servio_vision.alerts.processor import AlertProcessor
 
 logger = logging.getLogger(__name__)
 
 DEFAULT_LOG = alerts.VISION_DIR / "out" / "replay.jsonl"
+
+# Un salto de más de estas lecturas sin observaciones es otra corrida.
+RUN_GAP_READINGS = 10
 
 
 def read_observations(path: Path) -> list[TableObservation]:
@@ -41,12 +51,33 @@ def read_observations(path: Path) -> list[TableObservation]:
             continue
         try:
             data = json.loads(line)
+            if not isinstance(data, dict):
+                raise TypeError("no es un objeto JSON")
             event = data.pop("event", "observation")
             if event == "observation":
                 observations.append(TableObservation.model_validate(data))
-        except ValueError as error:
+        except (ValueError, TypeError) as error:
             raise ValueError(f"{path}:{number}: línea inválida: {error}") from None
     return observations
+
+
+def split_runs(
+    observations: Sequence[TableObservation], max_gap: float
+) -> list[list[TableObservation]]:
+    """Corta en corridas: el `ts` vuelve atrás o salta más de `max_gap` segundos."""
+    runs: list[list[TableObservation]] = []
+    for obs in observations:
+        if runs:
+            gap = (obs.ts - runs[-1][-1].ts).total_seconds()
+            if 0 <= gap <= max_gap:
+                runs[-1].append(obs)
+                continue
+        runs.append([obs])
+    return runs
+
+
+def span_seconds(run: Sequence[TableObservation]) -> float:
+    return (run[-1].ts - run[0].ts).total_seconds()
 
 
 def replay(
@@ -57,8 +88,8 @@ def replay(
 ) -> int:
     """Pasa cada observación por `process` esperando entre `ts`; devuelve los avisos.
 
-    Si el `ts` va hacia atrás (un log con varias corridas) no se espera, y si `process`
-    rechaza la observación se avisa y se sigue, como en `main.py`.
+    Es para una sola corrida (ver `split_runs`). Si `process` rechaza una observación se
+    avisa y se sigue, como en `main.py`.
     """
     alert_events = 0
     previous = None
@@ -102,7 +133,16 @@ def main() -> int:
         default=DEFAULT_INTERVAL,
         help="segundos entre lecturas de la corrida (para los umbrales)",
     )
-    parser.add_argument("--log", type=Path, default=DEFAULT_LOG, help="log de eventos")
+    which = parser.add_mutually_exclusive_group()
+    which.add_argument(
+        "--run",
+        type=int,
+        help="corrida a reproducir (1 = la primera; por defecto la última)",
+    )
+    which.add_argument("--all", action="store_true", help="todas las corridas")
+    parser.add_argument(
+        "--log", type=Path, default=DEFAULT_LOG, help="log de eventos (se pisa)"
+    )
     args = parser.parse_args()
     # La consola de Windows (cp1252) no imprime los emojis de los avisos.
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
@@ -118,17 +158,41 @@ def main() -> int:
         print(f"{args.file}: no hay observaciones", file=sys.stderr)
         return 1
 
-    span = (observations[-1].ts - observations[0].ts).total_seconds()
+    runs = split_runs(observations, RUN_GAP_READINGS * args.interval)
+    if args.all:
+        selected = runs
+    elif args.run is None:
+        selected = runs[-1:]
+    elif 1 <= args.run <= len(runs):
+        selected = [runs[args.run - 1]]
+    else:
+        print(
+            f"--run {args.run}: el archivo tiene {len(runs)} corridas", file=sys.stderr
+        )
+        return 1
+    span = sum(span_seconds(run) for run in selected)
     print(
-        f"{len(observations)} observaciones, {span:g} s de video "
+        f"{len(runs)} corrida(s) en el archivo, reproduzco {len(selected)}: "
+        f"{sum(map(len, selected))} observaciones, {span:g} s de video "
         f"→ ~{span / args.speed:g} s a {args.speed:g}×"
     )
-    alerts.configure(config, telegram=not args.no_telegram, log_path=args.log)
+
+    args.log.unlink(missing_ok=True)
+    count = 0
+    processor: AlertProcessor | None = None
     try:
-        count = replay(observations, alerts.process, args.speed)
+        for run in selected:
+            # Estado nuevo por corrida: mesas y avisos de una no pasan a la otra.
+            processor = alerts.configure(
+                config, telegram=not args.no_telegram, log_path=args.log
+            )
+            count += replay(run, processor.process, args.speed)
     except KeyboardInterrupt:
         print("cortado", file=sys.stderr)
         return 130
+    finally:
+        if processor is not None:
+            processor.close()
     print(f"listo: {count} eventos de aviso, log en {args.log}")
     return 0
 

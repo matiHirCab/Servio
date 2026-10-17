@@ -123,4 +123,4 @@ Una línea JSON por evento, en el orden en que pasan. Lo escribe `alerts.process
 {"event": "alert_opened", "ts": "2026-10-17T20:07:00Z", "id": "T1-plato_vacio-1792267620", "table_id": "T1", "type": "plato_vacio", "message": "🧹 Mesa 1: hay platos vacíos para retirar.", "created_at": "2026-10-17T20:07:00Z", "status": "abierta", "reminders_sent": 0, "telegram_message_id": 2, "text": "🧹 Mesa 1: hay platos vacíos para retirar."}
 ```
 
-Sirve para revisar una corrida, para reproducirla con `vision/tools/replay.py` (toma solo las líneas `observation`; su propio log va a `vision/out/replay.jsonl`) y para el resumen de la demo.
+Sirve para revisar una corrida, para reproducirla con `vision/tools/replay.py` (toma solo las líneas `observation`, corta el archivo en corridas y por defecto reproduce la última; su propio log va a `vision/out/replay.jsonl`) y para el resumen de la demo.

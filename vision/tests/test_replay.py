@@ -12,7 +12,7 @@ from tests.test_alert_engine import FIXTURES, PROD, obs
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
 
-from replay import read_observations, replay
+from replay import read_observations, replay, split_runs
 
 VACIO = ("T1-p1", "vacio", "centro")
 
@@ -72,21 +72,36 @@ def test_event_log_yields_only_observations(tmp_path):
     assert read_observations(log) == originals
 
 
-def test_log_with_two_runs_does_not_wait_backwards(tmp_path, caplog):
-    run = [
+def test_split_runs_cuts_on_backwards_and_long_gaps():
+    first = [obs(s, VACIO) for s in (0, 30, 60)]
+    backwards = [obs(s, VACIO) for s in (10, 40)]
+    later = [obs(s, VACIO) for s in (2 * 3600, 2 * 3600 + 30)]
+    runs = split_runs(first + backwards + later, max_gap=300)
+    assert runs == [first, backwards, later]
+
+
+def test_two_runs_with_hours_between_do_not_wait(tmp_path):
+    lines = [
         {"event": "observation", **o.model_dump(mode="json")}
-        for o in (obs(0, VACIO), obs(30, VACIO))
+        for o in (obs(0, VACIO), obs(30, VACIO), obs(7200, VACIO), obs(7230, VACIO))
     ]
-    path = write_jsonl(tmp_path / "eventos.jsonl", run + run)
-    alerts.configure(PROD, telegram=False, log_path=tmp_path / "replay.jsonl")
+    path = write_jsonl(tmp_path / "eventos.jsonl", lines)
     waits: list[float] = []
-    replay(read_observations(path), alerts.process, speed=10, sleep=waits.append)
-    assert waits == [3, 3]  # sin espera negativa entre corridas
-    assert "observación rechazada" in caplog.text
+    for run in split_runs(read_observations(path), max_gap=300):
+        p = alerts.configure(PROD, telegram=False, log_path=tmp_path / "replay.jsonl")
+        replay(run, p.process, speed=10, sleep=waits.append)
+    assert waits == [3, 3]  # nada por las 2 h entre corridas
 
 
 def test_invalid_line_reports_line_number(tmp_path):
     path = tmp_path / "malo.jsonl"
     path.write_text('\n{"event": "observation", "ts": 1}\n', "utf-8")
     with pytest.raises(ValueError, match="malo.jsonl:2"):
+        read_observations(path)
+
+
+def test_non_object_line_reports_line_number(tmp_path):
+    path = tmp_path / "malo.jsonl"
+    path.write_text("[]\n", "utf-8")
+    with pytest.raises(ValueError, match="malo.jsonl:1"):
         read_observations(path)
