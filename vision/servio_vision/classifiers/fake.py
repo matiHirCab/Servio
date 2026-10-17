@@ -42,6 +42,13 @@ FILL_RATIO: dict[PlateState, float] = {
     "vacio": 0.02,
 }
 POSITIONS = ["izquierda", "derecha", "arriba", "abajo"]
+# caja [x, y, w, h] normalizada dentro del recorte de la mesa, por posición
+BBOXES = {
+    "izquierda": (0.08, 0.3, 0.38, 0.4),
+    "derecha": (0.54, 0.3, 0.38, 0.4),
+    "arriba": (0.31, 0.05, 0.38, 0.3),
+    "abajo": (0.31, 0.65, 0.38, 0.3),
+}
 TABLE_OFFSET = 3  # lecturas de desfase entre una mesa y la siguiente
 
 
@@ -90,6 +97,7 @@ class FakeClassifier:
                 state=state,
                 fill_ratio=FILL_RATIO[state],
                 position=POSITIONS[n % len(POSITIONS)],
+                bbox=BBOXES[POSITIONS[n % len(POSITIONS)]],
                 confidence=0.9,
             )
             for n in range(self.plates)

@@ -67,14 +67,26 @@ def scaled_polygon(zone: TableZone, zones: Zones, frame: np.ndarray) -> np.ndarr
     return np.array([(round(x * sx), round(y * sy)) for x, y in zone.polygon], np.int32)
 
 
-def crop_table(frame: np.ndarray, zone: TableZone, zones: Zones) -> np.ndarray:
-    """Rectángulo que encierra la mesa, recortado al borde del frame."""
+def table_rect(
+    frame: np.ndarray, zone: TableZone, zones: Zones
+) -> tuple[int, int, int, int]:
+    """(x0, y0, x1, y1) del rectángulo de la mesa, recortado al borde del frame.
+
+    Es el área del recorte que recibe el clasificador: las `bbox` de los platos
+    están normalizadas dentro de este rectángulo.
+    """
     height, width = frame.shape[:2]
     x, y, w, h = cv2.boundingRect(scaled_polygon(zone, zones, frame))
     x0, y0 = max(x, 0), max(y, 0)
     x1, y1 = min(x + w, width), min(y + h, height)
     if x1 <= x0 or y1 <= y0:
         raise ValueError(f"La mesa {zone.table_id} queda fuera del frame")
+    return x0, y0, x1, y1
+
+
+def crop_table(frame: np.ndarray, zone: TableZone, zones: Zones) -> np.ndarray:
+    """Rectángulo que encierra la mesa, recortado al borde del frame."""
+    x0, y0, x1, y1 = table_rect(frame, zone, zones)
     return frame[y0:y1, x0:x1]
 
 

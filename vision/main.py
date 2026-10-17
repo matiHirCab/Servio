@@ -142,8 +142,10 @@ def demo_enabled(flag: bool) -> bool:
     return flag or os.getenv("DEMO_MODE", "").strip().lower() in {"1", "true", "yes"}
 
 
-def parse_args(argv: list[str] | None) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Servio: loop principal.")
+def build_parser(
+    description: str = "Servio: loop principal.",
+) -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description=description)
     parser.add_argument("--source", required=True, help="video, carpeta, 0 o URL")
     parser.add_argument("--classifier", default="fake", choices=available_classifiers())
     parser.add_argument("--zones", type=Path, default=DEFAULT_ZONES)
@@ -163,24 +165,26 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
     parser.add_argument("--limit", type=int, help="cortar tras N lecturas")
     parser.add_argument("--fake-mode", default="script", choices=["script", "replay"])
     parser.add_argument("--fixture", type=Path, help="jsonl para --fake-mode replay")
-    return parser.parse_args(argv)
+    return parser
 
 
-def main(argv: list[str] | None = None) -> int:
-    args = parse_args(argv)
+def setup_logging() -> None:
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s %(levelname)s %(message)s",
         stream=sys.stderr,
     )
 
+
+def build_pipeline(args: argparse.Namespace) -> Pipeline | None:
+    """Zonas, umbrales y clasificador según los flags. `None` si algo falta (ya logueado)."""
     if not args.zones.exists():
         logger.error(
             "No existe %s. Generalo con la detección de mesas o con "
             "tools/draw_zones.py --source <video>.",
             args.zones,
         )
-        return 2
+        return None
     zones = load_zones(args.zones)
     try:
         config = load_config(round(args.interval), demo_enabled(args.demo))
@@ -188,7 +192,7 @@ def main(argv: list[str] | None = None) -> int:
         logger.error(
             "Umbrales de aviso inválidos con --interval %s: %s", args.interval, e
         )
-        return 2
+        return None
     logger.info(
         "Mesas: %s · cada %ss · umbrales T1=%ss T2=%ss R=%ss",
         ", ".join(t.table_id for t in zones.tables),
@@ -199,9 +203,15 @@ def main(argv: list[str] | None = None) -> int:
     )
 
     classifier = get_classifier(args.classifier, **classifier_kwargs(args))
-    pipeline = Pipeline(
-        classifier, zones, observation_handler(config, args.no_telegram)
-    )
+    return Pipeline(classifier, zones, observation_handler(config, args.no_telegram))
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = build_parser().parse_args(argv)
+    setup_logging()
+    pipeline = build_pipeline(args)
+    if pipeline is None:
+        return 2
     readings = 0
     try:
         for frame, ts in open_source(args.source, args.interval, args.speed):

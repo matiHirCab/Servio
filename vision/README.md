@@ -16,6 +16,21 @@ python main.py --source data/videos/demo.mp4 --classifier fake --no-telegram
 - `--no-telegram`: imprime los avisos en vez de mandarlos.
 - Cada corrida deja `out/eventos.jsonl`; se puede reproducir (plan B de la demo) con `python tools/replay.py --file out/eventos.jsonl --speed 10` (`--no-telegram` para imprimir). Como el log se agrega, el replay lo corta en corridas (`run_started`) y reproduce la última con los umbrales con que se hizo (`--run N` para otra, `--all` para todas). También acepta un fixture: `--file ../fixtures/observations/mesa_completa.jsonl`, con umbrales de producción (`--demo` para los de demo). Escribe su propio log en `out/replay.jsonl` (se pisa en cada replay).
 
+## Vista de la demo (pantalla dividida)
+
+- **Izquierda:** `tools/vista_demo.py`, con los mismos flags que `main.py`. Muestra el video con cada mesa coloreada por estado y la caja de cada plato.
+- **Derecha:** el celular con el grupo de Telegram, espejado con [`scrcpy`](https://github.com/Genymobile/scrcpy) (Android).
+
+```bash
+python tools/vista_demo.py --source data/videos/demo.mp4 --classifier hybrid --demo --interval 15
+python tools/vista_demo.py --source data/videos/demo.mp4 --classifier fake --record out/vista.mp4   # grabar (plan B)
+```
+
+- **Teclas:** `q` sale, espacio pausa. Con `--no-window --record` graba sin abrir la ventana.
+- **`--speed`:** a diferencia de `main.py`, sin `--speed` la vista reproduce en tiempo real (es para mirar). Después de una pausa o de esperar al modelo, el video retoma su ritmo sin adelantarse.
+- **Grabar en vivo:** con la cámara, la grabación puede quedar más rápida que la realidad si el loop va más lento que los fps de la cámara. Para el plan B, grabar sobre el video.
+- **Colores de mesa:** gris libre · azul servida · verde comiendo · amarillo por terminar · rojo terminada. Los platos usan los mismos colores según su estado.
+
 ## Claude
 
 No hay créditos de AWS, así que Claude va por el Claude Code logueado (`claude -p`, suscripción del equipo). Probar con un recorte de mesa y los de sus platos:
