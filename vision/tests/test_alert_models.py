@@ -2,7 +2,8 @@
 
 import itertools
 import json
-from datetime import UTC, datetime, timedelta
+from collections import defaultdict
+from datetime import UTC, timedelta
 from pathlib import Path
 from typing import Literal
 
@@ -14,7 +15,6 @@ from servio_vision.alerts.models import Alert, AlertType, TableObservation
 FIXTURES = Path(__file__).resolve().parents[2] / "fixtures"
 OBSERVATIONS = FIXTURES / "observations"
 EXPECTED = FIXTURES / "expected"
-START = datetime(2026, 10, 17, 20, 0, 0, tzinfo=UTC)
 INTERVAL = 30  # segundos entre lecturas, como el pipeline (04-vision.md)
 SCENARIOS = ["mesa_completa", "plato_lleno_mucho", "id_cambiado"]
 
@@ -83,12 +83,17 @@ def test_scenario_has_observations_and_expected(name: str):
     "path", sorted(OBSERVATIONS.glob("*.jsonl")), ids=lambda p: p.name
 )
 def test_observations_match_contract(path: Path):
+    # Por mesa: una lectura cada INTERVAL. Puede haber varias mesas en el mismo ts.
     observations = load(path.stem)
     assert observations
-    for i, obs in enumerate(observations):
-        assert obs.ts == START + timedelta(seconds=INTERVAL * i)
+    by_table = defaultdict(list)
+    for obs in observations:
+        by_table[obs.table_id].append(obs.ts)
         for item in obs.items:
             assert item.track_id.startswith(f"{obs.table_id}-")
+    for table_id, stamps in by_table.items():
+        steps = [b - a for a, b in itertools.pairwise(stamps)]
+        assert all(s == timedelta(seconds=INTERVAL) for s in steps), table_id
 
 
 @pytest.mark.parametrize(
@@ -100,7 +105,8 @@ def test_expected_matches_its_observations(path: Path):
     ]
     assert [e.at_seconds for e in events] == sorted(e.at_seconds for e in events)
     observations = load(path.name.removesuffix(".alerts.json"))
-    ticks = {int((obs.ts - START).total_seconds()) for obs in observations}
+    start = observations[0].ts  # at_seconds cuenta desde la primera línea
+    ticks = {int((obs.ts - start).total_seconds()) for obs in observations}
     tables = {obs.table_id for obs in observations}
     for e in events:
         assert e.at_seconds in ticks, (
@@ -163,6 +169,22 @@ def test_json_round_trip():
     assert TableObservation.model_validate_json(obs.model_dump_json()) == obs
 
 
+def test_ts_is_stored_in_utc():
+    obs = TableObservation.model_validate(observation(ts="2026-10-17T17:00:00-03:00"))
+    assert obs.ts.tzinfo == UTC
+    assert obs.ts.hour == 20
+
+
+def test_observation_is_read_only():
+    obs = TableObservation.model_validate(observation())
+    with pytest.raises(ValidationError):
+        obs.table_id = "T9"
+    with pytest.raises(ValidationError):
+        obs.items[0].state = "vacio"
+    assert obs.table_id == "T1"
+    assert obs.items[0].state == "lleno"
+
+
 ALERT = {
     "id": "a1",
     "table_id": "T1",
@@ -192,6 +214,9 @@ def test_alert_validates_assignment():
         alert.reminders_sent = 3
     with pytest.raises(ValidationError):
         alert.status = "cerrada"
+    # Un error no deja el valor malo puesto.
+    assert alert.reminders_sent == 2
+    assert alert.status == "abierta"
 
 
 @pytest.mark.parametrize(
@@ -214,6 +239,10 @@ def test_alert_validates_assignment():
         pytest.param(observation(ts="2026-10-17 20:00:00Z"), id="ts_with_space"),
         pytest.param(observation(ts="20261017T200000Z"), id="ts_compact"),
         pytest.param(observation(ts=1792267200), id="ts_unix"),
+        pytest.param(observation(ts="2026-10-17T20:00:00Z\n"), id="ts_newline"),
+        pytest.param(
+            observation(ts="2026-10-17T20:00:00.1234567Z"), id="ts_7_decimals"
+        ),
         pytest.param(without("position"), id="missing_position"),
         pytest.param(without("confidence"), id="missing_confidence"),
     ],
