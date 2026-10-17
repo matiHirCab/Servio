@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 
 from servio_vision import alerts
-from servio_vision.alerts.config import load_config
+from servio_vision.alerts.config import AlertConfig, load_config
 from servio_vision.alerts.models import TableObservation
 from servio_vision.alerts.notify import resolved_text
 from servio_vision.alerts.processor import AlertProcessor
@@ -54,7 +54,18 @@ def processor(tmp_path: Path, config=PROD, fail: bool = False) -> AlertProcessor
 
 
 def log_lines(p: AlertProcessor) -> list[dict]:
-    return [json.loads(line) for line in p.log.path.read_text("utf-8").splitlines()]
+    """Las líneas del log después de `run_started`."""
+    lines = [json.loads(line) for line in p.log.path.read_text("utf-8").splitlines()]
+    assert lines[0]["event"] == "run_started"
+    return lines[1:]
+
+
+def test_log_starts_with_run_config(tmp_path):
+    p = processor(tmp_path, DEMO)
+    (line,) = [json.loads(x) for x in p.log.path.read_text("utf-8").splitlines()]
+    assert line["event"] == "run_started"
+    assert AlertConfig(**line["config"]) == DEMO
+    assert datetime.fromisoformat(line["started_at"]).tzinfo is not None
 
 
 VACIO = ("T1-p1", "vacio", "centro")
@@ -194,4 +205,4 @@ def test_module_configure_and_process(tmp_path, capsys):
     for s in (0, 30, 60):
         alerts.process(obs(s, VACIO))
     assert "[telegram #" in capsys.readouterr().out
-    assert len(log.read_text("utf-8").splitlines()) == 4  # 3 obs + plato_vacio
+    assert len(log.read_text("utf-8").splitlines()) == 5  # run + 3 obs + plato_vacio

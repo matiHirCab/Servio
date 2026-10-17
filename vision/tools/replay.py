@@ -3,19 +3,23 @@
 Es el plan B de la demo: sin video ni modelo, las observaciones salen del archivo y se
 respetan los tiempos de sus `ts`, divididos por `--speed`. Acepta las dos formas de
 03-contratos.md: `fixtures/observations/*.jsonl` (una observación por línea) y
-`out/eventos.jsonl` (se toman las líneas `"event": "observation"`, el resto se saltea).
+`out/eventos.jsonl` (se toman las líneas `observation` y `run_started`, el resto se
+saltea). Una línea inválida se avisa y se saltea.
 
-`eventos.jsonl` se agrega corrida tras corrida y cada una arranca con la hora real, así
-que el archivo se corta en corridas: empieza una nueva cuando el `ts` vuelve atrás o salta
-más de `RUN_GAP_READINGS` lecturas. Por defecto se reproduce la última; `--run N` elige
-otra y `--all` las pasa todas, cada una con estado nuevo y sin esperar entre ellas.
+`eventos.jsonl` se agrega corrida tras corrida, así que el archivo se corta en corridas
+en cada `run_started`, que trae los umbrales con los que se hizo la corrida: el replay usa
+esos. Sin `run_started` (fixtures, logs viejos) empieza otra corrida cuando el `ts` vuelve
+atrás o salta más de `RUN_GAP_READINGS` lecturas, y los umbrales son los de producción
+(`--demo`, `--interval` para cambiarlos; no se lee el entorno, como en los tests).
+Por defecto se reproduce la última corrida; `--run N` elige otra y `--all` las pasa
+todas, cada una con estado nuevo y sin esperar entre ellas.
 
-El log de la reproducción va a `out/replay.jsonl` y se pisa en cada replay (no va a
-`eventos.jsonl`, así reproducir el log de una corrida no le agrega líneas al mismo archivo).
+El log de la reproducción va a `out/replay.jsonl` y se pisa en cada replay (nunca puede
+ser el archivo que se reproduce ni `out/eventos.jsonl`).
 
 Uso (desde vision/):
   python tools/replay.py --file ../fixtures/observations/mesa_completa.jsonl --speed 10
-  python tools/replay.py --file out/eventos.jsonl --demo --no-telegram
+  python tools/replay.py --file out/eventos.jsonl --no-telegram
   python tools/replay.py --file out/eventos.jsonl --run 1
 """
 
@@ -25,13 +29,14 @@ import logging
 import sys
 import time
 from collections.abc import Callable, Sequence
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from servio_vision import alerts
-from servio_vision.alerts.config import DEFAULT_INTERVAL, load_config
+from servio_vision.alerts.config import DEFAULT_INTERVAL, AlertConfig, load_config
 from servio_vision.alerts.models import TableObservation
 from servio_vision.alerts.processor import AlertProcessor
 
@@ -39,13 +44,25 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_LOG = alerts.VISION_DIR / "out" / "replay.jsonl"
 
-# Un salto de más de estas lecturas sin observaciones es otra corrida.
+# Sin `run_started`, un salto de más de estas lecturas sin observaciones es otra corrida.
 RUN_GAP_READINGS = 10
 
 
-def read_observations(path: Path) -> list[TableObservation]:
-    """Lee todas las observaciones del archivo (fixture o log de eventos)."""
-    observations = []
+@dataclass
+class Run:
+    """Una corrida: sus observaciones y, si vino de un `run_started`, sus umbrales."""
+
+    observations: list[TableObservation] = field(default_factory=list)
+    config: AlertConfig | None = None
+    marked: bool = False  # empezó con `run_started`: no se corta por tiempo
+
+    def seconds(self) -> float:
+        return (self.observations[-1].ts - self.observations[0].ts).total_seconds()
+
+
+def read_runs(path: Path, max_gap: float) -> list[Run]:
+    """Lee el archivo y lo corta en corridas (ver el docstring del módulo)."""
+    runs: list[Run] = []
     for number, line in enumerate(path.read_text("utf-8").splitlines(), start=1):
         if not line.strip():
             continue
@@ -54,30 +71,23 @@ def read_observations(path: Path) -> list[TableObservation]:
             if not isinstance(data, dict):
                 raise TypeError("no es un objeto JSON")
             event = data.pop("event", "observation")
-            if event == "observation":
-                observations.append(TableObservation.model_validate(data))
-        except (ValueError, TypeError) as error:
-            raise ValueError(f"{path}:{number}: línea inválida: {error}") from None
-    return observations
+            if event == "run_started":
+                runs.append(Run(config=AlertConfig(**data["config"]), marked=True))
+            elif event == "observation":
+                obs = TableObservation.model_validate(data)
+                if not runs or not _continues(runs[-1], obs, max_gap):
+                    runs.append(Run())
+                runs[-1].observations.append(obs)
+        except (ValueError, TypeError, KeyError) as error:
+            logger.warning("%s:%d: línea inválida, la salteo: %s", path, number, error)
+    return [run for run in runs if run.observations]
 
 
-def split_runs(
-    observations: Sequence[TableObservation], max_gap: float
-) -> list[list[TableObservation]]:
-    """Corta en corridas: el `ts` vuelve atrás o salta más de `max_gap` segundos."""
-    runs: list[list[TableObservation]] = []
-    for obs in observations:
-        if runs:
-            gap = (obs.ts - runs[-1][-1].ts).total_seconds()
-            if 0 <= gap <= max_gap:
-                runs[-1].append(obs)
-                continue
-        runs.append([obs])
-    return runs
-
-
-def span_seconds(run: Sequence[TableObservation]) -> float:
-    return (run[-1].ts - run[0].ts).total_seconds()
+def _continues(run: Run, obs: TableObservation, max_gap: float) -> bool:
+    if run.marked or not run.observations:
+        return True
+    gap = (obs.ts - run.observations[-1].ts).total_seconds()
+    return 0 <= gap <= max_gap
 
 
 def replay(
@@ -88,7 +98,7 @@ def replay(
 ) -> int:
     """Pasa cada observación por `process` esperando entre `ts`; devuelve los avisos.
 
-    Es para una sola corrida (ver `split_runs`). Si `process` rechaza una observación se
+    Es para una sola corrida (ver `read_runs`). Si `process` rechaza una observación se
     avisa y se sigue, como en `main.py`.
     """
     alert_events = 0
@@ -126,12 +136,16 @@ def main() -> int:
     parser.add_argument(
         "--no-telegram", action="store_true", help="imprimir en vez de mandar"
     )
-    parser.add_argument("--demo", action="store_true", help="umbrales de demo")
+    parser.add_argument(
+        "--demo",
+        action="store_true",
+        help="umbrales de demo (corridas sin run_started)",
+    )
     parser.add_argument(
         "--interval",
         type=int,
         default=DEFAULT_INTERVAL,
-        help="segundos entre lecturas de la corrida (para los umbrales)",
+        help="segundos entre lecturas (corridas sin run_started)",
     )
     which = parser.add_mutually_exclusive_group()
     which.add_argument(
@@ -148,17 +162,22 @@ def main() -> int:
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
 
+    if args.log.resolve() in {args.file.resolve(), alerts.DEFAULT_LOG.resolve()}:
+        print(
+            f"--log {args.log}: no puede ser el archivo a reproducir ni el log de main.py",
+            file=sys.stderr,
+        )
+        return 1
     try:
-        observations = read_observations(args.file)
-        config = load_config(args.interval, args.demo)
+        fallback = load_config(args.interval, args.demo, env={})
+        runs = read_runs(args.file, RUN_GAP_READINGS * args.interval)
     except (OSError, ValueError) as error:
         print(error, file=sys.stderr)
         return 1
-    if not observations:
+    if not runs:
         print(f"{args.file}: no hay observaciones", file=sys.stderr)
         return 1
 
-    runs = split_runs(observations, RUN_GAP_READINGS * args.interval)
     if args.all:
         selected = runs
     elif args.run is None:
@@ -170,11 +189,11 @@ def main() -> int:
             f"--run {args.run}: el archivo tiene {len(runs)} corridas", file=sys.stderr
         )
         return 1
-    span = sum(span_seconds(run) for run in selected)
+    span = sum(run.seconds() for run in selected)
     print(
         f"{len(runs)} corrida(s) en el archivo, reproduzco {len(selected)}: "
-        f"{sum(map(len, selected))} observaciones, {span:g} s de video "
-        f"→ ~{span / args.speed:g} s a {args.speed:g}×"
+        f"{sum(len(run.observations) for run in selected)} observaciones, "
+        f"{span:g} s de video → ~{span / args.speed:g} s a {args.speed:g}×"
     )
 
     args.log.unlink(missing_ok=True)
@@ -182,11 +201,16 @@ def main() -> int:
     processor: AlertProcessor | None = None
     try:
         for run in selected:
+            config = run.config or fallback
+            print(
+                f"umbrales{' de la corrida' if run.config else ''}: t1={config.t1}s "
+                f"t2={config.t2}s reminder={config.reminder}s"
+            )
             # Estado nuevo por corrida: mesas y avisos de una no pasan a la otra.
             processor = alerts.configure(
                 config, telegram=not args.no_telegram, log_path=args.log
             )
-            count += replay(run, processor.process, args.speed)
+            count += replay(run.observations, processor.process, args.speed)
     except KeyboardInterrupt:
         print("cortado", file=sys.stderr)
         return 130
