@@ -36,6 +36,8 @@ Decidir dos propuestas que **no** están en los contratos. Si se aprueban, agreg
 
 **Hecho cuando:** la decisión está anotada en `03` (sí o no para cada una) y nadie toca los contratos sin avisar.
 
+**Decisión:** ✅ se aprueban las dos (anotadas en `03`, `04` y `05`).
+
 ### T0-2 · Puntos de unión: fixtures, `Classifier` y stubs
 **P1 + P2 + P3 en paralelo · 25 min · depende de: T0-1**
 
@@ -69,7 +71,7 @@ Reglas del `.jsonl`: **una observación completa por línea**, exactamente con l
 **P3 — respuestas de API de ejemplo:** `fixtures/api/tables.json` (3 mesas en estados distintos), `alerts.json` (una abierta, una en camino, una resuelta), `metrics.json` (con los campos de `03`).
 
 **P1 — interfaz del clasificador** (la de `03-contratos.md`, «Visión interna»):
-- `vision/servio_vision/schemas.py`: modelos Pydantic de `report_table` (`04-vision.md`): `Item(id, kind, state, fill_ratio?, position, confidence)` y `TableReport(items, people_present, notes?)`. Agregar `visible` **solo si se aprobó en T0-1**.
+- `vision/servio_vision/schemas.py`: modelos Pydantic de `report_table` (`04-vision.md`): `Item(id, kind, state, fill_ratio?, position, confidence)` y `TableReport(items, people_present, notes?)`. Incluye `visible: bool` (aprobado en T0-1).
 - `vision/servio_vision/classifier.py`: `Classifier` (Protocol) y `get_classifier(name)` con registro por nombre (`fake`, `claude`, `yolo`).
 
 **Hecho cuando:** todo está en `main`, `python -c "from servio_vision.classifier import get_classifier"` funciona y `npx tsc --noEmit` pasa con los stubs.
@@ -158,7 +160,7 @@ Correr el pipeline con `--classifier claude --dry-run` sobre el video de nuestra
 
 ### P1-9 · Demo y pitch
 **P1 · 1 h · hora 16–24 · depende de: checkpoint de la hora 12**
-Guion de demo de 3 min (problema → en vivo → métricas → negocio y roadmap, con el diferencial "tiempo entre platos" si se aprobó `esperando_plato`), lista de planes B (video grabado como fuente, simulador, video de la demo, feed del dashboard) y checklist pre-demo (`DEMO_MODE`, `web/scripts/reset.ts`, celular, cámara).
+Guion de demo de 3 min (problema → en vivo → métricas → negocio y roadmap, con el diferencial "tiempo entre platos" de `esperando_plato`), lista de planes B (video grabado como fuente, simulador, video de la demo, feed del dashboard) y checklist pre-demo (`DEMO_MODE`, `web/scripts/reset.ts`, celular, cámara).
 
 **Hecho cuando:** el equipo ensayó la demo completa 2 veces con el guion.
 
@@ -189,7 +191,7 @@ Orden: P2-1 → P2-2 → P2-3 → P2-4 → P2-5 → P2-6 (hora 1–6) · P2-7 �
 ### P2-4 · Motor de reglas
 **P2 · 1 h 30 · hora 1–6 · depende de: P2-2, P2-3**
 `web/lib/rules/engine.ts` con la firma de `05-reglas-alertas.md`: `(estadoMesa, ahora, config, alertasAbiertas) → { nuevas, expiradas }`.
-- Reglas de `05` (+ `esperando_plato` si se aprobó).
+- Reglas de `05` (incluye `esperando_plato`).
 - `web/lib/rules/config.ts` con umbrales prod/demo según `DEMO_MODE` y validación umbral ≥ 2 × cadencia.
 - Cooldown por `(mesa, tipo)`, agrupado, expiración.
 
@@ -227,7 +229,7 @@ Implementar `web/lib/alerts/service.ts` (`ackAlert`, `resolveAlert`, `registerWa
 
 ### P2-10 · `GET /api/metrics`
 **P2 · 1 h · hora 6–12 · depende de: P2-6**
-`web/app/api/metrics/route.ts` con los campos de `03`: `avg_meal_minutes`, `avg_response_seconds`, `alerts_by_type`, `plates_returned_full`, `id_reconciliations` y `avg_wait_between_courses` (solo si se aprobó `esperando_plato`). Filtros `from`/`to`.
+`web/app/api/metrics/route.ts` con los campos de `03`: `avg_meal_minutes`, `avg_response_seconds`, `alerts_by_type`, `plates_returned_full`, `id_reconciliations` y `avg_wait_between_courses`. Filtros `from`/`to`.
 
 **Hecho cuando:** después de reproducir `mesa_completa.jsonl`, la respuesta tiene las claves de `fixtures/api/metrics.json` con valores distintos de cero.
 
@@ -297,7 +299,7 @@ Orden: P3-1 → P3-2 → P3-3 → P3-5 → P3-4 → P3-6 (hora 1–6) · P3-8 �
 `vision/servio_vision/smoothing.py` según `04-vision.md`:
 - Vecino: 2 lecturas seguidas. Retroceso o salto: 3 lecturas con `confidence ≥ 0.8`.
 - Ausente 1 lectura: se mantiene. Ausente 2: retirado.
-- No visibles no cuentan como lectura (solo si se aprobó `visible`).
+- Ítems con `visible: false` no cuentan como lectura.
 
 **Hecho cuando:** `pytest vision/tests/test_smoothing.py` pasa con un caso por regla.
 

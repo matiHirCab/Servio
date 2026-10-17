@@ -59,11 +59,13 @@ frame (cada 1 s) → recortar cada mesa por su zona → ¿cambió? → (cada 15�
 Sos el sistema de visión de un restaurante. La imagen es una vista cenital de la mesa {table_id}.
 Identificá cada plato de comida que esté sobre la mesa. Ignorá vasos, tazas, botellas y cubiertos.
 Para cada plato devolvé un estado:
-- "lleno": recién servido, casi intacto (más de 75 % de la comida)
-- "comiendo": entre 30 % y 75 %
-- "por_terminar": menos de 30 %
-- "vacio": sin comida o solo restos
+- "lleno": recién servido, casi intacto (más de 80 % de la comida)
+- "comiendo": entre 30 % y 80 %
+- "por_terminar": entre 5 % y 30 %
+- "vacio": menos de 5 % (sin comida o solo restos)
+Devolvé también fill_ratio (0 a 1): la fracción de comida que queda, coherente con el estado.
 Estado anterior de esta mesa: {previous_items_json}
+Si una mano, un brazo o una cabeza tapa un plato y no podés ver cuánta comida queda, devolvelo igual con "visible": false.
 Mantené el mismo id para el mismo objeto (por posición). Usá ids nuevos (p3, p4…) solo para objetos nuevos.
 No incluyas objetos que ya no están.
 Respondé SOLO con la herramienta report_table.
@@ -75,12 +77,14 @@ Herramienta (JSON schema) `report_table`:
 {
   "items": [
     { "id": "p1", "kind": "plate", "state": "comiendo", "fill_ratio": 0.5,
-      "position": "arriba-izquierda", "confidence": 0.8 }
+      "position": "arriba-izquierda", "confidence": 0.8, "visible": true }
   ],
   "people_present": true,
   "notes": "opcional, algo raro (plato volcado, mesa sin gente con platos llenos)"
 }
 ```
+
+`visible`: `false` si algo tapa el plato. Esos ítems **no cuentan como lectura** en el suavizado (ni para cambiar de estado ni como ausencia) y no se mandan al backend.
 
 `people_present` es gratis de pedir y sirve para métricas de ocupación y para no avisar "plato lleno" si la mesa está vacía.
 
@@ -90,6 +94,7 @@ Aunque las llamadas son espaciadas, Claude puede dudar entre dos estados vecinos
 - Solo aceptar un cambio de estado si aparece en **2 lecturas seguidas**.
 - Los estados avanzan (`lleno → comiendo → por_terminar → vacio`). Un **retroceso** (por ejemplo `vacio → comiendo`) y un **salto de más de un estado** (por ejemplo `lleno → vacio`) se aceptan solo si aparecen en **3 lecturas seguidas** con `confidence ≥ 0.8`. Así un error de Claude no deja un plato atascado en `vacio`, y un plato que el cliente vuelve a llenar o que sigue en consumo se corrige solo.
 - Si un item falta en una lectura, mantenerlo; si falta en 2 seguidas, se considera retirado.
+- Un item con `visible: false` se ignora en esa lectura: se mantiene su último estado suavizado.
 
 ## Estructura sugerida
 
