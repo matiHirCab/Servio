@@ -2,6 +2,8 @@
 
 Todo lo que cruza entre módulos está definido acá. Si lo cambiás, cambialo acá primero.
 
+Los esquemas de `POST /api/observations` y de la alerta también viven en código: `web/lib/contracts.ts` (Zod) y `vision/servio_vision/contracts.py` (Pydantic). **Se cambian junto con este archivo y con `fixtures/`**; los tests de los dos módulos validan los fixtures contra esos esquemas.
+
 ## Enums
 
 ```ts

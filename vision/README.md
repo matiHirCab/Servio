@@ -2,7 +2,7 @@
 
 Captura de cámara, recorte por mesa y lectura de estado detrás de la interfaz `Classifier` (Claude por defecto; `fake` para trabajar sin modelo; YOLO solo si gana la comparativa). Contexto completo: [docs/context/04-vision.md](../docs/context/04-vision.md). Contratos: [docs/context/03-contratos.md](../docs/context/03-contratos.md).
 
-Estado: **todavía sin código** (se crea en la hora 1–6 del plan).
+Estado: solo el contrato en código (`servio_vision/contracts.py`) con sus tests contra [`fixtures/`](../fixtures/README.md). El resto se crea en la hora 1–6 del plan.
 
 ## Arranque esperado (con mocks, sin backend)
 

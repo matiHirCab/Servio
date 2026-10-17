@@ -10,7 +10,7 @@ Contexto: MVP de hackathon, 24 horas, equipo de 3 personas.
 
 ## Estado del repo
 
-Hoy el repo tiene **solo documentación**. Las carpetas `vision/` y `web/` todavía no existen: se crean en la hora 1–6 del [plan](docs/context/08-plan-24h.md). Hasta entonces, "trabajar dentro de tu módulo" significa crear tu carpeta siguiendo [09-convenciones.md](docs/context/09-convenciones.md). Variables de entorno: ver [.env.example](.env.example).
+Hoy el repo tiene documentación, el contrato en código (`web/lib/contracts.ts`, `vision/servio_vision/contracts.py`) y datos falsos en [`fixtures/`](fixtures/README.md). El resto de `vision/` y `web/` se crea en la hora 1–6 del [plan](docs/context/08-plan-24h.md). Hasta entonces, "trabajar dentro de tu módulo" significa crear tu carpeta siguiendo [09-convenciones.md](docs/context/09-convenciones.md). Variables de entorno: ver [.env.example](.env.example).
 
 ## Mapa de contexto
 
