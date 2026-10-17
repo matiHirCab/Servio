@@ -22,6 +22,7 @@ real, porque la vista es para mirar.
 Teclas: q / Esc sale · espacio pausa.
 """
 
+import logging
 import sys
 import time
 from collections.abc import Iterator
@@ -35,11 +36,13 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from main import Pipeline, build_parser, build_pipeline, logger, setup_logging
+from main import Pipeline, build_parser, build_pipeline, setup_logging
 from servio_vision.alerts.state import table_status
 from servio_vision.capture import IMAGE_SUFFIXES, STREAM_PREFIXES
 from servio_vision.schemas import Item
 from servio_vision.zones import Zones, scaled_polygon, table_rect
+
+logger = logging.getLogger("servio.vista")
 
 WINDOW = "Servio"
 
@@ -227,11 +230,15 @@ def _wait(due: float | None, no_window: bool) -> str | None:
 
 
 class _Recorder:
+    STILLS_FPS = 10  # una carpeta de fotos se graba a 10 fps repitiendo cada foto
+
     def __init__(self, path: Path | None, fps: float) -> None:
         self.path = path
-        # una carpeta de fotos (fps < 1) se graba a 1 fps repitiendo cada foto
-        self.fps = max(1.0, fps)
-        self.repeat = max(1, round(1 / fps)) if fps < 1 else 1
+        if fps < 1:  # carpeta de fotos: fps = 1 / interval
+            self.fps = self.STILLS_FPS
+            self.repeat = max(1, round(self.STILLS_FPS / fps))
+        else:
+            self.fps, self.repeat = fps, 1
         self.writer = None
 
     def write(self, image: np.ndarray) -> None:
@@ -252,6 +259,9 @@ class _Recorder:
 
 
 def run(args) -> int:
+    if args.interval <= 0:
+        logger.error("--interval tiene que ser mayor a 0 (vino %s)", args.interval)
+        return 2
     try:
         source = open_view_source(args.source, args.interval)
     except OSError as e:
@@ -278,9 +288,9 @@ def run(args) -> int:
     def finish_pending() -> None:
         nonlocal pending
         if pending is not None:
-            pending.result()
+            future, pending = pending, None  # si falla, no se reintenta en el cierre
+            future.result()
             state.update(pipeline, pending_ts)
-            pending = None
 
     def render(frame, ts, video_s) -> np.ndarray:
         header = (
@@ -330,9 +340,12 @@ def run(args) -> int:
         logger.info("Cortado a mano")
     finally:
         if not interrupted:
-            finish_pending()  # la última lectura también se muestra y se graba
-            if last is not None:
-                recorder.write(render(*last))
+            try:
+                finish_pending()  # la última lectura también se muestra y se graba
+                if last is not None:
+                    recorder.write(render(*last))
+            except Exception:
+                logger.exception("No se pudo agregar la última lectura")
         worker.shutdown(wait=not interrupted, cancel_futures=True)
         pipeline.close()
         recorder.close()
