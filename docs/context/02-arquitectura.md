@@ -48,13 +48,3 @@
 6. El mozo toca "Voy" / "Listo" → webhook → se actualiza la alerta → sirve para medir tiempo de respuesta.
 7. El dashboard consulta `/api/tables` y `/api/alerts` cada 2 s (o SSE) y muestra el mapa. El polling es más rápido que las lecturas a propósito: así un cambio de alerta (Voy/Listo) se ve enseguida.
 
-## Uso de los recursos que tenemos
-
-| Recurso | Para qué |
-|---|---|
-| AWS (créditos) | Bedrock para Claude visión (toda la clasificación). S3 para videos de prueba y frames etiquetados. |
-| Vercel | Deploy de `web/` (API + dashboard + webhook), Postgres desde el marketplace. |
-| GitHub | Repo, PRs, issues como tablero de tareas. |
-| Tenki (USD 250) | Runners de CI rápidos para GitHub Actions (lint + tests + eval del prompt). |
-| Claude (3 Pro + 1 Max) | Claude Code para programar cada módulo. Ver reparto en [08-plan-24h.md](08-plan-24h.md). |
-| Kiro | Specs y tareas del dashboard/API (modo spec-driven), en paralelo a Claude Code. |
