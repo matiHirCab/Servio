@@ -46,6 +46,10 @@ class Item(BaseModel):
         default=None, ge=0, le=1, description="Fracción de comida que queda."
     )
     position: str = Field(description='Texto libre, ej. "arriba-izquierda".')
+    bbox: tuple[float, float, float, float] | None = Field(
+        default=None,
+        description="[x, y, w, h] normalizado 0–1 dentro del recorte de la mesa (lo da YOLO).",
+    )
     confidence: float | None = Field(default=None, ge=0, le=1)
     visible: bool = Field(
         default=True,

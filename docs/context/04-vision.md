@@ -5,7 +5,7 @@
 ## Por qué los dos
 
 - **YOLO** (`yolov8n` entrenado con el dataset de Roboflow): encuentra cada plato rápido, en la laptop con CPU, y da su caja. Con la caja se mantiene el mismo id para el mismo plato entre lecturas y se recorta el plato a buena resolución aunque haya muchas mesas en el plano. Solo distingue `food` / `finished_food`, así que no alcanza para los estados intermedios.
-- **Claude** (Haiku en Bedrock, o la API de Anthropic): mira el recorte de cada plato y estima `fill_ratio` (cuánta comida queda), que da los 4 estados sin entrenar nada.
+- **Claude** (Haiku por `claude -p` con la suscripción del equipo, o la API de Anthropic si hay key): mira el recorte de cada plato y estima `fill_ratio` (cuánta comida queda), que da los 4 estados sin entrenar nada.
 - **Plan B:** si Claude no responde, el `hybrid` usa la clase de YOLO (`food` → `lleno`, `finished_food` → `vacio`). Si YOLO no está entrenado a tiempo, se usa `claude` con el recorte de la mesa entera.
 
 ## Clasificador `hybrid` (el de la demo)
@@ -26,7 +26,8 @@ Las siguientes son recortes de cada plato de esa mesa, numerados desde 1 en el m
 Para cada plato estimá:
 - fill_ratio: cuánta comida queda, de 0 (vacío o solo restos) a 1 (recién servido, intacto).
 - confidence: de 0 a 1.
-- visible: false si una mano, un brazo, un cubierto grande o una persona tapa el plato.
+- visible: false solo si no se ve la comida del plato (una persona o un brazo tapa más de la mitad).
+  Cubiertos, servilletas o una mano en el borde no cuentan: estimá igual con lo que se ve.
 Indicá también si hay personas sentadas en la mesa (people_present).
 Respondé SOLO con la herramienta report_plates.
 ```
@@ -54,9 +55,9 @@ Herramienta `report_plates`:
 | **Muchas mesas en un plano** → platos chicos | Recortar desde el frame original (no achicado); YOLO recorta cada plato antes de mandarlo a Claude. Probar temprano con el video de la demo qué tamaño mínimo de plato funciona. |
 | **Latencia de Claude** (1–3 s) | Muestreamos cada 15–30 s; llamadas asíncronas, el loop no espera. |
 | **Costo** | Una llamada por mesa, solo si el recorte cambió; recortes chicos; Haiku. |
-| **Rate limits de Bedrock** | Pedir aumento de cuota temprano; API de Anthropic como respaldo. |
+| **Límites de uso de la suscripción** (`claude -p`) | Una llamada por mesa y solo si el recorte cambió; usar la cuenta Max para la demo; API de Anthropic como respaldo. |
 | **Sin internet** | `--classifier yolo` (solo YOLO) o reproducir un log con `tools/replay.py`. |
-| **Manos que tapan** | `visible: false` → no cuenta en el suavizado. |
+| **Manos que tapan** | Claude marca `visible: false` solo si no ve la comida; el plato conserva su última lectura con `visible: false` (`hybrid`) y no cuenta en el suavizado. |
 
 ## Cadencias
 
@@ -91,7 +92,7 @@ frame (1 s) → recorte por mesa → ¿cambió? → classify() → suavizado →
 ### Suavizado
 
 Por cada plato:
-- Un plato con `visible: false` no cuenta como lectura.
+- Un plato con `visible: false` no cuenta como lectura. Si ya se había visto, el `hybrid` lo manda con su última lectura y `visible: false`: se sigue mostrando su último estado pero no suma a la racha. Recién con 3 lecturas seguidas sin verlo se muestra «tapado» (sin estado).
 - Cambio a un estado vecino: se acepta si aparece en **2 lecturas seguidas**.
 - Retroceso (`vacio → comiendo`) o salto de más de un estado (`lleno → vacio`): se acepta con **3 lecturas seguidas** con `confidence ≥ 0.8`.
 - Ausente en 1 lectura: se mantiene. Ausente en 2 seguidas: retirado (deja de venir en la observación).
@@ -118,7 +119,7 @@ vision/
     vista_demo.py            # (Jessica, opcional)
   tests/
   data/ models/ out/         # ignorados por git
-  requirements.txt           # opencv-python, pydantic, boto3, anthropic, httpx
+  requirements.txt           # opencv-python, pydantic, httpx (anthropic solo si CLAUDE_PROVIDER=anthropic)
   requirements-yolo.txt      # ultralytics
 ```
 

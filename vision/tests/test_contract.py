@@ -68,7 +68,7 @@ def test_rejects_out_of_contract(bad):
 
 
 def test_registry_names():
-    assert available_classifiers() == ["claude", "fake", "yolo"]
+    assert available_classifiers() == ["claude", "fake", "hybrid", "yolo"]
 
 
 def test_unknown_classifier():
@@ -78,7 +78,7 @@ def test_unknown_classifier():
 
 def test_not_implemented_yet():
     with pytest.raises(NotImplementedError):
-        get_classifier("yolo")
+        get_classifier("claude")
 
 
 def test_fill_ratio_overrides_state():
@@ -86,6 +86,21 @@ def test_fill_ratio_overrides_state():
         id="p1", state="lleno", fill_ratio=0.02, position="centro", confidence=0.9
     )
     assert item.state == "vacio"
+
+
+def test_bbox_is_optional():
+    item = Item(id="p1", state="lleno", position="centro", confidence=0.9)
+    assert item.bbox is None
+    item = Item.model_validate(
+        {
+            "id": "p1",
+            "state": "lleno",
+            "position": "centro",
+            "confidence": 0.9,
+            "bbox": [0.1, 0.2, 0.3, 0.4],
+        }
+    )
+    assert item.bbox == (0.1, 0.2, 0.3, 0.4)
 
 
 def test_hidden_plate_without_state():

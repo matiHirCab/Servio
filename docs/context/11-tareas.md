@@ -25,7 +25,7 @@ Al pasarle una tarea a Claude Code: *"leé AGENTS.md, 03-contratos.md, el doc de
 
 ### T0-2a · Accesos: Claude
 **Tomás · 15 min**
-API key de Anthropic y acceso a Claude Haiku en Bedrock (y cuota). Probar una llamada de texto.
+No hay créditos de AWS: Claude va por `claude -p` (Claude Code logueado con la suscripción). Probar `claude -p "hola"` en la laptop de la demo. API key de Anthropic solo si se consigue.
 
 **Hecho cuando:** la llamada responde y las variables están en el `.env` (y documentadas en `.env.example`).
 
@@ -53,7 +53,7 @@ Bajar *AI Smart Restaurant Surveillance* de Roboflow a color, sin augmentación 
 
 ### TOM-3 · Claude por plato
 **hora 1–6 · 1 h**
-`servio_vision/classifiers/claude_plates.py` (o dentro de `claude.py`): una función que recibe el recorte de la mesa y los recortes de cada plato y devuelve, por plato, `fill_ratio`, `confidence` y `visible`, más `people_present`. Bedrock o Anthropic según `CLAUDE_PROVIDER`; herramienta `report_plates` forzada, `temperature 0`, Pydantic con un reintento, timeout de 10 s, log de tokens y latencia. Prompt en `prompt.py` (base en `04-vision.md`).
+`servio_vision/classifiers/claude_plates.py` (o dentro de `claude.py`): una función que recibe el recorte de la mesa y los recortes de cada plato y devuelve, por plato, `fill_ratio`, `confidence` y `visible`, más `people_present`. `claude -p` o API de Anthropic según `CLAUDE_PROVIDER`; salida con el esquema `report_plates`, Pydantic con un reintento, timeout (15 s con `cli`), log de tokens y latencia. Prompt en `prompt.py` (base en `04-vision.md`).
 
 **Hecho cuando:** con 3 recortes de plato devuelve un resultado válido, y un test con la API mockeada pasa.
 
