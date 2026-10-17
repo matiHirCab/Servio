@@ -5,9 +5,14 @@ entero, frames de `servio_vision.capture`) pasándole los platos de la lectura a
 (`f_NNN.jpg`), una hoja con el recorte de cada plato y su clasificación
 (`f_NNN_platos.jpg`) y `linea_de_tiempo.json`, cada corrida en su carpeta (`out/video/run1`, `run2`, ...). Sirve para TOM-7/TOM-8 antes de tener el loop de Jessica.
 
+Con `hybrid`, las llamadas a Claude de varios frames van en paralelo (`--paralelo`,
+4 por defecto): YOLO y los ids siguen en orden, y cada frame se arma recién cuando
+terminó el anterior.
+
 Uso (desde vision/):
   python tools/probar_video.py "C:/Users/tomas/Downloads/video mesa platos ia.mp4"
   python tools/probar_video.py video.mp4 --cada 2 --max-frames 5 --classifier hybrid
+  python tools/probar_video.py video.mp4 --cada 20 --paralelo 1   # una llamada a la vez
 """
 
 import argparse
@@ -16,6 +21,8 @@ import json
 import logging
 import sys
 import time
+from collections import deque
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import cv2
@@ -131,6 +138,77 @@ def next_run_dir(base: Path) -> Path:
     return base / f"run{max(taken, default=0) + 1}"
 
 
+def save_frame(n, sec, img, report, took: str, out: Path, timeline: list) -> None:
+    name = f"f_{n:03d}"
+    if report is None:
+        print(f"{name} t={sec:5.1f}s ({took}): lectura fallida", flush=True)
+        timeline.append({"frame": name, "segundo": round(sec, 1), "report": None})
+        img.save(out / f"{name}.jpg", quality=85)
+        return
+    draw(img, report.items, out / f"{name}.jpg")
+    plate_sheet(img, report.items, out / f"{name}_platos.jpg")
+    timeline.append(
+        {"frame": name, "segundo": round(sec, 1), "report": report.model_dump()}
+    )
+    summary = ", ".join(f"{i.id}={i.state or 'tapado'}" for i in report.items)
+    print(f"{name} t={sec:5.1f}s ({took}): {summary or 'sin platos'}", flush=True)
+
+
+def _jpeg_bytes(img: Image.Image) -> bytes:
+    buf = io.BytesIO()
+    img.save(buf, "JPEG", quality=85)
+    return buf.getvalue()
+
+
+def run_serial(classifier, frame_iter, out: Path, timeline: list) -> None:
+    previous = []
+    for n, (sec, img) in enumerate(frame_iter, 1):
+        t0 = time.monotonic()
+        report = classifier.classify(_jpeg_bytes(img), "T1", previous)
+        if report is not None:
+            previous = report.items
+        save_frame(n, sec, img, report, f"{time.monotonic() - t0:4.1f}s", out, timeline)
+
+
+def run_parallel(classifier, frame_iter, out: Path, timeline: list, workers: int):
+    """YOLO en orden en este hilo; Claude en `workers` hilos; el armado de cada
+    frame en orden, porque usa la lectura del frame anterior."""
+
+    def ask(prepared):
+        t0 = time.monotonic()
+        try:
+            answer = classifier.ask(prepared)
+        except Exception:  # un error raro de Claude no corta la corrida
+            logging.getLogger(__name__).exception("Claude falló")
+            answer = None
+        return answer, time.monotonic() - t0
+
+    previous, seen = [], []
+    pending: deque = deque()
+
+    def finish_oldest():
+        nonlocal previous
+        n, sec, img, prepared, future, yolo_s = pending.popleft()
+        answer, claude_s = future.result()
+        report = classifier.finish(prepared, answer, previous)
+        if report is not None:
+            previous = report.items
+        took = f"yolo {yolo_s:.1f}s, claude {claude_s:.1f}s"
+        save_frame(n, sec, img, report, took, out, timeline)
+
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        for n, (sec, img) in enumerate(frame_iter, 1):
+            t0 = time.monotonic()
+            prepared = classifier.prepare(_jpeg_bytes(img), "T1", seen)
+            seen = prepared.seen_items
+            yolo_s = time.monotonic() - t0
+            pending.append((n, sec, img, prepared, pool.submit(ask, prepared), yolo_s))
+            while len(pending) > workers:
+                finish_oldest()
+        while pending:
+            finish_oldest()
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("video")
@@ -138,6 +216,9 @@ def main() -> None:
     ap.add_argument("--max-frames", type=int, default=0)
     ap.add_argument("--classifier", default="hybrid")
     ap.add_argument("--out", default="out/video")
+    ap.add_argument(
+        "--paralelo", type=int, default=4, help="llamadas a Claude a la vez (hybrid)"
+    )
     a = ap.parse_args()
 
     logging.basicConfig(level=logging.WARNING)
@@ -146,33 +227,23 @@ def main() -> None:
     out.mkdir(parents=True)
     print(f"Guardando en {out}", flush=True)
 
-    previous, timeline = [], []
-    for n, (sec, img) in enumerate(frames(a.video, a.cada, a.max_frames), 1):
-        buf = io.BytesIO()
-        img.save(buf, "JPEG", quality=85)
-        start = time.monotonic()
-        report = classifier.classify(buf.getvalue(), "T1", previous)
-        took = time.monotonic() - start
-        name = f"f_{n:03d}"
-        if report is None:
-            print(f"{name} t={sec:5.1f}s ({took:4.1f}s): lectura fallida", flush=True)
-            timeline.append({"frame": name, "segundo": round(sec, 1), "report": None})
-            img.save(out / f"{name}.jpg", quality=85)
-            continue
-        previous = report.items
-        draw(img, report.items, out / f"{name}.jpg")
-        plate_sheet(img, report.items, out / f"{name}_platos.jpg")
-        timeline.append(
-            {"frame": name, "segundo": round(sec, 1), "report": report.model_dump()}
-        )
-        summary = ", ".join(f"{i.id}={i.state or 'tapado'}" for i in report.items)
-        print(
-            f"{name} t={sec:5.1f}s ({took:4.1f}s): {summary or 'sin platos'}",
-            flush=True,
-        )
-
-    with open(out / "linea_de_tiempo.json", "w", encoding="utf-8") as f:
-        json.dump(timeline, f, indent=2, ensure_ascii=False)
+    timeline: list[dict] = []
+    start = time.monotonic()
+    try:
+        if hasattr(classifier, "prepare") and a.paralelo > 1:
+            run_parallel(
+                classifier,
+                frames(a.video, a.cada, a.max_frames),
+                out,
+                timeline,
+                a.paralelo,
+            )
+        else:
+            run_serial(classifier, frames(a.video, a.cada, a.max_frames), out, timeline)
+    finally:  # aunque se corte, queda la línea de tiempo de lo que se hizo
+        with open(out / "linea_de_tiempo.json", "w", encoding="utf-8") as f:
+            json.dump(timeline, f, indent=2, ensure_ascii=False)
+    print(f"Tiempo total: {time.monotonic() - start:.0f} s")
     print(f"Listo: {len(timeline)} frames en {out}")
 
 
