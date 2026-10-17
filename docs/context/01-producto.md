@@ -11,7 +11,7 @@ En un restaurante el mozo no puede mirar todas las mesas todo el tiempo. Pasan d
 
 Una cámara cenital (en el techo) mira el salón. Servio:
 
-1. Detecta cada **plato** y **bebida** sobre cada mesa.
+1. Detecta cada **plato de comida** sobre cada mesa (las bebidas quedan fuera del MVP).
 2. Clasifica su estado:
 
    | Estado | Significado |
@@ -21,8 +21,7 @@ Una cámara cenital (en el techo) mira el salón. Servio:
    | `por_terminar` | Queda poco (<30 %). |
    | `vacio` | Sin comida o solo restos. |
 
-   Para bebidas alcanza con `llena`, `media`, `vacia`.
-3. Le manda un **mensaje al mozo** (Telegram en el MVP, WhatsApp como extra) cuando hay que actuar.
+3. Le manda un **mensaje al mozo** por Telegram cuando hay que actuar.
 4. Guarda todo y muestra **métricas** al dueño/encargado en un dashboard.
 
 ## Usuarios
@@ -35,7 +34,6 @@ Una cámara cenital (en el techo) mira el salón. Servio:
 1. **Mesa por terminar** — la mayoría de los platos de una mesa está en `por_terminar`. Ir a ofrecer postre/café.
 2. **Plato vacío** — hay platos `vacio` hace más de N segundos. Ir a retirar.
 3. **Plato lleno mucho tiempo** — un plato sigue `lleno` más de X minutos desde que apareció. Ir a preguntar si está todo bien.
-4. **Bebida vacía** — ofrecer otra bebida. (Extra si da el tiempo.)
 
 El detalle de umbrales está en [05-reglas-alertas.md](05-reglas-alertas.md).
 
@@ -61,4 +59,6 @@ El detalle de umbrales está en [05-reglas-alertas.md](05-reglas-alertas.md).
 - Integración con POS / sistema de comandas.
 - Identificar qué plato del menú es cada uno.
 - Detección de personas / gestos ("levantó la mano").
+- Bebidas (vasos, tazas, botellas) y la alerta de bebida vacía.
+- WhatsApp u otros canales de aviso (solo Telegram).
 - App nativa para mozos.

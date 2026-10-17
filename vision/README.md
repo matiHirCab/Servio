@@ -1,6 +1,6 @@
 # vision/
 
-Captura de cámara, recorte por mesa y lectura de estado con Claude multimodal. Contexto completo: [docs/context/04-vision.md](../docs/context/04-vision.md). Contratos: [docs/context/03-contratos.md](../docs/context/03-contratos.md).
+Captura de cámara, recorte por mesa y lectura de estado detrás de la interfaz `Classifier` (Claude por defecto; `fake` para trabajar sin modelo; YOLO solo si gana la comparativa). Contexto completo: [docs/context/04-vision.md](../docs/context/04-vision.md). Contratos: [docs/context/03-contratos.md](../docs/context/03-contratos.md).
 
 Estado: **todavía sin código** (se crea en la hora 1–6 del plan).
 
@@ -9,7 +9,9 @@ Estado: **todavía sin código** (se crea en la hora 1–6 del plan).
 ```bash
 python3.11 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
-python main.py --source videos/mesa1.mp4 --dry-run
+python main.py --source data/videos/mesa1.mp4 --classifier fake --dry-run --out out/obs.jsonl
 ```
 
-`--dry-run` imprime el JSON del contrato en lugar de hacer `POST /api/observations`. Con `DEMO_MODE=true` se usan las cadencias cortas de la tabla de `04-vision.md`.
+`--dry-run` escribe las observaciones en `.jsonl` (formato de `fixtures/observations/`) en lugar de hacer `POST /api/observations`. Con `DEMO_MODE=true` o `--demo` (el flag le gana a la variable) se usan las cadencias cortas de la tabla de `04-vision.md`.
+
+Para YOLO (solo si se decidió usarlo): `pip install -r requirements-yolo.txt`.
