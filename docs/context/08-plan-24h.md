@@ -8,7 +8,7 @@ Las tareas concretas, con su "Hecho cuando", están en [11-tareas.md](11-tareas.
 |---|---|---|
 | **Tomás** | **Modelo**: dataset, YOLO en Colab, clasificadores `yolo` / `hybrid` / `claude`, evaluación y prompt. Guion de demo y pitch. | `servio_vision/classifiers/` (salvo `fake.py`), `tracking.py`, `prompt.py`, `tools/` de modelo |
 | **Matías** | **Reglas + Telegram**: estado de mesa, motor de reglas, recordatorios, envío a Telegram, log y replay. | `servio_vision/alerts/`, `tools/replay.py`, `fixtures/` |
-| **Jessica** | **Pipeline + video**: captura, zonas, loop con cadencias, suavizado, clasificador falso, video de la demo y vista de demo. | `main.py`, `servio_vision/{capture,zones,change,smoothing}.py`, `classifiers/fake.py`, `tools/draw_zones.py`, `config/` |
+| **Jessica** | **Pipeline + video**: captura, zonas, loop cada 30 s, suavizado, clasificador falso, video de la demo y vista de demo. | `main.py`, `servio_vision/{capture,zones,smoothing}.py`, `classifiers/fake.py`, `tools/draw_zones.py`, `config/` |
 
 Los tres programan en Python, así que cualquiera puede cubrir a otro si se traba.
 
@@ -24,7 +24,7 @@ Los tres programan en Python, así que cualquiera puede cubrir a otro si se trab
 
 - **Tomás:** dataset y test split, YOLO entrenando en Colab, clasificador de Claude por plato, `yolo` y `hybrid`.
 - **Matías:** estado de mesa, motor de reglas con tests contra fixtures, envío a Telegram.
-- **Jessica:** clasificador falso, captura, zonas, suavizado y loop con cadencias sobre un video cualquiera.
+- **Jessica:** clasificador falso, captura, zonas, suavizado y loop cada 30 s sobre un video cualquiera.
 
 **Checkpoint hora 6 (15 min):** cada uno muestra lo suyo andando solo.
 
@@ -38,7 +38,7 @@ Los tres programan en Python, así que cualquiera puede cubrir a otro si se trab
 ## Hora 12–16 · Precisión (y dormir por turnos)
 
 - Tomás: ajuste fino del prompt sobre el video de la demo.
-- Jessica: zonas definitivas y vista de demo (opcional).
+- Jessica: zonas definitivas y vista de demo en pantalla dividida (video con las mesas marcadas + Telegram espejado). Si sobra tiempo, la tabla de lo que pasó (JES-10).
 - Matías: umbrales de demo, recordatorios y cierre probados con replay; apoyo con el video.
 - Turnos de descanso de 2–3 h: que nunca duerman los tres a la vez.
 

@@ -6,7 +6,7 @@ Un solo programa en Python, corriendo en una laptop:
 
 ```
  [Video o cámara]
-       │ frame cada 1 s
+       │ frame cada 30 s
        ▼
  ┌─────────────────────────────── vision/ (Python) ───────────────────────────────┐
  │ captura → recorte por mesa → clasificador → suavizado → estado de mesa → reglas │

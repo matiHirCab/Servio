@@ -83,7 +83,7 @@ Con el video de la demo, ver desde qué tamaño de plato YOLO deja de detectar y
 
 ### TOM-8 · Ajuste fino sobre el video de la demo
 **hora 12–16 · 1 h 15 · depende de: JES-8**
-Correr todo sobre el video final y revisar en `out/eventos.jsonl` la línea de tiempo de cada mesa. Ajustar el prompt; con Jessica, el umbral de cambio y la cadencia.
+Correr todo sobre el video final y revisar en `out/eventos.jsonl` la línea de tiempo de cada mesa. Ajustar el prompt; con Jessica, la cadencia (`--interval`) y el `--speed` de la demo.
 
 **Hecho cuando:** cada mesa del video pasa por los estados en orden, sin saltos raros ni ids que cambien.
 
@@ -177,11 +177,11 @@ Video desde arriba (cenital o en alto), con varias mesas y platos que se van vac
 
 **Hecho cuando:** `pytest tests/test_smoothing.py` pasa con un caso por regla.
 
-### JES-6 · Loop con cadencias
+### JES-6 · Loop cada 30 s
 **hora 1–6 · 1 h 30 · depende de: JES-2, JES-4, JES-5**
-`main.py --source … --classifier fake|yolo|hybrid|claude [--demo] [--no-telegram]`: frame cada 1 s, detector de cambio por mesa (`change.py`), llamada al clasificador según las cadencias de `04` (asíncrona), suavizado y armado de la observación de mesa (`03`). Mientras MAT-5 no esté, imprime las observaciones.
+`main.py --source … --classifier fake|yolo|hybrid|claude [--demo] [--no-telegram]`: un frame cada `--interval` s (30 por defecto, `04`), recorte y clasificación de cada mesa, suavizado y armado de la observación de mesa (`03`). Mientras MAT-5 no esté, imprime las observaciones.
 
-**Hecho cuando:** con `--classifier fake` sobre un video imprime observaciones con el formato de `03` y respeta las cadencias.
+**Hecho cuando:** con `--classifier fake` sobre un video imprime una observación por mesa cada 30 s de video, con el formato de `03`.
 
 ### JES-7 · Integración
 **hora 6–12 · 30 min · depende de: JES-6, MAT-5, TOM-5**
@@ -195,11 +195,24 @@ Marcar las mesas del video final y commitear `config/zones.json`.
 
 **Hecho cuando:** los recortes del video final muestran cada mesa completa.
 
-### JES-9 · Vista de demo (opcional)
-**hora 12–16 · 1 h**
-`tools/vista_demo.py`: ventana de OpenCV con el video, cada mesa marcada, las cajas de los platos y su estado encima, para mostrar al lado del celular con Telegram.
+### JES-9 · Vista de demo (pantalla dividida)
+**hora 12–16 · 1 h 30 · depende de: JES-6, JES-8, TOM-4 (`bbox`)**
+Es lo que ve el jurado. La pantalla se divide en dos:
+- **Izquierda:** `tools/vista_demo.py`, una ventana de OpenCV con el video y, encima:
+  - el contorno de cada mesa con el color de su estado (`libre` gris, `comiendo` verde, `por_terminar` amarillo, `terminada` rojo);
+  - la caja de cada plato (`bbox`) con id, estado y % de comida (`p1 · comiendo · 45 %`);
+  - un cartel por mesa con el estado y los minutos ("Mesa 2: por terminar · 4 min").
+- **Derecha:** el celular con el grupo de Telegram, espejado en la laptop (`scrcpy` en Android).
 
-**Hecho cuando:** la vista se ve fluida durante la corrida de la demo.
+La vista lee lo mismo que manda el loop (observaciones y avisos), así lo que se ve coincide con lo que llega a Telegram.
+
+**Hecho cuando:** en la corrida de la demo, la vista se ve fluida y cada aviso aparece en Telegram justo después de que la mesa cambia de color.
+
+### JES-10 · Tabla de lo que pasó (si sobra tiempo)
+**hora 16–20 · 45 min · depende de: MAT-5 (`out/eventos.jsonl`)**
+`tools/resumen.py`: lee `out/eventos.jsonl` de una corrida y muestra una tabla para el cierre de la demo: por mesa, cuánto duró la comida, cuántos avisos de cada tipo hubo y cuánto tardó cada aviso en resolverse; al final, los totales. Puede ser en la terminal o como imagen para poner en la última slide.
+
+**Hecho cuando:** sobre el log de la corrida de la demo imprime la tabla con números que coinciden con lo que se vio en Telegram.
 
 ---
 
