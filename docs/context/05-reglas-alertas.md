@@ -4,10 +4,19 @@ Viven en el backend (`web/lib/rules/`). Se evalúan cada vez que llega una obser
 
 | Regla | Dispara cuando | Mensaje al mozo | Producción | Demo |
 |---|---|---|---|---|
-| `mesa_por_terminar` | ≥ 50 % de los platos de la mesa en `por_terminar` o `vacio`, y al menos uno en `por_terminar` | "🍽️ Mesa 3 está terminando. Ofrecé postre o café." | — | — |
+| `mesa_por_terminar` | `tableStatus()` de la mesa **pasa a** `por_terminar` (ver «Estado de mesa») | "🍽️ Mesa 3 está terminando. Ofrecé postre o café." | — | — |
 | `plato_vacio` | Un plato en `vacio` hace ≥ T1 | "🧹 Mesa 3: hay platos vacíos para retirar." | T1 = 60 s | 10 s |
-| `plato_lleno_mucho` | Un plato en `lleno` hace ≥ T2 desde `first_seen` | "❓ Mesa 3: un plato sigue lleno hace 12 min. Preguntá si está todo bien." | T2 = 10 min | 45 s |
+| `plato_lleno_mucho` | Un plato en `lleno` hace ≥ T2 desde `first_seen` **y** `people_present` no es `false` | "❓ Mesa 3: un plato sigue lleno hace 12 min. Preguntá si está todo bien." | T2 = 10 min | 45 s |
 | `bebida_vacia` | Una bebida en `vacia` hace ≥ T3 | "🥤 Mesa 3: bebida vacía, ofrecé otra." | T3 = 60 s | 10 s |
+
+## Umbrales y cadencia de lectura
+
+Las lecturas llegan cada 15–30 s (demo: 5–10 s). Como el suavizado exige 2 lecturas seguidas para aceptar un cambio de estado, el tiempo mínimo observable es ≈ 2 × cadencia. **Regla:** todo umbral de demo debe ser ≥ 2 × la cadencia configurada (con lecturas cada 5 s, T1 = T3 = 10 s es el mínimo viable). `config.ts` valida esto al arrancar y avisa si no se cumple.
+
+## `people_present`
+
+- Si `people_present = false` no se dispara `plato_lleno_mucho` (no tiene sentido preguntar si está todo bien a una mesa sin gente).
+- Si `people_present = false` y hay platos en `vacio`, `plato_vacio` sigue disparando (hay que retirar).
 
 ## Antispam
 
@@ -17,12 +26,15 @@ Viven en el backend (`web/lib/rules/`). Se evalúan cada vez que llega una obser
 
 ## Estado de mesa (para el dashboard)
 
-Derivado de sus platos:
-- sin ítems → `libre`
-- todos `vacio` → `terminada`
-- mayoría `por_terminar`/`vacio` → `por_terminar`
-- mayoría `lleno` → `servida`
-- resto → `comiendo`
+Función pura única `tableStatus(items)` en `web/lib/rules/`, usada por el motor de reglas **y** por `GET /api/tables`. Solo cuentan los **platos** (las bebidas no cambian el estado de la mesa). Se evalúa en este orden:
+
+1. sin platos → `libre`
+2. todos `vacio` → `terminada`
+3. ≥ 50 % de los platos en `por_terminar` o `vacio` → `por_terminar`
+4. ≥ 50 % de los platos en `lleno` → `servida`
+5. resto → `comiendo`
+
+Así el color de la mesa en el dashboard y la alerta `mesa_por_terminar` nunca se contradicen.
 
 ## Tests
 

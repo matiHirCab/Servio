@@ -8,6 +8,10 @@ Una cámara en el techo del restaurante detecta platos y bebidas en cada mesa, c
 
 Contexto: MVP de hackathon, 24 horas, equipo de 3 personas.
 
+## Estado del repo
+
+Hoy el repo tiene **solo documentación**. Las carpetas `vision/` y `web/` todavía no existen: se crean en la hora 1–6 del [plan](docs/context/08-plan-24h.md). Hasta entonces, "trabajar dentro de tu módulo" significa crear tu carpeta siguiendo [09-convenciones.md](docs/context/09-convenciones.md). Variables de entorno: ver [.env.example](.env.example).
+
 ## Mapa de contexto
 
 | Archivo | Leelo cuando… |
