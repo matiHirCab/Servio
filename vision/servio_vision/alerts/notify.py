@@ -9,6 +9,7 @@ El agrupado por mesa y guardar el `message_id` en el `Alert` son de `processor.p
 
 import logging
 import os
+import sys
 from collections.abc import Mapping
 from typing import Any, Protocol
 
@@ -111,12 +112,26 @@ class ConsoleNotifier:
 
     def send(self, text: str) -> int:
         self._last_id += 1
-        print(f"[telegram #{self._last_id}] {text}", flush=True)
+        _print(f"[telegram #{self._last_id}] {text}")
         return self._last_id
 
     def edit(self, message_id: int, text: str) -> bool:
-        print(f"[telegram editado #{message_id}] {text}", flush=True)
+        _print(f"[telegram editado #{message_id}] {text}")
         return True
+
+
+def _print(text: str) -> None:
+    """Imprime sin fallar: en Windows, con stdout redirigido (cp1252), los emojis
+    tiran `UnicodeEncodeError`; ahí salen como `?` en vez de cortar el aviso. Como
+    `send`/`edit`, nunca lanza: si tampoco así se puede imprimir, se loguea."""
+    try:
+        print(text, flush=True)
+    except UnicodeEncodeError:
+        try:
+            encoding = sys.stdout.encoding or "ascii"
+            print(text.encode(encoding, "replace").decode(encoding), flush=True)
+        except (UnicodeError, LookupError, OSError):
+            logger.warning("No se pudo imprimir el aviso en consola")
 
 
 def get_notifier(telegram: bool, env: Mapping[str, str] | None = None) -> Notifier:

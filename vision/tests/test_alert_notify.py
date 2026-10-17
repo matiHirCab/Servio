@@ -1,7 +1,9 @@
 """Tests del envío a Telegram (MAT-4), sin red: httpx.MockTransport."""
 
+import io
 import json
 import logging
+import sys
 
 import httpx
 import pytest
@@ -115,3 +117,32 @@ def test_console_notifier_prints_with_increasing_ids(capsys):
     out = capsys.readouterr().out
     assert "[telegram #1] uno" in out
     assert "[telegram editado #1] uno\n\n✅ ya resuelto" in out
+
+
+def test_console_notifier_survives_a_console_without_emojis(monkeypatch):
+    # Windows con stdout redirigido: cp1252 no tiene ❓ ni ✅.
+    raw = io.BytesIO()
+    monkeypatch.setattr(sys, "stdout", io.TextIOWrapper(raw, encoding="cp1252"))
+    console = ConsoleNotifier()
+    assert console.send("❓ Mesa 1: un plato sigue lleno hace 2 min.") == 1
+    assert console.edit(1, resolved_text("❓ Mesa 1"))
+    sys.stdout.flush()
+    out = raw.getvalue().decode("cp1252")
+    assert "[telegram #1] ? Mesa 1: un plato sigue lleno" in out
+    assert "? ya resuelto" in out
+
+
+def test_console_notifier_never_raises_even_if_the_fallback_fails(monkeypatch, caplog):
+    # stdout que dice "utf-8" pero no acepta nada fuera de ASCII (wrapper raro).
+    class LyingStdout(io.StringIO):
+        encoding = "utf-8"
+
+        def write(self, text):
+            text.encode("ascii")
+            return super().write(text)
+
+    monkeypatch.setattr(sys, "stdout", LyingStdout())
+    console = ConsoleNotifier()
+    assert console.send("❓ Mesa 1") == 1
+    assert console.edit(1, "✅")
+    assert "No se pudo imprimir" in caplog.text
