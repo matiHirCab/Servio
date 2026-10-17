@@ -2,7 +2,8 @@
 
 `AlertProcessor.process(obs)` actualiza el estado de la mesa (`state.py`), corre el
 motor (`engine.py`) y manda, recuerda o edita con el notifier (`notify.py`). Cada
-observación y cada aviso quedan en el log `out/eventos.jsonl` (03-contratos.md, «Log»).
+observación y cada aviso quedan en el log `out/eventos.jsonl` (03-contratos.md, «Log»),
+después de una línea `run_started` con los umbrales de la corrida.
 
 Agrupado por mesa: los avisos que se abren en la misma evaluación van en un solo
 mensaje, y lo mismo los recordatorios. Al cerrar se edita el mensaje en el que se abrió
@@ -10,10 +11,11 @@ el aviso: si todos sus avisos están cerrados, con "✅ ya resuelto" al final; s
 las líneas cerradas llevan "✅".
 """
 
+import dataclasses
 import json
 import logging
 from collections.abc import Sequence
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -51,6 +53,15 @@ class AlertProcessor:
         self.config = config
         self.notifier = notifier
         self.log = EventLog(log_path)
+        # Marca dónde empieza la corrida (el log se agrega) y con qué umbrales: replay.py
+        # corta el archivo acá y reproduce con la misma config.
+        self.log.write(
+            {
+                "event": "run_started",
+                "started_at": _iso(datetime.now(UTC)),
+                "config": dataclasses.asdict(config),
+            }
+        )
         self.tables: dict[str, TableState] = {}
         self.open_alerts: dict[str, Alert] = {}
         # message_id → avisos de ese mensaje (en orden) y cuáles ya se cerraron.

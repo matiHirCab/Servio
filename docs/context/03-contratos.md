@@ -12,7 +12,7 @@ AlertStatus = Literal["abierta", "resuelta"]
 ```
 
 Estado según la comida que queda (`fill_ratio`, de 0 a 1), en `servio_vision/schemas.py`:
-`lleno` > 0,80 · `comiendo` 0,30–0,80 · `por_terminar` 0,05–0,30 · `vacio` < 0,05.
+`lleno` ≥ 0,75 · `comiendo` 0,30–0,75 · `por_terminar` 0,05–0,30 · `vacio` < 0,05.
 
 ## Zonas de mesas — `vision/config/zones.json`
 
@@ -116,6 +116,7 @@ Los modelos de la observación de mesa (`TableObservation`, `ObservedPlate`) y d
 
 Una línea JSON por evento, en el orden en que pasan. Lo escribe `alerts.process()` (`alerts/processor.py`). El archivo se **agrega** (no se pisa): varias corridas quedan una detrás de otra; borralo antes de la corrida de la demo si querés una sola.
 
+- Inicio de corrida: `{"event": "run_started", "started_at": ..., "config": {"interval": 30, "t1": 60, "t2": 600, "reminder": 180, "max_reminders": 2}}`, la primera línea que escribe cada corrida (al hacer `alerts.configure()`), con la hora real y los umbrales resueltos (`AlertConfig`). `replay.py` corta el archivo acá y reproduce con esos umbrales.
 - Observación: `{"event": "observation", ...}` con los campos de la observación de mesa. Sin `event`, la línea valida como `TableObservation`. Se escribe antes de aplicarla, así queda aunque `alerts` la rechace (por ejemplo, un `ts` que va hacia atrás).
 - Aviso: `{"event": "alert_opened" | "alert_reminder" | "alert_resolved", "ts": ..., ...}`: `ts` de la observación que lo produjo, los campos del `Alert` (ya con `status`, `reminders_sent` y `telegram_message_id` de ese momento) y `text`, lo que se mandó (abrir, recordar) o cómo quedó el mensaje editado (cerrar); `null` al cerrar un aviso cuyo mensaje no se pudo mandar (no hubo nada que editar). Cada aviso se escribe apenas se manda o edita.
 
@@ -123,4 +124,4 @@ Una línea JSON por evento, en el orden en que pasan. Lo escribe `alerts.process
 {"event": "alert_opened", "ts": "2026-10-17T20:07:00Z", "id": "T1-plato_vacio-1792267620", "table_id": "T1", "type": "plato_vacio", "message": "🧹 Mesa 1: hay platos vacíos para retirar.", "created_at": "2026-10-17T20:07:00Z", "status": "abierta", "reminders_sent": 0, "telegram_message_id": 2, "text": "🧹 Mesa 1: hay platos vacíos para retirar."}
 ```
 
-Sirve para revisar una corrida, para reproducirla con `vision/tools/replay.py` y para el resumen de la demo.
+Sirve para revisar una corrida, para reproducirla con `vision/tools/replay.py` (toma las líneas `run_started` y `observation`, corta el archivo en corridas y por defecto reproduce la última con sus umbrales; su propio log va a `vision/out/replay.jsonl`) y para el resumen de la demo.
