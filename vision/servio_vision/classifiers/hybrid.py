@@ -79,15 +79,27 @@ class HybridClassifier:
                 logger.warning("Mesa %s: Claude falló y YOLO no da estado", table_id)
                 return None
             return TableReport(items=items, notes="sin Claude: estado de YOLO")
-        items = [
-            Item(
-                id=p.id,
-                fill_ratio=est.fill_ratio if est.visible else None,
-                confidence=est.confidence,
-                visible=est.visible,
-                position=position_label(p.bbox),
-                bbox=p.bbox,
+        last = {i.id: i for i in previous_items if i.visible}
+        items = []
+        for p, est in zip(plates, report.plates):
+            if est.visible:
+                reading = {"fill_ratio": est.fill_ratio, "confidence": est.confidence}
+            elif p.id in last:
+                # tapado ahora pero ya lo vimos: conserva su última lectura
+                prev = last[p.id]
+                reading = {
+                    "fill_ratio": prev.fill_ratio,
+                    "state": prev.state,
+                    "confidence": prev.confidence,
+                }
+            else:
+                reading = {"visible": False, "confidence": est.confidence}
+            items.append(
+                Item(
+                    id=p.id,
+                    position=position_label(p.bbox),
+                    bbox=p.bbox,
+                    **reading,
+                )
             )
-            for p, est in zip(plates, report.plates)
-        ]
         return TableReport(items=items, people_present=report.people_present)

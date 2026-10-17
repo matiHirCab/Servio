@@ -35,6 +35,7 @@ logger = logging.getLogger(__name__)
 DEFAULT_MODELS = {"cli": "haiku", "anthropic": "claude-haiku-5-5"}
 # `claude -p` tarda ~6-8 s con 8 platos (arranque del CLI incluido).
 DEFAULT_TIMEOUTS = {"cli": 15.0, "anthropic": 10.0}
+RETRY_WAIT_S = 2.0
 ATTEMPTS = 2  # un intento + un reintento
 
 
@@ -141,6 +142,9 @@ def _call_cli(content: list, model: str, timeout_s: float) -> tuple[dict, dict]:
             encoding="utf-8",
             timeout=timeout_s,
             cwd=tempfile.gettempdir(),  # que no cargue el CLAUDE.md del repo
+            # sin esto, claude se actualiza solo en medio de la corrida y el
+            # siguiente llamado no encuentra el ejecutable
+            env={**os.environ, "DISABLE_AUTOUPDATER": "1"},
         )
     except subprocess.TimeoutExpired as e:
         raise ClaudeCallError(f"claude -p tardó más de {timeout_s} s") from e
@@ -152,12 +156,19 @@ def _call_cli(content: list, model: str, timeout_s: float) -> tuple[dict, dict]:
             continue
         if event.get("type") == "result":
             result = event
-    if out.returncode != 0 or result is None or result.get("is_error"):
+    data = (result or {}).get("structured_output")
+    if data is None and result is not None:
+        # sin --json-schema o versión vieja: el JSON viene como texto. Si está,
+        # sirve aunque claude haya salido con error después de responder.
+        try:
+            data = json_from_text(result.get("result") or "")
+        except ClaudeCallError:
+            data = None
+    if data is None:
         detail = (result or {}).get("result") or out.stderr or out.stdout
-        raise ClaudeCallError(f"claude -p falló: {str(detail)[:500]}")
-    data = result.get("structured_output")
-    if data is None:  # sin --json-schema o versión vieja: el JSON viene como texto
-        data = json_from_text(result.get("result") or "")
+        raise ClaudeCallError(
+            f"claude -p falló (código {out.returncode}): {str(detail)[:500]}"
+        )
     usage = result.get("usage") or {}
     return data, {
         "input_tokens": usage.get("input_tokens"),
@@ -252,6 +263,8 @@ def estimate_plates(
                 ATTEMPTS,
                 e,
             )
+            if attempt < ATTEMPTS:
+                time.sleep(RETRY_WAIT_S)
             continue
         logger.info(
             "Claude mesa=%s platos=%d proveedor=%s modelo=%s latencia=%.2fs uso=%s",

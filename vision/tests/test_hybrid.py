@@ -65,6 +65,27 @@ def test_hybrid_uses_claude_fill_ratio(claude):
     assert len(claude.calls[0]) == 2
 
 
+def test_hybrid_hidden_plate_keeps_its_last_reading(claude):
+    """Un plato que ya se vio nunca queda «tapado»: conserva su última lectura."""
+    det = FakeDetector([Detection((20, 20, 100, 100), 0.9, "plate")])
+    clf = HybridClassifier(detector=det)
+    claude.answer = PlatesReport(
+        plates=[PlateEstimate(index=1, fill_ratio=0.9, confidence=0.8, visible=True)]
+    )
+    first = clf.classify(_jpeg(), "T1", [])
+    claude.answer = PlatesReport(
+        plates=[PlateEstimate(index=1, fill_ratio=0.2, confidence=0.3, visible=False)]
+    )
+    second = clf.classify(_jpeg(), "T1", first.items)
+    item = second.items[0]
+    assert (item.id, item.visible, item.state, item.fill_ratio) == (
+        "p1",
+        True,
+        "lleno",
+        0.9,
+    )
+
+
 def test_hybrid_hidden_plate_has_no_state(claude):
     claude.answer = PlatesReport(
         plates=[PlateEstimate(index=1, fill_ratio=0.9, confidence=0.3, visible=False)]

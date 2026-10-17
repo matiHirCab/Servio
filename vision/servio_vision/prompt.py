@@ -9,7 +9,8 @@ Las siguientes son recortes de cada plato de esa mesa, numerados desde 1 en el m
 Para cada plato estimá:
 - fill_ratio: cuánta comida queda, de 0 (vacío o solo restos) a 1 (recién servido, intacto).
 - confidence: de 0 a 1.
-- visible: false si una mano, un brazo, un cubierto grande o una persona tapa el plato.
+- visible: false solo si no se ve la comida del plato (una persona o un brazo tapa más de la mitad).
+  Cubiertos, servilletas o una mano en el borde no cuentan: estimá igual con lo que se ve.
 Indicá también si hay personas sentadas en la mesa (people_present).
 Respondé solo con el JSON pedido, un elemento por plato."""
 

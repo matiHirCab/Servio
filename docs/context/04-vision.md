@@ -26,7 +26,8 @@ Las siguientes son recortes de cada plato de esa mesa, numerados desde 1 en el m
 Para cada plato estimá:
 - fill_ratio: cuánta comida queda, de 0 (vacío o solo restos) a 1 (recién servido, intacto).
 - confidence: de 0 a 1.
-- visible: false si una mano, un brazo, un cubierto grande o una persona tapa el plato.
+- visible: false solo si no se ve la comida del plato (una persona o un brazo tapa más de la mitad).
+  Cubiertos, servilletas o una mano en el borde no cuentan: estimá igual con lo que se ve.
 Indicá también si hay personas sentadas en la mesa (people_present).
 Respondé SOLO con la herramienta report_plates.
 ```
@@ -56,7 +57,7 @@ Herramienta `report_plates`:
 | **Costo** | Una llamada por mesa, solo si el recorte cambió; recortes chicos; Haiku. |
 | **Límites de uso de la suscripción** (`claude -p`) | Una llamada por mesa y solo si el recorte cambió; usar la cuenta Max para la demo; API de Anthropic como respaldo. |
 | **Sin internet** | `--classifier yolo` (solo YOLO) o reproducir un log con `tools/replay.py`. |
-| **Manos que tapan** | `visible: false` → no cuenta en el suavizado. |
+| **Manos que tapan** | Claude marca `visible: false` solo si no ve la comida; el plato conserva su última lectura (`hybrid`). |
 
 ## Cadencias
 
@@ -91,7 +92,7 @@ frame (1 s) → recorte por mesa → ¿cambió? → classify() → suavizado →
 ### Suavizado
 
 Por cada plato:
-- Un plato con `visible: false` no cuenta como lectura.
+- Un plato con `visible: false` no cuenta como lectura: el `hybrid` ya devuelve su última lectura visible, así que un plato que se vio nunca queda «tapado».
 - Cambio a un estado vecino: se acepta si aparece en **2 lecturas seguidas**.
 - Retroceso (`vacio → comiendo`) o salto de más de un estado (`lleno → vacio`): se acepta con **3 lecturas seguidas** con `confidence ≥ 0.8`.
 - Ausente en 1 lectura: se mantiene. Ausente en 2 seguidas: retirado (deja de venir en la observación).

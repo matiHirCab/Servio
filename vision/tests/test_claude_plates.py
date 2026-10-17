@@ -33,6 +33,7 @@ def backend(monkeypatch):
         return answer, {"input_tokens": 10, "output_tokens": 5}
 
     monkeypatch.setitem(claude_plates._BACKENDS, "cli", fake)
+    monkeypatch.setattr(claude_plates, "RETRY_WAIT_S", 0)
     monkeypatch.delenv("CLAUDE_PROVIDER", raising=False)
     monkeypatch.delenv("CLAUDE_MODEL", raising=False)
     monkeypatch.delenv("CLAUDE_TIMEOUT_S", raising=False)
@@ -182,3 +183,29 @@ def test_cli_on_windows_cmd_skips_schema_and_parses_text(monkeypatch):
     monkeypatch.setattr(claude_plates.subprocess, "run", fake_run)
     data, _ = claude_plates._call_cli([{"type": "text", "text": "x"}], "haiku", 10)
     assert data == _answer(1)
+
+
+def test_cli_uses_the_answer_even_if_claude_exits_with_error(monkeypatch):
+    """Si claude respondió el JSON y después salió con error, la respuesta sirve."""
+    result = {"type": "result", "is_error": True, "result": json.dumps(_answer(1))}
+
+    def fake_run(args, **kwargs):
+        assert kwargs["env"]["DISABLE_AUTOUPDATER"] == "1"
+        return subprocess.CompletedProcess(
+            args, 1, stdout=json.dumps(result), stderr=""
+        )
+
+    monkeypatch.setattr(claude_plates, "_find_cli", lambda: "claude")
+    monkeypatch.setattr(claude_plates.subprocess, "run", fake_run)
+    data, _ = claude_plates._call_cli(["x"], "haiku", 10)
+    assert data == _answer(1)
+
+
+def test_cli_error_without_json_is_a_call_error(monkeypatch):
+    def fake_run(args, **kwargs):
+        return subprocess.CompletedProcess(args, 1, stdout="", stderr="se cortó")
+
+    monkeypatch.setattr(claude_plates, "_find_cli", lambda: "claude")
+    monkeypatch.setattr(claude_plates.subprocess, "run", fake_run)
+    with pytest.raises(ClaudeCallError, match="se cortó"):
+        claude_plates._call_cli(["x"], "haiku", 10)
