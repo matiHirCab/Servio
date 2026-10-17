@@ -16,6 +16,15 @@ python main.py --source data/videos/demo.mp4 --classifier fake --no-telegram
 - `--no-telegram`: imprime los avisos en vez de mandarlos.
 - Cada corrida deja `out/eventos.jsonl`; se puede reproducir (plan B de la demo) con `python tools/replay.py --file out/eventos.jsonl --speed 10` (`--no-telegram` para imprimir). Como el log se agrega, el replay lo corta en corridas (`run_started`) y reproduce la última con los umbrales con que se hizo (`--run N` para otra, `--all` para todas). También acepta un fixture: `--file ../fixtures/observations/mesa_completa.jsonl`, con umbrales de producción (`--demo` para los de demo). Escribe su propio log en `out/replay.jsonl` (se pisa en cada replay).
 
+## Tests
+
+```bash
+pytest -q                              # sin Telegram: los avisos salen por consola
+SERVIO_TEST_TELEGRAM=1 pytest -q       # con el Telegram del .env: manda mensajes reales al grupo
+```
+
+Los tests nunca escriben en el `out/eventos.jsonl` real: cada uno usa una carpeta temporal (`tests/conftest.py`).
+
 ## Vista de la demo (pantalla dividida)
 
 - **Izquierda:** `tools/vista_demo.py`, con los mismos flags que `main.py`. Muestra el video con cada mesa coloreada por estado y la caja de cada plato.
