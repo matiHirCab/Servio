@@ -5,10 +5,9 @@ Todo lo que cruza entre módulos está definido acá. Si lo cambiás, cambialo a
 ## Enums
 
 ```ts
-type ItemKind   = "plate" | "drink";
+type ItemKind   = "plate";            // solo platos de comida: bebidas fuera de alcance
 type PlateState = "lleno" | "comiendo" | "por_terminar" | "vacio";
-type DrinkState = "llena" | "media" | "vacia";
-type AlertType  = "mesa_por_terminar" | "plato_vacio" | "plato_lleno_mucho" | "bebida_vacia";
+type AlertType  = "mesa_por_terminar" | "plato_vacio" | "plato_lleno_mucho";
 type AlertStatus = "abierta" | "en_camino" | "resuelta" | "expirada";
 ```
 
@@ -66,8 +65,7 @@ Header: `Authorization: Bearer ${INGEST_TOKEN}`
       "table_id": "T1",
       "people_present": true,
       "items": [
-        { "track_id": "T1-p3", "kind": "plate", "state": "comiendo",     "confidence": 0.82, "fill_ratio": 0.55, "position": "arriba-izquierda" },
-        { "track_id": "T1-d1", "kind": "drink", "state": "vacia",        "confidence": 0.71, "position": "centro" }
+        { "track_id": "T1-p3", "kind": "plate", "state": "comiendo",     "confidence": 0.82, "fill_ratio": 0.55, "position": "arriba-izquierda" }
       ]
     },
     { "table_id": "T2", "people_present": false, "items": [] }
@@ -143,7 +141,7 @@ Las dos responden `200` con la alerta actualizada y disparan `Notifier.update` p
 Vive en `web/lib/notify/types.ts`. P2 la llama; P1 implementa `TelegramNotifier` en `web/lib/notify/telegram.ts`.
 
 ```ts
-interface SentMessage { channel: "telegram" | "whatsapp"; chat_id: string; message_id: string }
+interface SentMessage { channel: "telegram"; chat_id: string; message_id: string }
 
 interface Notifier {
   send(alert: Alert, waiter: Waiter): Promise<SentMessage>;
@@ -166,6 +164,6 @@ table_waiters (table_id, waiter_id)                      -- una mesa puede tener
 items         (track_id PK, table_id, kind, state, fill_ratio, first_seen, state_since, last_seen, removed_at)
 observations  (id, ts, table_id, payload jsonb)          -- crudo, para métricas y debug
 alerts        (id PK, table_id, type, message, status, created_at, acked_by, acked_at, resolved_at)
-waiters       (id, name, telegram_chat_id, whatsapp_number)
+waiters       (id, name, telegram_chat_id)
 alert_messages (alert_id, waiter_id, channel, chat_id, message_id, sent_at)   -- un mensaje por mozo; permite editarlo después
 ```

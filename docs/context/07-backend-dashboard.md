@@ -51,6 +51,6 @@ web/
     db/schema.ts
     rules/{config,engine}.ts
     rules/engine.test.ts
-    notify/{telegram,whatsapp}.ts
+    notify/{types,telegram}.ts
   scripts/simulate.ts
 ```

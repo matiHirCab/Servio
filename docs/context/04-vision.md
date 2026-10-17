@@ -57,15 +57,14 @@ frame (cada 1 s) → recortar cada mesa por su zona → ¿cambió? → (cada 15�
 
 ```
 Sos el sistema de visión de un restaurante. La imagen es una vista cenital de la mesa {table_id}.
-Identificá cada plato y cada bebida que esté sobre la mesa.
+Identificá cada plato de comida que esté sobre la mesa. Ignorá vasos, tazas, botellas y cubiertos.
 Para cada plato devolvé un estado:
 - "lleno": recién servido, casi intacto (más de 75 % de la comida)
 - "comiendo": entre 30 % y 75 %
 - "por_terminar": menos de 30 %
 - "vacio": sin comida o solo restos
-Para cada bebida: "llena", "media" o "vacia".
 Estado anterior de esta mesa: {previous_items_json}
-Mantené el mismo id para el mismo objeto (por posición). Usá ids nuevos (p3, d2…) solo para objetos nuevos.
+Mantené el mismo id para el mismo objeto (por posición). Usá ids nuevos (p3, p4…) solo para objetos nuevos.
 No incluyas objetos que ya no están.
 Respondé SOLO con la herramienta report_table.
 ```

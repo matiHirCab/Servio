@@ -4,7 +4,7 @@ Guía para agentes de IA (Claude Code, Kiro, etc.) y para el equipo. Leé este a
 
 ## Qué es Servio (en una línea)
 
-Una cámara en el techo del restaurante detecta platos y bebidas en cada mesa, clasifica su estado (`lleno`, `comiendo`, `por_terminar`, `vacio`) y le manda un aviso al mozo por Telegram/WhatsApp cuando tiene que ir a esa mesa. Además genera métricas para el negocio.
+Una cámara en el techo del restaurante detecta los platos de comida en cada mesa, clasifica su estado (`lleno`, `comiendo`, `por_terminar`, `vacio`) y le manda un aviso al mozo por Telegram cuando tiene que ir a esa mesa. Además genera métricas para el negocio.
 
 Contexto: MVP de hackathon, 24 horas, equipo de 3 personas.
 
@@ -21,7 +21,7 @@ Hoy el repo tiene **solo documentación**. Las carpetas `vision/` y `web/` todav
 | [docs/context/03-contratos.md](docs/context/03-contratos.md) | Vas a producir o consumir datos entre módulos. **Es la fuente de verdad** de esquemas, eventos y endpoints. |
 | [docs/context/04-vision.md](docs/context/04-vision.md) | Trabajás en la cámara, detección, clasificación de estado o zonas de mesas. |
 | [docs/context/05-reglas-alertas.md](docs/context/05-reglas-alertas.md) | Trabajás en la lógica que decide cuándo avisar (umbrales, suavizado, cooldowns). |
-| [docs/context/06-notificaciones.md](docs/context/06-notificaciones.md) | Trabajás en el bot de Telegram o WhatsApp. |
+| [docs/context/06-notificaciones.md](docs/context/06-notificaciones.md) | Trabajás en el bot de Telegram. |
 | [docs/context/07-backend-dashboard.md](docs/context/07-backend-dashboard.md) | Trabajás en la API, la base de datos o el dashboard web y sus métricas. |
 | [docs/context/08-plan-24h.md](docs/context/08-plan-24h.md) | Querés saber qué hacer ahora, quién hace qué y con qué herramienta. **Guía paso a paso.** |
 | [docs/context/09-convenciones.md](docs/context/09-convenciones.md) | Antes de commitear: estructura del repo, ramas, estilo, variables de entorno. |

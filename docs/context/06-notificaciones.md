@@ -1,6 +1,6 @@
 # 06 — Notificaciones
 
-## MVP: Telegram (gratis, inmediato, con botones)
+## Telegram (único canal: gratis, inmediato, con botones)
 
 Dueños: **P1** crea el bot y programa `TelegramNotifier` (`web/lib/notify/telegram.ts`); **P2** programa el webhook (`web/app/api/telegram/webhook/route.ts`) y lo registra. La interfaz entre los dos es `Notifier` en [03-contratos.md](03-contratos.md).
 
@@ -24,13 +24,9 @@ Dueños: **P1** crea el bot y programa `TelegramNotifier` (`web/lib/notify/teleg
 
 Sin librerías pesadas: `fetch` directo a `https://api.telegram.org/bot<token>/<método>` alcanza. (O `grammy` si prefieren.)
 
-## Extra: WhatsApp
+## Fuera de alcance: WhatsApp
 
-- Más fricción: **Twilio WhatsApp Sandbox** (cada número de prueba tiene que mandar "join <código>" al sandbox). Sirve para la demo, no para producción.
-- Producción real: WhatsApp Business Cloud API de Meta (requiere verificación del negocio y plantillas aprobadas; no entra en 24 h). Mencionarlo en el roadmap.
-- Implementar detrás de una interfaz común:
-  la interfaz `Notifier` de [03-contratos.md](03-contratos.md) (`send` + `update`).
-  `TelegramNotifier` primero, `TwilioWhatsAppNotifier` si sobra tiempo.
+No se implementa en el MVP. Queda para el roadmap del pitch (WhatsApp Business Cloud API de Meta). La interfaz `Notifier` de [03-contratos.md](03-contratos.md) permite sumar otro canal más adelante sin tocar el motor de reglas.
 
 ## Variables de entorno
 
@@ -38,7 +34,4 @@ Sin librerías pesadas: `fetch` directo a `https://api.telegram.org/bot<token>/<
 TELEGRAM_BOT_TOKEN=
 TELEGRAM_WEBHOOK_SECRET=
 TELEGRAM_GROUP_CHAT_ID=    # grupo "Mozos" (pruebas y demo)
-TWILIO_ACCOUNT_SID=        # opcional
-TWILIO_AUTH_TOKEN=         # opcional
-TWILIO_WHATSAPP_FROM=whatsapp:+14155238886
 ```

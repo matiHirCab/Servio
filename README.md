@@ -1,6 +1,6 @@
 # Servio
 
-Cámara cenital + visión computacional para restaurantes: detecta el estado de platos y bebidas en cada mesa y avisa al mozo por Telegram/WhatsApp cuándo ir. Incluye dashboard con métricas.
+Cámara cenital + visión computacional para restaurantes: detecta el estado de los platos de comida en cada mesa y avisa al mozo por Telegram cuándo ir. Incluye dashboard con métricas.
 
 MVP de hackathon (24 h).
 

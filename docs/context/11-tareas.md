@@ -57,7 +57,7 @@ fixtures/
 ```
 
 Reglas del `.jsonl`: **una observación completa por línea**, exactamente con la forma de `POST /api/observations` (`schema_version: 1`, `camera_id`, `ts`, `tables[]` con `people_present` e `items[]`). Timestamps cada 10 s desde `2026-10-17T20:00:00Z`.
-- `mesa_completa.jsonl` (T1): mesa vacía sin gente → llega gente → 2 platos `lleno` → `comiendo` → `por_terminar` → `vacio` → se retiran → 3 min sin platos con gente → plato nuevo `lleno`. Una bebida pasa a `vacia` en el medio.
+- `mesa_completa.jsonl` (T1): mesa vacía sin gente → llega gente → 2 platos `lleno` → `comiendo` → `por_terminar` → `vacio` → se retiran → 3 min sin platos con gente → plato nuevo `lleno`.
 - `plato_lleno_mucho.jsonl` (T2): un plato `lleno` 12 min con gente; después `people_present: false`.
 - `id_cambiado.jsonl` (T1): un plato `comiendo` en `arriba-izquierda` que en una lectura pasa de `p1` a `p4` en la misma posición.
 - `expected/mesa_completa.alerts.json`: `[{ "at_seconds": 130, "type": "mesa_por_terminar", "table_id": "T1" }, …]` con umbrales de **producción**.
@@ -176,7 +176,7 @@ Orden: P2-1 → P2-2 → P2-3 → P2-4 → P2-5 → P2-6 (hora 1–6) · P2-7 �
 
 ### P2-2 · `tableStatus()`
 **P2 · 45 min · hora 1–6 · depende de: P2-1, T0-2**
-`web/lib/rules/tableStatus.ts`, función pura según `05-reglas-alertas.md` (solo platos, orden 1–5). Tests en `web/lib/rules/tableStatus.test.ts` con casos borde (sin platos, todo vacío, empate 50 %, solo bebidas).
+`web/lib/rules/tableStatus.ts`, función pura según `05-reglas-alertas.md` (solo platos, orden 1–5). Tests en `web/lib/rules/tableStatus.test.ts` con casos borde (sin platos, todo vacío, empate 50 %).
 
 **Hecho cuando:** tests de Vitest verdes.
 
@@ -339,7 +339,7 @@ SWR a `/api/tables`, `/api/alerts`, `/api/metrics` cada 2 s, con `NEXT_PUBLIC_US
 
 ### P3-11 · Mesa física
 **P3 · 1 h · hora 6–12 · cualquier hueco**
-Platos blancos, vasos, comida; celular arriba a ~1,5 m con vista cenital, luz pareja sin reflejos.
+Platos blancos con comida (sin vasos ni botellas en la mesa); celular arriba a ~1,5 m con vista cenital, luz pareja sin reflejos.
 
 **Hecho cuando:** `python -m servio_vision.capture --source <url>` muestra la mesa entera, enfocada y sin reflejos.
 
@@ -351,7 +351,7 @@ Correr `vision/tools/draw_zones.py` sobre un frame de la cámara de la mesa.
 
 ### P3-13 · Grabar el video de prueba
 **P3 · 30 min · hora 6–12 · depende de: P3-11**
-5–10 min con la cámara fija: plato lleno → comen de a poco → mano tapando → retiran → pausa con gente → plato nuevo. Otro corto con 2–3 platos y una bebida. Guardar en `vision/data/videos/` (ignorado) y compartirlos por la carpeta del equipo.
+5–10 min con la cámara fija: plato lleno → comen de a poco → mano tapando → retiran → pausa con gente → plato nuevo. Otro corto con 2–3 platos. Guardar en `vision/data/videos/` (ignorado) y compartirlos por la carpeta del equipo.
 
 **Hecho cuando:** P1 tiene los dos videos y los puede abrir con `--source`.
 

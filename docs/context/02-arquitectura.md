@@ -14,10 +14,10 @@
  │ - suavizado              │                                 │ - webhook Telegram        │
  └──────────────────────────┘                                 └──────────┬────────────────┘
                                                                          │
-                                         ┌───────────────────────────────┼──────────────────┐
-                                         ▼                               ▼                  ▼
-                                  [Postgres (Neon /             [Telegram Bot API]   [Twilio WhatsApp]
-                                   Vercel Postgres)]              → celular mozo      (extra)
+                                         ┌───────────────────────────────┤
+                                         ▼                               ▼
+                                  [Postgres (Neon /             [Telegram Bot API]
+                                   Vercel Postgres)]              → celular mozo
 ```
 
 ## Componentes
@@ -28,7 +28,7 @@
 | API + reglas + bot | `web/app/api/` | Next.js (App Router, TypeScript) | Vercel |
 | Dashboard | `web/app/` | Next.js + Tailwind + shadcn/ui, polling o SSE | Vercel |
 | Base de datos | — | Postgres (Neon desde el marketplace de Vercel) + Drizzle o Prisma | Nube |
-| Notificaciones | `web/lib/notify/` | Telegram Bot API (MVP), Twilio WhatsApp (extra) | Vercel |
+| Notificaciones | `web/lib/notify/` | Telegram Bot API | Vercel |
 
 ## Por qué así
 
@@ -41,7 +41,7 @@
 ## Flujo de datos
 
 1. `vision/` lee un frame cada ~1 s.
-2. Recorta cada mesa por su zona; si el recorte cambió (y cada 15–30 s), se lo manda a Claude, que devuelve los platos/bebidas con su estado en JSON. Se suaviza.
+2. Recorta cada mesa por su zona; si el recorte cambió (y cada 15–30 s), se lo manda a Claude, que devuelve los platos con su estado en JSON. Se suaviza.
 3. Después de cada lectura manda una **observación** por mesa: lista de ítems con id de seguimiento, tipo, estado y confianza.
 4. El backend guarda la observación, **reconcilia ids** (un ítem que cambia de id en la misma posición sigue siendo el mismo; ver [03-contratos.md](03-contratos.md)), actualiza el estado de cada ítem (`first_seen`, `state_since`) y corre las reglas.
 5. Si una regla dispara (y no está en cooldown) crea una **alerta** y la manda por Telegram.

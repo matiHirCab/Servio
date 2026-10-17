@@ -52,7 +52,7 @@ La 3.ª suscripción Pro queda de **reserva**: cuando alguien llega al límite d
 ## Hora 12–16 · Precisión y robustez (y dormir por turnos)
 
 - **P1:** ajuste fino del prompt sobre el video de nuestra mesa (P1-8). Si YOLO ganó y se implementó, validarlo en el pipeline.
-- **P2:** expiración y agrupado de alertas probados con el simulador, métricas afinadas. WhatsApp con Twilio sandbox solo si todo lo demás está.
+- **P2:** expiración y agrupado de alertas probados con el simulador, métricas afinadas.
 - **P3:** KPIs y gráficos, pulir UI, ajustar con P1 el umbral del detector de cambio y la cadencia demo.
 - Turnos de descanso de 2–3 h: que nunca duerman a la vez P2 y quien tenga la visión corriendo (P1 o P3).
 
