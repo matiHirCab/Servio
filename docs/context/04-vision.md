@@ -1,81 +1,112 @@
-# 04 — Visión computacional
+# 04 — Visión (solo Claude multimodal)
 
-## Setup de cámara (desde el techo)
+Decisión del equipo: **no usamos YOLO ni modelos propios**. Toda la visión la hace Claude (multimodal) vía AWS Bedrock (créditos) o la API de Anthropic. La parte en Python solo captura, recorta y arma el pedido.
 
-- Vista **cenital** (mirando recto hacia abajo): los platos se ven como círculos/elipses y casi no hay oclusión entre mesas. Esto simplifica todo.
-- Para la demo: celular o webcam en un trípode/brazo a ~1,5–2 m arriba de una mesa armada. Celular como cámara IP (app tipo "IP Webcam" / DroidCam) → OpenCV lee la URL.
-- **Grabar videos de prueba desde la hora 1** (plato lleno → comiendo → vacío). Sirven para desarrollar sin la mesa armada y como respaldo en la demo si falla la cámara en vivo.
-- Iluminación pareja; evitar reflejos fuertes sobre platos blancos.
+## Por qué
+
+- Cero entrenamiento, cero dataset: en 2 horas hay clasificación funcionando.
+- Claude entiende "plato a medio comer" sin que le enseñemos; con YOLO había que entrenar un clasificador igual.
+- La cámara es fija y cenital, las mesas no se mueven: no necesitamos detección ni tracking en tiempo real. Un estado cada 15–30 s por mesa alcanza (un plato no pasa de lleno a vacío en segundos).
+
+## Trade-offs a tener en cuenta
+
+| Riesgo | Mitigación |
+|---|---|
+| **Latencia** (1–3 s por llamada) | No importa: muestreamos cada 15–30 s. El loop de cámara no espera la respuesta (llamadas asíncronas). |
+| **Costo por llamada** | Mandar recortes chicos por mesa (~512 px de lado), no el frame entero. Modelo Haiku (el más reciente en Bedrock). Solo llamar si el recorte **cambió** (diferencia de píxeles contra el último enviado). Ver cuenta abajo. |
+| **Rate limits de Bedrock** | Pedir aumento de cuota el primer día. Agrupar varias mesas en una sola llamada (varias imágenes en un mensaje). |
+| **Identidad de cada plato** entre llamadas | Claude no da ids estables. Le pasamos el estado anterior de la mesa en el prompt y le pedimos que mantenga los ids (`p1`, `p2`…) según la posición. Ver prompt. |
+| **Respuestas inconsistentes** | Salida JSON forzada (tool use / structured output), `temperature: 0`, y suavizado en el backend (ver abajo). |
+| **Depende de internet** | Plan B en la demo: video grabado + respuestas cacheadas, o el simulador. |
+
+Cuenta rápida de costo: con 4 mesas, una llamada cada 20 s solo si hubo cambio, son unas pocas miles de llamadas por día de servicio. Calcular el número real con los precios vigentes de Bedrock para el modelo elegido el día 1 y anotarlo acá; para la hackathon los créditos de AWS sobran.
+
+## Setup de cámara
+
+- Vista **cenital** (mirando recto hacia abajo).
+- Demo: celular o webcam en trípode/brazo a ~1,5–2 m arriba de una mesa armada. Celular como cámara IP (IP Webcam / DroidCam) → OpenCV lee la URL.
+- **Grabar videos de prueba desde la hora 1** (plato lleno → comiendo → vacío, con manos tapando). Sirven para desarrollar y de respaldo en la demo.
+- Luz pareja, sin reflejos fuertes.
 
 ## Pipeline
 
 ```
-frame → detección (plato/vaso) → tracking → asignar a mesa → recorte → estado → suavizado → JSON
+frame (cada 1 s) → recortar cada mesa por su zona → ¿cambió? → (cada 15–30 s) Claude → JSON → suavizar → POST al backend
 ```
 
-### 1. Detección
+1. **Zonas**: polígono/rectángulo por mesa en `vision/config/zones.json` (ver [03-contratos.md](03-contratos.md)), dibujado una vez con `tools/draw_zones.py`.
+2. **Recorte**: `cv2` recorta el rectángulo de la mesa y lo achica a ~512 px de lado, JPEG calidad 80.
+3. **Detector de cambio** (para ahorrar llamadas): diferencia media de píxeles contra el último recorte enviado; si es menor a un umbral, no se llama (salvo que pasen >60 s, para refrescar tiempos).
+4. **Claude**: una llamada con el recorte (o varias mesas juntas), el estado anterior y el prompt de abajo.
+5. **Validación**: parsear con Pydantic; si falla, reintentar una vez y si no, descartar esa lectura.
+6. **Envío**: `POST /api/observations` con el formato del contrato.
 
-COCO **no tiene la clase "plato"** (tiene `bowl`, `cup`, `wine glass`, `bottle`). Opciones, en orden:
+### Prompt (base, iterar con los videos)
 
-1. **Open-vocabulary (arranque rápido):** YOLOE o YOLO-World de Ultralytics con prompts de texto `["plate", "bowl", "glass", "cup", "bottle"]`. Funciona sin entrenar. Probarlo primero en los videos grabados.
-2. **Fine-tune rápido:** si (1) falla con la vista cenital, etiquetar 150–300 frames propios (Roboflow o Label Studio, o auto-etiquetar con (1) y corregir) y fine-tunear un YOLO chico (`n`/`s`) ~30–50 épocas. En GPU de AWS (`g5.xlarge`) son minutos.
-3. Fallback geométrico: `cv2.HoughCircles` sobre la zona de la mesa (los platos desde arriba son círculos). Feo pero funciona.
+```
+Sos el sistema de visión de un restaurante. La imagen es una vista cenital de la mesa {table_id}.
+Identificá cada plato y cada bebida que esté sobre la mesa.
+Para cada plato devolvé un estado:
+- "lleno": recién servido, casi intacto (más de 75 % de la comida)
+- "comiendo": entre 30 % y 75 %
+- "por_terminar": menos de 30 %
+- "vacio": sin comida o solo restos
+Para cada bebida: "llena", "media" o "vacia".
+Estado anterior de esta mesa: {previous_items_json}
+Mantené el mismo id para el mismo objeto (por posición). Usá ids nuevos (p3, d2…) solo para objetos nuevos.
+No incluyas objetos que ya no están.
+Respondé SOLO con la herramienta report_table.
+```
 
-### 2. Tracking
+Herramienta (JSON schema) `report_table`:
 
-`model.track(..., persist=True)` (ByteTrack integrado en Ultralytics) da un id por objeto. Armar `track_id = f"{table_id}-{p|d}-{id}"`.
+```json
+{
+  "items": [
+    { "id": "p1", "kind": "plate", "state": "comiendo", "fill_ratio": 0.5,
+      "position": "arriba-izquierda", "confidence": 0.8 }
+  ],
+  "people_present": true,
+  "notes": "opcional, algo raro (plato volcado, mesa sin gente con platos llenos)"
+}
+```
 
-### 3. Asignación a mesa
+`people_present` es gratis de pedir y sirve para métricas de ocupación y para no avisar "plato lleno" si la mesa está vacía.
 
-Centro del bbox dentro del polígono de la mesa (`cv2.pointPolygonTest`). Zonas en `vision/config/zones.json` ([03-contratos.md](03-contratos.md)). Hacer un script `vision/tools/draw_zones.py` que muestre un frame y deje clickear los vértices.
+### Suavizado
 
-### 4. Estado del plato (lo más importante)
-
-Dos caminos en paralelo; el que ande mejor gana:
-
-**Plan A — Claude visión (rápido de tener andando).**
-Cada 10–15 s por mesa, mandar el recorte de la mesa (no el frame entero) a Claude vía AWS Bedrock (usar créditos) con un prompt que devuelva JSON:
-`[{ "kind": "plate", "state": "comiendo", "fill_ratio": 0.5 }]`. Pocas líneas de código y muy preciso. Contra: latencia ~1–3 s y costo por llamada; por eso se llama poco y solo con recortes. Usar el modelo Haiku más reciente disponible en Bedrock.
-
-**Plan B — local, sin nube.**
-- *Heurística de píxeles:* dentro del círculo del plato, medir qué fracción de píxeles no es "color de plato" (segmentar el color del plato vacío con HSV / k-means) → `fill_ratio`. Umbrales: `>0.75 lleno`, `0.30–0.75 comiendo`, `0.05–0.30 por_terminar`, `<0.05 vacio`.
-- *Clasificador:* con los recortes que etiquetó el Plan A (¡Claude como etiquetador!), entrenar un `yolo11n-cls` o similar con 4 clases. Corre en tiempo real en la laptop.
-
-Recomendación: arrancar con A para tener la demo punta a punta temprano; usar A para etiquetar datos y pasar a B si llega.
-
-Bebidas: mismo esquema con 3 estados (`llena`, `media`, `vacia`); si no da el tiempo, dejar solo platos.
-
-### 5. Suavizado temporal
-
-La clasificación por frame "tiembla". Por cada `track_id`:
-- Ventana de los últimos N=8 estados → **voto mayoritario**.
-- Solo cambiar de estado si el nuevo gana en ≥ 3 lecturas seguidas (histéresis).
-- Los estados solo deberían avanzar (`lleno → comiendo → por_terminar → vacio`); un retroceso se ignora salvo que se mantenga mucho (plato nuevo en el mismo lugar → nuevo track).
-- Si el objeto se tapa (mano, brazo) y desaparece < 30 s, mantener el último estado.
-
-### 6. Salida
-
-Cada 2–5 s, `POST /api/observations` con el formato del contrato. Si el backend no responde, loguear y seguir (no frenar el loop de cámara).
+Aunque las llamadas son espaciadas, Claude puede dudar entre dos estados vecinos. Por cada item:
+- Solo aceptar un cambio de estado si aparece en **2 lecturas seguidas**.
+- Los estados solo avanzan (`lleno → comiendo → por_terminar → vacio`); un retroceso se ignora (si es un plato nuevo, va a tener otro id).
+- Si un item falta en una lectura, mantenerlo; si falta en 2 seguidas, se considera retirado.
 
 ## Estructura sugerida
 
 ```
 vision/
-  main.py               # loop: captura → pipeline → envío
+  main.py               # loop: captura → recorte → Claude → envío
   config/zones.json
   servio_vision/
     capture.py          # webcam / RTSP / archivo de video
-    detector.py         # YOLO-E / YOLO fine-tuneado
-    zones.py
-    state_llm.py        # Plan A (Bedrock)
-    state_local.py      # Plan B (heurística / clasificador)
+    zones.py            # recortes por mesa
+    change.py           # detector de cambio
+    claude_client.py    # llamada a Bedrock (boto3) o API de Anthropic, tool use
+    prompt.py
     smoothing.py
-    client.py           # POST al backend (con modo --dry-run que imprime)
+    client.py           # POST al backend (modo --dry-run que imprime)
   tools/
     draw_zones.py
     record.py           # grabar videos de prueba
-    export_crops.py     # guardar recortes para dataset
-  requirements.txt
+    eval.py             # corre el prompt sobre frames etiquetados a mano y da % de acierto
+  requirements.txt      # opencv-python, boto3 (o anthropic), pydantic, httpx
 ```
 
 `python main.py --source videos/mesa1.mp4 --dry-run` tiene que funcionar sin backend.
+
+## Evaluar el prompt (importante)
+
+Sacar ~40 frames de los videos, etiquetarlos a mano (estado real de cada plato) y correr `tools/eval.py` cada vez que se cambia el prompt. Es la única forma de saber si un cambio mejoró. Probar también si mandar el frame a mayor resolución o con un modelo más grande (Sonnet) mejora lo suficiente como para pagar la diferencia.
+
+## Futuro (roadmap, no MVP)
+
+Si el producto escala, un detector local liviano (por ejemplo YOLO) puede filtrar frames y llamar a Claude solo cuando hace falta, para bajar costo. No es necesario para la hackathon.

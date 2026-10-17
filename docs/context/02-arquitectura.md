@@ -9,9 +9,9 @@
  ┌──────────────────────────┐        POST /api/observations   ┌───────────────────────────┐
  │ vision/  (Python, local) │ ─────────────────────────────▶  │ web/  (Next.js en Vercel) │
  │ - captura                │        (cada 2–5 s, JSON)       │ - API routes              │
- │ - detección (YOLO)       │                                 │ - motor de reglas         │
- │ - estado del plato       │                                 │ - dashboard               │
- │ - asignación a mesa      │                                 │ - webhook Telegram        │
+ │ - recorte por mesa       │                                 │ - motor de reglas         │
+ │ - Claude visión (estado) │                                 │ - dashboard               │
+ │ - suavizado              │                                 │ - webhook Telegram        │
  └──────────────────────────┘                                 └──────────┬────────────────┘
                                                                          │
                                          ┌───────────────────────────────┼──────────────────┐
@@ -24,7 +24,7 @@
 
 | Módulo | Carpeta | Tecnología | Dónde corre |
 |---|---|---|---|
-| Visión | `vision/` | Python 3.11, OpenCV, Ultralytics YOLO, (opcional) Claude visión vía AWS Bedrock | Laptop con la cámara (edge). GPU en AWS solo para entrenar. |
+| Visión | `vision/` | Python 3.11, OpenCV (solo captura y recorte), Claude multimodal vía AWS Bedrock. Sin YOLO ni modelos propios. | Laptop con la cámara (edge). Sin GPU. |
 | API + reglas + bot | `web/app/api/` | Next.js (App Router, TypeScript) | Vercel |
 | Dashboard | `web/app/` | Next.js + Tailwind + shadcn/ui, polling o SSE | Vercel |
 | Base de datos | — | Postgres (Neon desde el marketplace de Vercel) + Drizzle o Prisma | Nube |
@@ -33,15 +33,16 @@
 ## Por qué así
 
 - **Un solo deploy web (Vercel)** para API, bot y dashboard: menos piezas que se rompen.
-- **La visión corre local** porque la cámara está en el local y no queremos subir video a la nube. Solo sube JSON chiquito (estado de cada plato), no imágenes. Bueno para privacidad y para la demo (anda con el wifi del evento).
+- **La captura corre local** porque la cámara está en el local. Al backend solo sube JSON chiquito (estado de cada plato). A Claude solo se mandan recortes de cada mesa cada 15–30 s, no video.
+- **Solo Claude multimodal, sin YOLO**: cámara fija y cenital, mesas fijas, estados que cambian en minutos. No hace falta detección en tiempo real ni entrenar nada. Detalle y trade-offs en [04-vision.md](04-vision.md).
 - **Las reglas viven en el backend**, no en la visión: así se pueden ajustar umbrales sin tocar el modelo, y el dashboard ve lo mismo que el bot.
 - **Contrato JSON fijo** entre visión y backend ([03-contratos.md](03-contratos.md)) para que las 3 personas trabajen en paralelo desde la hora 1 con datos falsos.
 
 ## Flujo de datos
 
 1. `vision/` lee un frame cada ~1 s.
-2. Detecta platos/vasos, los asigna a una mesa por zona, estima el estado y lo suaviza en el tiempo.
-3. Cada 2–5 s manda una **observación** por mesa: lista de ítems con id de seguimiento, tipo, estado y confianza.
+2. Recorta cada mesa por su zona; si el recorte cambió (y cada 15–30 s), se lo manda a Claude, que devuelve los platos/bebidas con su estado en JSON. Se suaviza.
+3. Después de cada lectura manda una **observación** por mesa: lista de ítems con id de seguimiento, tipo, estado y confianza.
 4. El backend guarda la observación, actualiza el estado de cada ítem (`first_seen`, `state_since`) y corre las reglas.
 5. Si una regla dispara (y no está en cooldown) crea una **alerta** y la manda por Telegram.
 6. El mozo toca "Voy" / "Listo" → webhook → se actualiza la alerta → sirve para medir tiempo de respuesta.
@@ -51,9 +52,9 @@
 
 | Recurso | Para qué |
 |---|---|
-| AWS (créditos) | Bedrock para Claude visión (plan A de clasificación), EC2 con GPU (`g5.xlarge` o similar) si hay que fine-tunear YOLO, S3 para el dataset. |
+| AWS (créditos) | Bedrock para Claude visión (toda la clasificación). S3 para videos de prueba y frames etiquetados. |
 | Vercel | Deploy de `web/` (API + dashboard + webhook), Postgres desde el marketplace. |
 | GitHub | Repo, PRs, issues como tablero de tareas. |
-| Tenki (USD 250) | Runners de CI rápidos para GitHub Actions (lint + tests). Si su plan incluye cómputo con GPU, alternativa a AWS para entrenar; verificarlo antes de contar con eso. |
+| Tenki (USD 250) | Runners de CI rápidos para GitHub Actions (lint + tests + eval del prompt). |
 | Claude (3 Pro + 1 Max) | Claude Code para programar cada módulo. Ver reparto en [08-plan-24h.md](08-plan-24h.md). |
 | Kiro | Specs y tareas del dashboard/API (modo spec-driven), en paralelo a Claude Code. |

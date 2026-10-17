@@ -4,7 +4,7 @@
 
 | Persona | Rol | Módulo | Herramienta principal |
 |---|---|---|---|
-| **P1** | Visión computacional | `vision/` | **Claude Max** + Claude Code (es lo más pesado: muchas iteraciones, imágenes, entrenamiento). AWS (Bedrock + GPU). |
+| **P1** | Visión computacional | `vision/` | **Claude Max** + Claude Code (es lo más pesado: muchas iteraciones de prompt con imágenes). AWS Bedrock. |
 | **P2** | Backend, reglas y bot | `web/app/api`, `web/lib` | Claude Pro + Claude Code. Vercel + Postgres + Telegram. |
 | **P3** | Dashboard, datos de prueba, demo y pitch | `web/app/page.tsx`, `web/components`, `docs/` | Claude Pro + **Kiro** (specs y tareas del dashboard). Graba los videos de prueba y arma la mesa. |
 
@@ -18,7 +18,7 @@ La 3.ª suscripción Pro queda de **reserva**: cuando alguien llega al límite d
 2. Revisar y congelar [03-contratos.md](03-contratos.md). Desde acá cada uno trabaja con mocks.
 3. Crear en GitHub los issues por persona (pueden salir de este archivo) y un Project board.
 4. **P2**: crear el proyecto en Vercel conectado al repo (`web/`), agregar Postgres, crear el bot de Telegram en @BotFather, crear el grupo "Mozos".
-5. **P1**: activar Bedrock en AWS (pedir acceso al modelo Claude Haiku en la región), crear un bucket S3 para videos/dataset, verificar que tiene cuota de GPU (`g5.xlarge`) por si hace falta entrenar.
+5. **P1**: activar Bedrock en AWS (pedir acceso al modelo Claude Haiku en la región), pedir aumento de cuota de requests si hace falta, crear un bucket S3 para videos de prueba.
 6. **P3**: conseguir platos, vasos, comida (o comida falsa), armar la mesa y el soporte del celular en el techo/trípode. Grabar los primeros videos: un plato de lleno a vacío (puede ser acelerado), 2–3 platos, con manos que tapan.
 7. Configurar CI básico (lint + tests) en GitHub Actions con runners de **Tenki**.
 
@@ -26,9 +26,9 @@ La 3.ª suscripción Pro queda de **reserva**: cuando alguien llega al límite d
 
 **P1 — Visión**
 1. `vision/` con `capture.py` leyendo video grabado y webcam/celular.
-2. Probar YOLOE/YOLO-World con prompts "plate", "glass" sobre los videos. Medir a ojo si detecta bien desde arriba.
-3. `draw_zones.py` + `zones.json` + asignación a mesa.
-4. Plan A de estado: recorte de mesa → Claude en Bedrock → JSON. Ver que clasifica bien en los videos.
+2. `draw_zones.py` + `zones.json` + recorte por mesa.
+3. Recorte → Claude en Bedrock con tool use → JSON validado con Pydantic.
+4. Etiquetar ~40 frames a mano y armar `tools/eval.py` para medir el % de acierto del prompt.
 5. `client.py` con `--dry-run` imprimiendo el JSON del contrato.
 
 **P2 — Backend**
@@ -54,7 +54,7 @@ La 3.ª suscripción Pro queda de **reserva**: cuando alguien llega al límite d
 
 ## Hora 12–16 · Precisión y robustez (y dormir por turnos)
 
-- **P1**: suavizado temporal, manejo de oclusiones; con los recortes etiquetados por Claude entrenar el clasificador local (Plan B) en la GPU de AWS si el A es lento o caro. Bebidas si da.
+- **P1**: iterar el prompt con `eval.py`, suavizado, detector de cambio para ahorrar llamadas, agrupar mesas en una sola llamada, medir costo real por hora. Bebidas si da.
 - **P2**: endpoint de métricas, expiración de alertas, agrupado de mensajes. WhatsApp con Twilio sandbox solo si todo lo demás está.
 - **P3**: KPIs y gráficos, pulir UI, empezar el guion del pitch.
 - Turnos de descanso de 2–3 h: que nunca duerman P1 y P2 a la vez.

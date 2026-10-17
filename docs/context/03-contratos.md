@@ -39,8 +39,8 @@ Header: `Authorization: Bearer ${INGEST_TOKEN}`
     {
       "table_id": "T1",
       "items": [
-        { "track_id": "T1-p-3", "kind": "plate", "state": "comiendo",     "confidence": 0.82, "fill_ratio": 0.55, "bbox": [210,140,330,250] },
-        { "track_id": "T1-d-1", "kind": "drink", "state": "vacia",        "confidence": 0.71, "bbox": [400,120,440,170] }
+        { "track_id": "T1-p3", "kind": "plate", "state": "comiendo",     "confidence": 0.82, "fill_ratio": 0.55, "position": "arriba-izquierda" },
+        { "track_id": "T1-d1", "kind": "drink", "state": "vacia",        "confidence": 0.71, "position": "centro" }
       ]
     },
     { "table_id": "T2", "items": [] }
@@ -48,7 +48,9 @@ Header: `Authorization: Bearer ${INGEST_TOKEN}`
 }
 ```
 
-- `track_id`: estable mientras el objeto siga en la mesa (lo da el tracker). Si desaparece >30 s se considera retirado.
+- `track_id`: `{table_id}-{id que devuelve Claude}` (ej. `T1-p3`). Claude mantiene el id entre lecturas porque le pasamos el estado anterior (ver [04-vision.md](04-vision.md)). Si falta en 2 lecturas seguidas se considera retirado.
+- `position`: texto libre de Claude ("arriba-izquierda"), solo para debug y para que el dashboard dibuje aproximado.
+- Por mesa se puede mandar además `"people_present": true|false`.
 - `fill_ratio`: 0–1, opcional, estimación de cuánta comida queda. Útil para métricas y para ajustar umbrales.
 - `state` ya viene **suavizado** (ver [04-vision.md](04-vision.md)).
 - Respuesta: `202 { "ok": true }`.
@@ -61,7 +63,7 @@ Header: `Authorization: Bearer ${INGEST_TOKEN}`
 [
   {
     "table_id": "T1", "name": "Mesa 1", "status": "por_terminar",
-    "items": [ { "track_id": "T1-p-3", "kind": "plate", "state": "por_terminar", "state_since": "…", "first_seen": "…" } ],
+    "items": [ { "track_id": "T1-p3", "kind": "plate", "state": "por_terminar", "state_since": "…", "first_seen": "…" } ],
     "open_alerts": 1, "last_update": "…"
   }
 ]
