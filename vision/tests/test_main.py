@@ -92,7 +92,7 @@ def test_previous_items_are_the_smoothed_plates():
     assert classifier.previous == [[], ["p1"]]
 
 
-def test_cli_prints_jsonl(tmp_path, capsys, monkeypatch):
+def test_cli_logs_observations(tmp_path, monkeypatch):
     video = tmp_path / "salon.avi"
     writer = cv2.VideoWriter(
         str(video), cv2.VideoWriter_fourcc(*"MJPG"), 10, (200, 100)
@@ -103,11 +103,18 @@ def test_cli_prints_jsonl(tmp_path, capsys, monkeypatch):
     zones_path = tmp_path / "zones.json"
     save_zones(ZONES, zones_path)
     monkeypatch.delenv("DEMO_MODE", raising=False)
+    log = tmp_path / "eventos.jsonl"
+    monkeypatch.setattr(loop.alerts, "DEFAULT_LOG", log)
+    monkeypatch.setattr(loop.alerts, "_processor", None)
 
-    code = loop.main(["--source", str(video), "--zones", str(zones_path)])
+    code = loop.main(
+        ["--source", str(video), "--zones", str(zones_path), "--no-telegram"]
+    )
+    loop.alerts._processor.close()
 
     assert code == 0
-    lines = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
+    events = [json.loads(line) for line in log.read_text("utf-8").splitlines()]
+    lines = [e for e in events if e["event"] == "observation"]
     assert len(lines) == 2 * 4  # 2 mesas × lecturas a los 0, 30, 60 y 90 s
     assert lines[0]["table_id"] == "T1" and lines[0]["ts"].endswith("Z")
 
