@@ -32,7 +32,10 @@ DEFAULT_SCRIPT: list[tuple[PlateState | None, int]] = [
     ("lleno", 4),
     ("comiendo", 4),
     ("por_terminar", 3),
-    ("vacio", 3),
+    (
+        "vacio",
+        5,
+    ),  # 5 lecturas: el suavizado confirma en 2 y plato_vacio (demo) pide 60 s
     (None, 3),
 ]
 FILL_RATIO: dict[PlateState, float] = {

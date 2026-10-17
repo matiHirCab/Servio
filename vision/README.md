@@ -31,6 +31,15 @@ python tools/vista_demo.py --source data/videos/demo.mp4 --classifier fake --rec
 - **Grabar en vivo:** con la cámara, la grabación puede quedar más rápida que la realidad si el loop va más lento que los fps de la cámara. Para el plan B, grabar sobre el video.
 - **Colores de mesa:** gris libre · azul servida · verde comiendo · amarillo por terminar · rojo terminada. Los platos usan los mismos colores según su estado.
 
+## Tabla de lo que pasó (cierre de la demo)
+
+`tools/resumen.py` lee `out/eventos.jsonl` y arma una tabla por mesa: comidas y su duración media, avisos de cada tipo, recordatorios y cuánto tardaron los avisos en resolverse, con los totales al final. Con `--image`, la tabla sale también como imagen para la última slide.
+
+```bash
+python tools/resumen.py                              # out/eventos.jsonl de la última corrida
+python tools/resumen.py --image out/resumen.png
+```
+
 ## Claude
 
 No hay créditos de AWS, así que Claude va por el Claude Code logueado (`claude -p`, suscripción del equipo). Probar con un recorte de mesa y los de sus platos:

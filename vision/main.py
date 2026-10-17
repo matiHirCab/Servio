@@ -169,6 +169,11 @@ def build_parser(
 
 
 def setup_logging() -> None:
+    # La consola de Windows (cp1252) no puede escribir los emojis de los avisos:
+    # sin esto, el aviso impreso con --no-telegram tira UnicodeEncodeError.
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            stream.reconfigure(encoding="utf-8", errors="replace")
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s %(levelname)s %(message)s",
