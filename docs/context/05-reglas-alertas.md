@@ -56,10 +56,11 @@ Cuando el clasificador cambia el id de un plato (`p1 → p4`), el suavizado mand
 
 - **Provisional:** un id nuevo en la `position` de un plato que sigue en la mesa no cuenta para las reglas en esa lectura (`active_plates()` lo deja afuera), así no cambia el estado de la mesa ni dispara avisos.
 - **Herencia:** cuando un plato deja de venir y hay un **único** plato reciente (apareció en esa lectura o en la anterior) en su misma `position`, ese plato hereda `first_seen`, y también `state_since` si tiene el mismo estado.
+- **Solo si puede ser el mismo plato:** el candidato tiene que haber aparecido en esa `position` (no vale uno que se corrió ahí) y tener el mismo estado o un paso hacia adelante. Un retroceso o un salto (`smoothing.is_hard_change`, por ejemplo `vacio → lleno` cuando cambian el principal por el postre) es otro plato y cuenta con sus propios tiempos.
 - **Dos platos:** si el viejo y el nuevo siguen viniendo, eran dos platos (por ejemplo, sirvieron otro en el mismo casillero): el nuevo cuenta desde la lectura siguiente, con sus propios tiempos, y nunca hereda.
 - **Ambigüedad:** con dos candidatos, o dos platos retirados en la misma `position`, nadie hereda.
 - **Retirado:** un plato que no viene en la observación ya está retirado; el suavizado lo saca después de 2 lecturas ausente ([03-contratos.md](03-contratos.md)).
-- **Riesgo conocido:** si retiran un plato justo una lectura después de que sirvieron otro en el mismo casillero, el nuevo hereda el tiempo del viejo. Se puede mejorar emparejando por `bbox`.
+- **Riesgo conocido:** si cambian un plato por otro en el mismo casillero y el estado del nuevo es igual o un paso adelante del viejo (por ejemplo, `lleno` por `lleno`), el nuevo hereda el tiempo del viejo. Los ids estables de la visión (emparejados por `bbox`) hacen que esto pase solo cuando falla ese emparejamiento.
 
 ## Tests
 

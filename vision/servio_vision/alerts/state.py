@@ -11,6 +11,9 @@ Cambio de id («Estado por plato» en 05). El suavizado, cuando el clasificador 
 - Cuando un plato deja de venir (retirado) y hay un **único** plato reciente (apareció
   en esta lectura o en la anterior) en su misma `position`, ese plato **hereda**
   `first_seen` (y `state_since` si tiene el mismo estado).
+- Solo hereda un plato que apareció en esa `position` y cuyo estado es el mismo o un
+  paso hacia adelante. Un retroceso o un salto (`vacio → lleno`: el postre que reemplaza
+  al principal) no puede ser el mismo plato.
 - Si viejo y nuevo siguen viniendo, eran dos platos: el nuevo cuenta desde la lectura
   siguiente, con sus propios tiempos.
 - Un plato que no viene ya está retirado: el suavizado lo saca después de 2 lecturas
@@ -25,6 +28,7 @@ from typing import Literal
 
 from servio_vision.alerts.models import TableObservation
 from servio_vision.schemas import PlateState
+from servio_vision.smoothing import is_hard_change
 
 TableStatus = Literal["libre", "servida", "comiendo", "por_terminar", "terminada"]
 
@@ -40,6 +44,7 @@ class PlateTrack:
     state_since: datetime  # idem, si el estado es el mismo
     last_seen: datetime
     id_since: datetime  # cuándo apareció este track_id
+    id_position: str  # en qué posición apareció este track_id
     provisional: bool = False  # id nuevo en la posición de un plato que sigue
     inherited_from: str | None = None  # track_id del que heredó los tiempos
 
@@ -81,6 +86,7 @@ def update_table(prev: TableState, obs: TableObservation) -> TableState:
                 state_since=ts,
                 last_seen=ts,
                 id_since=ts,
+                id_position=item.position,
             )
         else:
             plates[item.track_id] = replace(
@@ -109,9 +115,10 @@ def _inherit_from_removed(
         candidates = [
             p
             for p in plates.values()
-            if p.position == old.position
+            if p.position == p.id_position == old.position
             and p.id_since >= since
             and p.inherited_from is None
+            and (p.state == old.state or not is_hard_change(old.state, p.state))
         ]
         if len(candidates) != 1:
             continue
