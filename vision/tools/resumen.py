@@ -8,10 +8,10 @@ Lee `out/eventos.jsonl` (03-contratos.md, «Log») y muestra, por mesa:
 Al final, los totales.
 
 El log no se borra entre corridas (se agrega al final), así que por defecto
-se resume solo la **última corrida**: la que empieza en la última línea cuya
-hora es anterior a la de la línea previa (cada corrida escribe en orden de
-tiempo). Con `--all` se resume todo el archivo. Dos corridas en vivo seguidas
-no se pueden separar así: antes de la demo, conviene borrar el log.
+se resume solo la **última corrida**: desde la última línea `run_started`, que
+escribe `alerts.configure()` al arrancar. Si el log no tiene esa línea (logs
+viejos), la corrida empieza donde la hora vuelve atrás. Con `--all` se resume
+todo el archivo.
 
     python tools/resumen.py [--file out/eventos.jsonl] [--image out/resumen.png] [--all]
 """
@@ -28,6 +28,7 @@ from pathlib import Path
 VISION_DIR = Path(__file__).resolve().parents[1]
 DEFAULT_LOG = VISION_DIR / "out" / "eventos.jsonl"
 
+RUN_STARTED = "run_started"  # primera línea de cada corrida (alerts.configure)
 ALERT_TYPES = {
     "mesa_por_terminar": "Por terminar",
     "plato_vacio": "Platos vacíos",
@@ -65,8 +66,9 @@ def load_events(path: Path) -> list[dict]:
             continue
         try:
             event = json.loads(line)
-            _ts(event["ts"])
-        except (ValueError, KeyError, TypeError):
+            if event.get("event") != RUN_STARTED:
+                _ts(event["ts"])
+        except (ValueError, KeyError, TypeError, AttributeError):
             print(f"Aviso: salteo la línea {number} de {path}, no es un evento válido.")
             continue
         events.append(event)
@@ -74,7 +76,10 @@ def load_events(path: Path) -> list[dict]:
 
 
 def last_run(events: list[dict]) -> list[dict]:
-    """Eventos desde el comienzo de la última corrida (ver docstring del módulo)."""
+    """Eventos de la última corrida, sin la línea `run_started` (ver docstring)."""
+    starts = [i for i, e in enumerate(events) if e["event"] == RUN_STARTED]
+    if starts:
+        return events[starts[-1] + 1 :]
     start = 0
     for i in range(1, len(events)):
         if _ts(events[i]["ts"]) < _ts(events[i - 1]["ts"]):
@@ -87,6 +92,7 @@ def summarize(events: list[dict]) -> dict[str, TableSummary]:
     meal_start: dict[str, datetime] = {}
     opened_at: dict[str, datetime] = {}  # id del aviso → cuándo se abrió
 
+    events = [e for e in events if e["event"] != RUN_STARTED]
     for event in sorted(events, key=lambda e: _ts(e["ts"])):
         table_id, kind, ts = event["table_id"], event["event"], _ts(event["ts"])
         summary = tables[table_id]

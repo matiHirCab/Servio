@@ -120,3 +120,18 @@ def test_unknown_alert_type_gets_its_own_column():
     table = resumen.rows(resumen.summarize(events))
     assert "Otros" in table[0]
     assert table[-1][table[0].index("Otros")] == "1"
+
+
+def test_last_run_starts_at_run_started(tmp_path, capsys):
+    started = {"event": "run_started", "started_at": _ts(0), "config": {}}
+    first = [started, obs(1, "T1", 2), obs(4, "T1", 0)]
+    second = [started, obs(5, "T1", 2), obs(12, "T1", 0)]  # la hora no vuelve atrás
+    log = tmp_path / "eventos.jsonl"
+    log.write_text("\n".join(json.dumps(e) for e in first + second), encoding="utf-8")
+    events = resumen.load_events(log)
+    assert resumen.last_run(events) == second[1:]
+    resumen.main(["--file", str(log)])
+    out = capsys.readouterr().out
+    assert "7.0 min" in out and "salteo" not in out
+    resumen.main(["--file", str(log), "--all"])
+    assert "5.0 min" in capsys.readouterr().out  # (3 + 7) / 2
