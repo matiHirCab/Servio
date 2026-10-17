@@ -30,7 +30,8 @@ class IdCounter:
     - El número de id solo sube: un plato que faltó en una lectura no le deja su
       número a uno nuevo (el suavizado todavía guarda su pista).
     - Recuerda dónde estaba cada plato hasta `MAX_MISSING` lecturas después de
-      que YOLO lo dejó de ver, para devolverle su id si reaparece ahí.
+      que YOLO lo dejó de ver, para devolverle su id si reaparece ahí. Los platos
+      de la lectura anterior tienen prioridad sobre los recordados.
     """
 
     def __init__(self) -> None:
@@ -38,28 +39,58 @@ class IdCounter:
         self._reading: dict[str, int] = {}
         self._where: dict[str, dict[str, tuple]] = {}  # mesa -> id -> (bbox, lectura)
 
-    def first_new(self, table_id: str, previous_items: list[Item]) -> int:
-        return max(self._last.get(table_id, 0) + 1, _next_number(previous_items))
-
-    def remembered(self, table_id: str, previous_items: list[Item]) -> list[Item]:
-        """Platos que faltaron hace poco y no están en `previous_items`."""
-        present = {i.id for i in previous_items}
-        now = self._reading.get(table_id, 0)
-        return [
-            Item(id=pid, position=position_label(bbox), bbox=bbox, visible=False)
-            for pid, (bbox, reading) in self._where.get(table_id, {}).items()
-            if pid not in present and now - reading <= MAX_MISSING
+    def assign(
+        self, table_id: str, bboxes: list, previous_items: list[Item]
+    ) -> list[str]:
+        """Ids para las cajas de esta lectura, y actualiza la memoria."""
+        previous = [(i.id, i.bbox) for i in previous_items if i.bbox is not None]
+        present = {pid for pid, _ in previous}
+        remembered = [
+            (pid, bbox)
+            for pid, (bbox, _) in self._where.get(table_id, {}).items()
+            if pid not in present
         ]
+        first_new = max(self._last.get(table_id, 0) + 1, _next_number(previous_items))
+        ids = _match(bboxes, [previous, remembered], first_new)
 
-    def seen(self, table_id: str, ids: list[str], bboxes: list | None = None) -> None:
         nums = [int(m.group(1)) for i in ids if (m := re.fullmatch(r"p(\d+)", i))]
         self._last[table_id] = max([self._last.get(table_id, 0), *nums])
         now = self._reading[table_id] = self._reading.get(table_id, 0) + 1
         where = self._where.setdefault(table_id, {})
-        for pid, bbox in zip(ids, bboxes or []):
+        for pid, bbox in zip(ids, bboxes):
             where[pid] = (bbox, now)
         for pid in [p for p, (_, r) in where.items() if now - r > MAX_MISSING]:
             del where[pid]
+        return ids
+
+
+def _match(bboxes: list, tiers: list[list[tuple]], first_new: int) -> list[str]:
+    """Empareja cada caja con un (id, bbox) cercano, tier por tier: las cajas que no
+    encuentran pareja en un tier prueban con el siguiente. Dentro de un tier va
+    primero el par más cercano. Lo que queda sin pareja recibe `p{first_new}`, …"""
+    ids: list[str | None] = [None] * len(bboxes)
+    used: set[str] = set()
+    for tier in tiers:
+        candidates = []
+        for i, b in enumerate(bboxes):
+            if ids[i] is not None:
+                continue
+            cx, cy = _center(b)
+            limit = MAX_SHIFT * max(b[2], b[3])
+            for pid, pb in tier:
+                d = math.dist((cx, cy), _center(pb))
+                if d <= limit:
+                    candidates.append((d, i, pid))
+        for _, i, pid in sorted(candidates):
+            if ids[i] is None and pid not in used:
+                ids[i] = pid
+                used.add(pid)
+    n = first_new
+    for i in range(len(ids)):
+        if ids[i] is None:
+            ids[i] = f"p{n}"
+            n += 1
+    return ids
 
 
 def match_ids(
@@ -69,30 +100,10 @@ def match_ids(
 
     Se empareja primero el par más cercano; una caja sin pareja cerca es un plato
     nuevo y recibe el siguiente `p{n}` desde `first_new` (por defecto, uno más que
-    el mayor de `previous_items`; usar `IdCounter` para no reutilizar números).
+    el mayor de `previous_items`). Sin memoria: para eso, `IdCounter.assign`.
     """
-    candidates = []
-    for i, b in enumerate(bboxes):
-        cx, cy = _center(b)
-        limit = MAX_SHIFT * max(b[2], b[3])
-        for prev in previous_items:
-            if prev.bbox is None:
-                continue
-            d = math.dist((cx, cy), _center(prev.bbox))
-            if d <= limit:
-                candidates.append((d, i, prev.id))
-    ids: list[str | None] = [None] * len(bboxes)
-    used = set()
-    for _, i, pid in sorted(candidates):
-        if ids[i] is None and pid not in used:
-            ids[i] = pid
-            used.add(pid)
-    n = first_new or _next_number(previous_items)
-    for i in range(len(ids)):
-        if ids[i] is None:
-            ids[i] = f"p{n}"
-            n += 1
-    return ids
+    previous = [(i.id, i.bbox) for i in previous_items if i.bbox is not None]
+    return _match(bboxes, [previous], first_new or _next_number(previous_items))
 
 
 def position_label(bbox) -> str:

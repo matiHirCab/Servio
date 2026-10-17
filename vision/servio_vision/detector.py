@@ -34,7 +34,7 @@ def _iou(a, b) -> float:
     return inter / (union + 1e-9)
 
 
-def _contained(a, b, threshold: float = 0.7) -> bool:
+def _contained(a, b, threshold: float = 0.8) -> bool:
     ix = max(0.0, min(a[2], b[2]) - max(a[0], b[0]))
     iy = max(0.0, min(a[3], b[3]) - max(a[1], b[1]))
     smaller = min((a[2] - a[0]) * (a[3] - a[1]), (b[2] - b[0]) * (b[3] - b[1]))
@@ -46,7 +46,7 @@ def filter_detections(dets: list[Detection], min_rel: float = 0.35) -> list[Dete
     que el plato típico (mitades de palta, aceitunas…)."""
     kept: list[Detection] = []
     for d in sorted(dets, key=lambda d: -d.confidence):
-        if all(_iou(d.box, k.box) < 0.5 and not _contained(d.box, k.box) for k in kept):
+        if all(_iou(d.box, k.box) < 0.4 and not _contained(d.box, k.box) for k in kept):
             kept.append(d)
     if not kept:
         return []

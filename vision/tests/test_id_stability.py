@@ -21,3 +21,9 @@ def test_id_change_counts_as_lost():
 
 def test_empty():
     assert stability([])["conservan"] is None
+
+
+def test_failed_reading_is_not_compared_across():
+    m = stability([["p1", "p2"], None, ["p1"]])
+    assert m["conservan"] is None
+    assert m["frames"] == 3

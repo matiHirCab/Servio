@@ -20,8 +20,9 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 
-def stability(frames: list[list[str]]) -> dict:
-    """Métricas de ids a partir de los ids de cada frame, en orden.
+def stability(frames: list[list[str] | None]) -> dict:
+    """Métricas de ids a partir de los ids de cada frame, en orden (`None` = lectura
+    fallida).
 
     - `conservan`: de los platos de un frame, qué fracción sigue con el mismo id en
       el siguiente (un plato que desaparece o cambia de id cuenta como perdido).
@@ -30,14 +31,17 @@ def stability(frames: list[list[str]]) -> dict:
     """
     kept = total = 0
     for a, b in itertools.pairwise(frames):
+        if a is None or b is None:  # lectura fallida: no compara a través de ella
+            continue
         total += len(a)
         kept += len(set(a) & set(b))
-    seen = set(frames[0]) if frames else set()
+    read = [ids for ids in frames if ids is not None]
+    seen = set(read[0]) if read else set()
     new = 0
-    for ids in frames[1:]:
+    for ids in read[1:]:
         new += len(set(ids) - seen)
         seen |= set(ids)
-    counts = [len(ids) for ids in frames]
+    counts = [len(ids) for ids in read]
     return {
         "frames": len(frames),
         "platos_por_frame": statistics.median(counts) if counts else 0,
@@ -48,10 +52,11 @@ def stability(frames: list[list[str]]) -> dict:
     }
 
 
-def ids_from_timeline(path: Path) -> list[list[str]]:
+def ids_from_timeline(path: Path) -> list[list[str] | None]:
     timeline = json.loads(path.read_text(encoding="utf-8"))
     return [
-        [i["id"] for i in f["report"]["items"]] for f in timeline if f.get("report")
+        [i["id"] for i in f["report"]["items"]] if f.get("report") else None
+        for f in timeline
     ]
 
 

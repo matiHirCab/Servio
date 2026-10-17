@@ -49,12 +49,10 @@ def test_filter_drops_duplicates_and_small_boxes():
 
 
 def _track(counter, frames):
-    """Corre `match_ids` como `find_plates` sobre una lista de frames de cajas."""
+    """Corre `IdCounter.assign` (lo que usa `find_plates`) sobre frames de cajas."""
     previous, out = [], []
     for bboxes in frames:
-        candidates = previous + counter.remembered("T1", previous)
-        ids = match_ids(bboxes, candidates, counter.first_new("T1", previous))
-        counter.seen("T1", ids, bboxes)
+        ids = counter.assign("T1", bboxes, previous)
         previous = [
             Item(id=i, position="centro", bbox=b, visible=False)
             for i, b in zip(ids, bboxes)
@@ -75,6 +73,13 @@ def test_plate_missing_too_long_gets_a_new_id():
     assert ids[-1] == ["p1", "p3"]
 
 
+def test_plate_on_the_table_wins_over_a_remembered_one():
+    # se llevan p2 y p1 se corre hacia donde estaba p2: sigue siendo p1
+    p1, p2 = (0.40, 0.40, 0.2, 0.2), (0.48, 0.40, 0.2, 0.2)
+    ids = _track(IdCounter(), [[p1, p2], [p1], [(0.47, 0.40, 0.2, 0.2)]])
+    assert ids[-1] == ["p1"]
+
+
 def test_filter_drops_overlapping_duplicate_of_the_same_plate():
     # dos cajas del mismo plato en el video de IA (frame 4): IoU 0,43
     dets = [
@@ -82,3 +87,12 @@ def test_filter_drops_overlapping_duplicate_of_the_same_plate():
         Detection((699, 298, 772, 418), 0.6, "bowl"),
     ]
     assert len(filter_detections(dets)) == 1
+
+
+def test_filter_keeps_small_plate_partly_under_a_big_one():
+    # plato de pan detrás de un plato grande, tapado en un 75 %
+    dets = [
+        Detection((0, 0, 100, 100), 0.9, "plate"),
+        Detection((70, 0, 110, 40), 0.8, "plate"),
+    ]
+    assert len(filter_detections(dets, min_rel=0.1)) == 2
