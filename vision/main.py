@@ -27,13 +27,13 @@ from pathlib import Path
 import numpy as np
 
 from servio_vision import alerts
-from servio_vision.alerts.config import load_config
+from servio_vision.alerts.config import AlertConfig, load_config
 from servio_vision.alerts.models import TableObservation
 from servio_vision.capture import open_source
 from servio_vision.classifier import Classifier, available_classifiers, get_classifier
 from servio_vision.schemas import Item, TableReport
 from servio_vision.smoothing import TableSmoother
-from servio_vision.zones import DEFAULT_ZONES, Zones, crop_tables, load_zones
+from servio_vision.zones import DEFAULT_ZONES, Zones, crop_table, load_zones, to_jpeg
 
 logger = logging.getLogger("servio")
 
@@ -59,21 +59,36 @@ class Pipeline:
         self._pool = ThreadPoolExecutor(max_workers=max(1, len(zones.tables)))
 
     def process_frame(self, frame: np.ndarray, ts: datetime) -> list[TableObservation]:
-        crops = crop_tables(frame, self.zones)
-        futures = {
-            table_id: self._pool.submit(self._classify, jpeg, table_id)
-            for table_id, jpeg in crops.items()
-        }
+        """Procesa un frame. Un error en una mesa descarta esa mesa, no corta el loop."""
+        futures = {}
+        for zone in self.zones.tables:
+            try:
+                jpeg = to_jpeg(crop_table(frame, zone, self.zones))
+            except Exception:
+                logger.exception("%s %s: no se pudo recortar", ts, zone.table_id)
+                continue
+            futures[zone.table_id] = self._pool.submit(
+                self._classify, jpeg, zone.table_id
+            )
         observations = []
         for table_id, future in futures.items():
             report = future.result()
             if report is None:
                 logger.warning("%s %s: lectura fallida, se descarta", ts, table_id)
                 continue
-            items = self.smoothers[table_id].update(report.items)
-            self.previous[table_id] = items
-            observation = self._observation(table_id, ts, report, items)
-            self.on_observation(observation)
+            try:
+                items = self.smoothers[table_id].update(report.items)
+                self.previous[table_id] = items
+                observation = self._observation(table_id, ts, report, items)
+            except Exception:
+                logger.exception("%s %s: no se pudo armar la observación", ts, table_id)
+                continue
+            try:
+                self.on_observation(observation)
+            except Exception:
+                logger.exception(
+                    "%s %s: alerts falló con esta observación", ts, table_id
+                )
             observations.append(observation)
         return observations
 
@@ -113,14 +128,21 @@ def print_observation(observation: TableObservation) -> None:
     print(observation.model_dump_json(), flush=True)
 
 
-def observation_handler(no_telegram: bool) -> ObservationHandler:
-    """`alerts.process` si ya existe (MAT-5); si no, imprimir la observación."""
+def observation_handler(config: AlertConfig, no_telegram: bool) -> ObservationHandler:
+    """`alerts.process` si ya existe (MAT-5); si no, imprimir la observación.
+
+    Si `alerts` define `configure(config, telegram=...)`, se le pasan los umbrales
+    ya resueltos (`--interval`, `--demo`) para que no use otros.
+    """
     process = getattr(alerts, "process", None)
     if process is None:
         logger.info("alerts.process() todavía no existe: imprimo las observaciones")
         return print_observation
-    if no_telegram:
-        os.environ["SERVIO_NO_TELEGRAM"] = "1"  # para alerts (JES-7 / MAT-5)
+    configure = getattr(alerts, "configure", None)
+    if configure is not None:
+        configure(config, telegram=not no_telegram)
+    else:
+        logger.warning("alerts no tiene configure(): no recibe --interval ni --demo")
     return process
 
 
@@ -178,7 +200,13 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 2
     zones = load_zones(args.zones)
-    config = load_config(round(args.interval), demo_enabled(args.demo))
+    try:
+        config = load_config(round(args.interval), demo_enabled(args.demo))
+    except ValueError as e:
+        logger.error(
+            "Umbrales de aviso inválidos con --interval %s: %s", args.interval, e
+        )
+        return 2
     logger.info(
         "Mesas: %s · cada %ss · umbrales T1=%ss T2=%ss R=%ss",
         ", ".join(t.table_id for t in zones.tables),
@@ -189,7 +217,9 @@ def main(argv: list[str] | None = None) -> int:
     )
 
     classifier = get_classifier(args.classifier, **classifier_kwargs(args))
-    pipeline = Pipeline(classifier, zones, observation_handler(args.no_telegram))
+    pipeline = Pipeline(
+        classifier, zones, observation_handler(config, args.no_telegram)
+    )
     readings = 0
     try:
         for frame, ts in open_source(args.source, args.interval, args.speed):

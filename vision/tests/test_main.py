@@ -116,3 +116,55 @@ def test_cli_without_zones_explains_what_to_do(tmp_path, caplog):
     code = loop.main(["--source", str(tmp_path), "--zones", str(tmp_path / "no.json")])
     assert code == 2
     assert "draw_zones" in caplog.text
+
+
+def test_one_bad_table_does_not_stop_the_others():
+    zones = Zones(
+        frame_size=(200, 100),
+        tables=[
+            *ZONES.tables,
+            # fuera del frame: no se puede recortar
+            TableZone(
+                table_id="T3",
+                name="Mesa 3",
+                polygon=[(500, 500), (600, 500), (600, 600)],
+            ),
+        ],
+    )
+    [observations] = run(loop.Pipeline(FakeClassifier(), zones, lambda o: None), 1)
+    assert [o.table_id for o in observations] == ["T1", "T2"]
+
+
+def test_alerts_error_does_not_stop_the_loop():
+    def broken_alerts(observation):
+        raise RuntimeError("Telegram caído")
+
+    [observations] = run(loop.Pipeline(FakeClassifier(), ZONES, broken_alerts), 1)
+    assert len(observations) == 2
+
+
+def test_invalid_interval_explains_and_exits(tmp_path, caplog, monkeypatch):
+    zones_path = tmp_path / "zones.json"
+    save_zones(ZONES, zones_path)
+    monkeypatch.delenv("DEMO_MODE", raising=False)
+    # producción: T1 = 60 s < 2 × 60
+    code = loop.main(
+        ["--source", str(tmp_path), "--zones", str(zones_path), "--interval", "60"]
+    )
+    assert code == 2
+    assert "Umbrales de aviso inválidos" in caplog.text
+
+
+def test_config_reaches_alerts(monkeypatch):
+    calls = []
+    monkeypatch.setattr(loop.alerts, "process", calls.append, raising=False)
+    monkeypatch.setattr(
+        loop.alerts,
+        "configure",
+        lambda config, telegram: calls.append((config.t1, telegram)),
+        raising=False,
+    )
+    config = loop.load_config(30, demo=True, env={})
+    handler = loop.observation_handler(config, no_telegram=True)
+    assert calls == [(60, False)]
+    assert handler == calls.append
