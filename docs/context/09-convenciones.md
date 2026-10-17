@@ -8,70 +8,45 @@
   README.md
   .env.example         # todas las variables, sin valores
   docs/context/        # contexto del proyecto
-  fixtures/            # escenarios JSON compartidos (ver 03-contratos.md)
-  vision/              # Python: cámara, clasificador, pipeline (P1 + P3)
-  web/                 # Next.js: API, reglas, bot, dashboard (P1 + P2 + P3)
+  fixtures/            # observaciones de ejemplo y avisos esperados (ver 03-contratos.md)
+  vision/              # todo el programa en Python (ver 04-vision.md)
   .github/workflows/   # CI
 ```
 
 ## Dueños por carpeta
 
-"Trabajá solo dentro de tu módulo" (regla 2 de `AGENTS.md`) significa: solo en las carpetas de esta tabla. Para tocar la de otro, avisale y que revise el PR.
+"Trabajá solo en tus carpetas" (regla 2 de `AGENTS.md`) significa: solo en las de esta tabla. Para tocar la de otro, avisale y que revise el PR.
 
 | Carpeta | Dueño |
 |---|---|
-| `vision/servio_vision/classifiers/` (salvo `fake.py`), `vision/servio_vision/prompt.py`, `vision/tools/` (salvo `draw_zones.py`) | P1 |
-| `vision/` (resto: `main.py`, `capture.py`, `zones.py`, `change.py`, `smoothing.py`, `client.py`, `classifiers/fake.py`, `tools/draw_zones.py`, `config/`) | P3 |
-| `vision/servio_vision/classifier.py`, `schemas.py` | P1 (contrato con P3: cambios en PR revisado por P3) |
-| `web/lib/notify/telegram.ts` | P1 |
-| `web/app/api/`, `web/lib/` (resto), `web/scripts/` | P2 |
-| `web/app/page.tsx`, `web/app/(dashboard)/`, `web/components/` | P3 |
-| `fixtures/` | Compartido: `observations/` y `expected/` P2, `api/` P3. Cambios junto con `03-contratos.md`. |
+| `vision/servio_vision/classifiers/` (salvo `fake.py`), `tracking.py`, `prompt.py`, `tools/{build_eval_set,eval}.py`, `tools/train_yolo.ipynb` | Tomás |
+| `vision/servio_vision/schemas.py`, `classifier.py` | Tomás (contrato con Jessica: cambios con su revisión) |
+| `vision/servio_vision/alerts/`, `tools/replay.py`, `fixtures/` | Matías |
+| `vision/main.py`, `servio_vision/{capture,zones,change,smoothing}.py`, `classifiers/fake.py`, `tools/draw_zones.py`, `tools/vista_demo.py`, `config/` | Jessica |
 | `docs/` | Todos, por PR |
 
 ## Código
 
 - Docs y comentarios en español; identificadores en inglés.
-- **Python** (`vision/`): 3.11, `venv` + `requirements.txt`, formato con `ruff format`, lint `ruff check`. Configuración por `.env`; los flags de CLI le ganan a las variables (por ejemplo `--demo` le gana a `DEMO_MODE`). Las dependencias de YOLO (`ultralytics`, torch) van en `requirements-yolo.txt` aparte, para que el CI no las instale.
-- **TypeScript** (`web/`): `strict`, Zod para validar todo lo que entra por API, ESLint + Prettier por defecto de Next.
+- Python 3.11, `venv` + `requirements.txt`, `ruff format` y `ruff check`, tests con `pytest`.
+- Las dependencias de YOLO (`ultralytics`, torch) van en `requirements-yolo.txt`, aparte, para que el CI no las instale.
+- Configuración por `.env`; los flags de CLI le ganan a las variables (`--demo` le gana a `DEMO_MODE`).
 - Los valores de enums son exactamente los de [03-contratos.md](03-contratos.md) (`lleno`, `comiendo`, `por_terminar`, `vacio`…). No traducir ni renombrar.
 
 ## Git
 
-- Ramas: `p1/<tema>`, `p2/<tema>`, `p3/<tema>`.
+- Ramas: `tomas/<tema>`, `matias/<tema>`, `jessica/<tema>`.
 - Commits cortos en presente: `vision: agrega suavizado por voto mayoritario`.
-- PR chico a `main`, otra persona aprueba. `main` siempre deployable (Vercel deploya `main` a producción y cada PR a un preview).
+- PR chico a `main`, otra persona aprueba. `main` siempre tiene que andar.
 
-## Variables de entorno (`.env.example`)
+## Variables de entorno
 
-```
-# vision/
-SERVIO_API_URL=http://localhost:3000
-INGEST_TOKEN=
-AWS_REGION=us-east-1
-AWS_PROFILE=
-BEDROCK_MODEL_ID=
-CLAUDE_PROVIDER=bedrock     # bedrock | anthropic
-ANTHROPIC_API_KEY=
-YOLO_WEIGHTS=vision/models/best.pt
+Ver `.env.example`: `AWS_REGION`, `AWS_PROFILE`, `BEDROCK_MODEL_ID`, `CLAUDE_PROVIDER`, `ANTHROPIC_API_KEY`, `YOLO_WEIGHTS`, `TELEGRAM_BOT_TOKEN`, `TELEGRAM_GROUP_CHAT_ID`, `DEMO_MODE`.
 
-# web/
-DATABASE_URL=
-INGEST_TOKEN=
-TELEGRAM_BOT_TOKEN=
-TELEGRAM_WEBHOOK_SECRET=
-TELEGRAM_GROUP_CHAT_ID=
-NEXT_PUBLIC_USE_FIXTURES=false
-DEMO_MODE=true
-```
+## Privacidad y datos
 
-La lista completa y comentada está en `.env.example`.
-
-## Privacidad
-
-- La visión no sube imágenes al backend, solo JSON.
-- A Claude/Bedrock solo se mandan recortes de la mesa, no el salón entero.
-- Datasets e imágenes nunca se suben al repo (`vision/data/` y `vision/models/` están en `.gitignore`):
-  - Material propio del equipo (videos de nuestra mesa): carpeta compartida del equipo o S3.
-  - Dataset público *AI Smart Restaurant Surveillance* de Roboflow (CC BY 4.0): se baja en local para evaluar y entrenar; se cita en `vision/README.md`.
-  - Videos de YouTube: solo uso interno para probar, no se muestran en la demo ni se redistribuyen.
+- A Claude solo se mandan recortes de mesas y platos, no el salón entero.
+- Datasets, pesos e imágenes nunca se suben al repo (`vision/data/`, `vision/models/` y `vision/out/` están en `.gitignore`):
+  - Video de la demo grabado por el equipo: carpeta compartida del equipo.
+  - Dataset *AI Smart Restaurant Surveillance* de Roboflow (CC BY 4.0): se baja en local para entrenar y evaluar; se cita en `vision/README.md`.
+  - Videos de YouTube: solo para probar, no se muestran en la demo ni se redistribuyen.

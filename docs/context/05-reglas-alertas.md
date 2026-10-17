@@ -1,33 +1,36 @@
-# 05 — Reglas de alertas
+# 05 — Reglas de avisos
 
-Viven en el backend (`web/lib/rules/`). Se evalúan **solo** cuando llega una observación (`POST /api/observations`), nunca en los GET: así varias pestañas del dashboard no generan alertas duplicadas. El refresco forzado de la visión (60 s / demo 20 s, ver [04-vision.md](04-vision.md)) asegura que lleguen observaciones seguido aunque la mesa no cambie. Todos los umbrales en `web/lib/rules/config.ts` para poder cambiarlos rápido en la demo (en la demo usar tiempos cortos).
+Viven en `vision/servio_vision/alerts/` (Matías). Se evalúan cada vez que llega una observación de mesa. Umbrales en `alerts/config.py`, con valores de producción y de demo (`DEMO_MODE` / `--demo`).
 
-| Regla | Dispara cuando | Mensaje al mozo | Producción | Demo |
+## Avisos
+
+| Aviso | Se abre cuando | Mensaje | Producción | Demo |
 |---|---|---|---|---|
-| `mesa_por_terminar` | `tableStatus()` de la mesa **pasa a** `por_terminar` (ver «Estado de mesa») | "🍽️ Mesa 3 está terminando. Ofrecé postre o café." | — | — |
-| `plato_vacio` | Un plato en `vacio` hace ≥ T1 | "🧹 Mesa 3: hay platos vacíos para retirar." | T1 = 60 s | 10 s |
-| `plato_lleno_mucho` | Un plato en `lleno` hace ≥ T2 desde `first_seen` **y** `people_present` no es `false` | "❓ Mesa 3: un plato sigue lleno hace 12 min. Preguntá si está todo bien." | T2 = 10 min | 45 s |
-| `esperando_plato` | Mesa con `people_present = true`, **sin platos**, hace ≥ T4 desde que se retiraron los anteriores (solo si ya tuvo platos) | "⏳ Mesa 3: hace 8 min que no tiene platos. Preguntá si quieren pedir algo más." | T4 = 8 min | 30 s |
+| `mesa_por_terminar` | El estado de la mesa **pasa a** `por_terminar` (ver «Estado de mesa») | "🍽️ Mesa 3 está terminando." | — | — |
+| `plato_vacio` | Un plato está en `vacio` hace ≥ T1 | "🧹 Mesa 3: hay platos vacíos para retirar." | T1 = 60 s | 10 s |
+| `plato_lleno_mucho` | Un plato está en `lleno` hace ≥ T2 desde que apareció **y** `people_present` no es `false` | "❓ Mesa 3: un plato sigue lleno hace 12 min. ¿Está todo bien?" | T2 = 10 min | 45 s |
 
-## Umbrales y cadencia de lectura
+## Sin respuesta del mozo: recordatorio y cierre
 
-Las lecturas llegan cada 15–30 s (demo: 5–10 s). Como el suavizado exige 2 lecturas seguidas para aceptar un cambio de estado, el tiempo mínimo observable es ≈ 2 × cadencia. **Regla:** todo umbral de demo debe ser ≥ 2 × la cadencia configurada (con lecturas cada 5 s, T1 = 10 s es el mínimo viable). `config.ts` valida esto al arrancar y avisa si no se cumple.
+El mozo no responde, así que el antispam es por tiempo:
+
+- **Un aviso abierto por `(mesa, tipo)`.** Mientras esté abierto no se manda otro igual.
+- **Recordatorio:** si la condición sigue después de R minutos, se manda un recordatorio ("Mesa 3: los platos vacíos siguen sin retirar hace 4 min"). Producción R = 3 min, demo 30 s. Máximo 2 recordatorios.
+- **Cierre:** cuando la condición deja de cumplirse (retiraron el plato, la mesa dejó de estar por terminar), el aviso pasa a `resuelta` y se edita el mensaje original con "✅ ya resuelto".
+- **Agrupar:** si en la misma evaluación se abren varios avisos de la misma mesa, se manda un solo mensaje con todo.
+
+## Umbrales y cadencia
+
+Las observaciones llegan cada 15–30 s (demo: 5–10 s) y el suavizado exige 2 lecturas para aceptar un cambio, así que el tiempo mínimo observable es ≈ 2 × cadencia. Todo umbral de demo debe ser ≥ 2 × la cadencia; `config.py` lo valida al arrancar.
 
 ## `people_present`
 
-- Si `people_present = false` no se dispara `plato_lleno_mucho` (no tiene sentido preguntar si está todo bien a una mesa sin gente).
-- Si `people_present = false` y hay platos en `vacio`, `plato_vacio` sigue disparando (hay que retirar).
-- Si `people_present = false` no se dispara `esperando_plato` (la mesa se fue).
+- Si es `false`, no se abre `plato_lleno_mucho`.
+- Si es `false` y hay platos vacíos, `plato_vacio` sigue (hay que retirar).
 
-## Antispam
+## Estado de mesa
 
-- **Cooldown** por `(mesa, tipo)`: no repetir la misma alerta si hay una `abierta`/`en_camino` o si se resolvió hace < 5 min (demo: 30 s).
-- **Agrupar**: si en la misma evaluación disparan `plato_vacio` y `mesa_por_terminar`, mandar un solo mensaje con ambas cosas.
-- **Expirar**: si la condición deja de cumplirse (retiraron el plato, o en `esperando_plato` llegó un plato nuevo), la alerta pasa a `expirada` sola y se edita el mensaje de Telegram ("✅ ya resuelto").
-
-## Estado de mesa (para el dashboard)
-
-Función pura única `tableStatus(items)` en `web/lib/rules/`, usada por el motor de reglas **y** por `GET /api/tables`. Los ítems son siempre platos (las bebidas están fuera de alcance). Se evalúa en este orden:
+Función pura `table_status(items)`, evaluada en este orden:
 
 1. sin platos → `libre`
 2. todos `vacio` → `terminada`
@@ -35,8 +38,10 @@ Función pura única `tableStatus(items)` en `web/lib/rules/`, usada por el moto
 4. ≥ 50 % de los platos en `lleno` → `servida`
 5. resto → `comiendo`
 
-Así el color de la mesa en el dashboard y la alerta `mesa_por_terminar` nunca se contradicen.
+## Estado por plato
+
+`alerts/state.py` guarda por cada `track_id`: `first_seen`, `state`, `state_since` y `last_seen`. Si un `track_id` nuevo aparece en la misma mesa y `position` que uno que desapareció en esa misma lectura, se trata como el mismo plato (no reinicia `first_seen` ni `state_since`).
 
 ## Tests
 
-El motor es una función pura `(estadoMesa, ahora, config, alertasAbiertas) → { nuevas: Alerta[], expiradas: Alerta[] }`. `nuevas` respeta el cooldown y el agrupado; `expiradas` son las abiertas cuya condición ya no se cumple. `POST /api/observations` guarda las nuevas y llama a `Notifier.send`, y pasa las expiradas a `expirada` y llama a `Notifier.update` (ver [03-contratos.md](03-contratos.md)). Los tests reproducen `fixtures/observations/*.jsonl` y comparan contra `fixtures/expected/`. Escribir tests con tiempos simulados (Vitest). Es lo más fácil de testear y lo que más se rompe.
+El motor es una función pura `(estado_mesa, ahora, config, avisos_abiertos) → { abrir, recordar, cerrar }`. Los tests reproducen `fixtures/observations/*.jsonl` con tiempo simulado y comparan contra `fixtures/expected/*.alerts.json` (pytest).

@@ -4,35 +4,30 @@ Guía para agentes de IA (Claude Code, Kiro, etc.) y para el equipo. Leé este a
 
 ## Qué es Servio (en una línea)
 
-Una cámara en el techo del restaurante detecta los platos de comida en cada mesa, clasifica su estado (`lleno`, `comiendo`, `por_terminar`, `vacio`) y le manda un aviso al mozo por Telegram cuando tiene que ir a esa mesa. Además genera métricas para el negocio.
+Una cámara en alto mira el salón; YOLO encuentra los platos de cada mesa, Claude estima cuánta comida queda en cada uno, y cuando una mesa está por terminar, tiene platos vacíos o un plato sigue lleno mucho rato, le llega un aviso al mozo por Telegram.
 
-Contexto: MVP de hackathon, 24 horas, equipo de 3 personas.
-
-## Estado del repo
-
-Hoy el repo tiene **solo documentación**. Las carpetas `vision/` y `web/` todavía no existen: se crean en la hora 1–6 del [plan](docs/context/08-plan-24h.md). Hasta entonces, "trabajar dentro de tu módulo" significa crear tu carpeta siguiendo [09-convenciones.md](docs/context/09-convenciones.md). Variables de entorno: ver [.env.example](.env.example).
+Contexto: MVP de hackathon, 24 horas, equipo de 3 personas (Tomás, Matías, Jessica). Todo es un programa en Python dentro de `vision/`: no hay backend web, base de datos ni dashboard.
 
 ## Mapa de contexto
 
 | Archivo | Leelo cuando… |
 |---|---|
-| [docs/context/01-producto.md](docs/context/01-producto.md) | Necesitás entender el problema, el usuario, el alcance del MVP y qué queda afuera. |
-| [docs/context/02-arquitectura.md](docs/context/02-arquitectura.md) | Vas a tocar más de un módulo o decidir dónde va algo. Stack, componentes y flujo de datos. |
-| [docs/context/03-contratos.md](docs/context/03-contratos.md) | Vas a producir o consumir datos entre módulos. **Es la fuente de verdad** de esquemas, eventos y endpoints. |
-| [docs/context/04-vision.md](docs/context/04-vision.md) | Trabajás en la cámara, detección, clasificación de estado o zonas de mesas. |
-| [docs/context/05-reglas-alertas.md](docs/context/05-reglas-alertas.md) | Trabajás en la lógica que decide cuándo avisar (umbrales, suavizado, cooldowns). |
-| [docs/context/06-notificaciones.md](docs/context/06-notificaciones.md) | Trabajás en el bot de Telegram. |
-| [docs/context/07-backend-dashboard.md](docs/context/07-backend-dashboard.md) | Trabajás en la API, la base de datos o el dashboard web y sus métricas. |
-| [docs/context/08-plan-24h.md](docs/context/08-plan-24h.md) | Querés saber qué hacer ahora, quién hace qué y con qué herramienta. **Guía paso a paso.** |
-| [docs/context/09-convenciones.md](docs/context/09-convenciones.md) | Antes de commitear: estructura del repo, ramas, estilo, variables de entorno. |
+| [docs/context/01-producto.md](docs/context/01-producto.md) | Necesitás entender el problema, los avisos y qué queda afuera. |
+| [docs/context/02-arquitectura.md](docs/context/02-arquitectura.md) | Vas a tocar más de una parte o decidir dónde va algo. |
+| [docs/context/03-contratos.md](docs/context/03-contratos.md) | Vas a producir o consumir datos entre partes. **Es la fuente de verdad** de `Classifier`, `Item`, la observación de mesa, `Alert` y los fixtures. |
+| [docs/context/04-vision.md](docs/context/04-vision.md) | Trabajás en captura, zonas, YOLO, Claude, suavizado o cadencias. |
+| [docs/context/05-reglas-alertas.md](docs/context/05-reglas-alertas.md) | Trabajás en el estado de mesa, las reglas, recordatorios o cierre de avisos. |
+| [docs/context/06-notificaciones.md](docs/context/06-notificaciones.md) | Trabajás en el envío a Telegram. |
+| [docs/context/08-plan-24h.md](docs/context/08-plan-24h.md) | Querés el panorama: roles y fases por hora. |
+| [docs/context/09-convenciones.md](docs/context/09-convenciones.md) | Antes de commitear: estructura, dueños por carpeta, ramas, estilo, variables de entorno. |
 | [docs/context/11-tareas.md](docs/context/11-tareas.md) | Vas a hacer una tarea: qué hacer, en qué archivo, de qué depende y cuándo está hecha. |
 
 ## Reglas para agentes
 
-1. **Los contratos mandan.** Si cambiás un esquema o un endpoint, actualizá primero `docs/context/03-contratos.md` en el mismo PR y avisá en la descripción.
+1. **Los contratos mandan.** Si cambiás `Classifier`, `Item`, la observación de mesa o `Alert`, actualizá primero `docs/context/03-contratos.md` y los fixtures en el mismo PR, y avisá en la descripción.
 2. **Trabajá solo en tus carpetas** según la tabla «Dueños por carpeta» de [09-convenciones.md](docs/context/09-convenciones.md), salvo que la tarea diga otra cosa.
-3. **Primero que funcione, después que sea lindo.** Es una hackathon: preferí lo simple y demostrable. Si dudás entre dos opciones, elegí la que se pueda mostrar antes.
-4. **Siempre con mock.** Cada módulo tiene que poder correr solo, con datos falsos, sin depender de que el otro esté listo.
+3. **Primero que funcione, después que sea lindo.** Es una hackathon: preferí lo simple y demostrable.
+4. **Siempre con mock.** Cada parte tiene que poder correr sola: el pipeline con `--classifier fake`, las reglas con `fixtures/` y `--no-telegram`, el clasificador con fotos sueltas.
 5. **Nada de secretos en el repo.** Tokens y claves van en `.env` (ignorado) y se documentan en `.env.example`.
-6. **No subas imágenes ni datasets al repo** (ni de clientes, ni de Roboflow, ni videos). Ver «Privacidad» en [09-convenciones.md](docs/context/09-convenciones.md).
+6. **No subas imágenes, videos, datasets ni pesos al repo.** Ver «Privacidad y datos» en [09-convenciones.md](docs/context/09-convenciones.md).
 7. Escribí docs y comentarios en español; código (nombres de variables, funciones) en inglés.
