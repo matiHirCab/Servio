@@ -176,9 +176,14 @@ def run_parallel(classifier, frame_iter, out: Path, timeline: list, workers: int
 
     def ask(prepared):
         t0 = time.monotonic()
-        return classifier.ask(prepared), time.monotonic() - t0
+        try:
+            answer = classifier.ask(prepared)
+        except Exception:  # un error raro de Claude no corta la corrida
+            logging.getLogger(__name__).exception("Claude falló")
+            answer = None
+        return answer, time.monotonic() - t0
 
-    previous = []
+    previous, seen = [], []
     pending: deque = deque()
 
     def finish_oldest():
@@ -194,7 +199,8 @@ def run_parallel(classifier, frame_iter, out: Path, timeline: list, workers: int
     with ThreadPoolExecutor(max_workers=workers) as pool:
         for n, (sec, img) in enumerate(frame_iter, 1):
             t0 = time.monotonic()
-            prepared = classifier.prepare(_jpeg_bytes(img), "T1")
+            prepared = classifier.prepare(_jpeg_bytes(img), "T1", seen)
+            seen = prepared.seen_items
             yolo_s = time.monotonic() - t0
             pending.append((n, sec, img, prepared, pool.submit(ask, prepared), yolo_s))
             while len(pending) > workers:
@@ -223,16 +229,21 @@ def main() -> None:
 
     timeline: list[dict] = []
     start = time.monotonic()
-    if hasattr(classifier, "prepare") and a.paralelo > 1:
-        run_parallel(
-            classifier, frames(a.video, a.cada, a.max_frames), out, timeline, a.paralelo
-        )
-    else:
-        run_serial(classifier, frames(a.video, a.cada, a.max_frames), out, timeline)
+    try:
+        if hasattr(classifier, "prepare") and a.paralelo > 1:
+            run_parallel(
+                classifier,
+                frames(a.video, a.cada, a.max_frames),
+                out,
+                timeline,
+                a.paralelo,
+            )
+        else:
+            run_serial(classifier, frames(a.video, a.cada, a.max_frames), out, timeline)
+    finally:  # aunque se corte, queda la línea de tiempo de lo que se hizo
+        with open(out / "linea_de_tiempo.json", "w", encoding="utf-8") as f:
+            json.dump(timeline, f, indent=2, ensure_ascii=False)
     print(f"Tiempo total: {time.monotonic() - start:.0f} s")
-
-    with open(out / "linea_de_tiempo.json", "w", encoding="utf-8") as f:
-        json.dump(timeline, f, indent=2, ensure_ascii=False)
     print(f"Listo: {len(timeline)} frames en {out}")
 
 

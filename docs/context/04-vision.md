@@ -89,7 +89,7 @@ frame (cada 30 s) → recorte por mesa → classify() → suavizado → observac
 
 Por cada plato:
 - Un plato con `visible: false` no cuenta como lectura. Si ya se había visto, el `hybrid` lo manda con su última lectura y `visible: false`: se sigue mostrando su último estado pero no suma a la racha. Recién con 3 lecturas seguidas sin verlo se muestra «tapado» (sin estado).
-- Un plato que YOLO deja de encontrar se le sigue mandando a Claude con su última caja, hasta 3 lecturas. Si Claude lo ve, sigue con su id; si no, se muestra su última lectura y después deja de venir (no queda «tapado»: lo más probable es que se lo hayan llevado).
+- Un plato que YOLO deja de encontrar se le sigue mandando a Claude con su última caja, hasta 3 lecturas. Si Claude lo ve, sigue con su id; si no, se muestra su última lectura y después deja de venir (no queda «tapado»: lo más probable es que se lo hayan llevado). Si Claude lo lee vacío o bajando más de 0,3 de golpe, se toma como no visto, porque puede estar mirando el hueco donde estaba el plato.
 - Cambio a un estado vecino: se acepta si aparece en **2 lecturas seguidas**.
 - Retroceso (`vacio → comiendo`) o salto de más de un estado (`lleno → vacio`): se acepta con **3 lecturas seguidas** con `confidence ≥ 0.8`.
 - Ausente en 1 lectura: se mantiene. Ausente en 2 seguidas: retirado (deja de venir en la observación).
