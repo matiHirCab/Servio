@@ -6,10 +6,11 @@ Si cambiás algo acá, cambiá también el doc y fixtures/.
 
 import re
 from collections import Counter
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Annotated, Any, Literal
 
 from pydantic import (
+    AfterValidator,
     AwareDatetime,
     BaseModel,
     BeforeValidator,
@@ -24,9 +25,10 @@ AlertType = Literal["mesa_por_terminar", "plato_vacio", "plato_lleno_mucho"]
 AlertStatus = Literal["abierta", "resuelta"]
 
 
-# Forma de fecha del contrato: ISO 8601 con "T", segundos y zona (Z o ±HH:MM).
+# Forma de fecha del contrato: ISO 8601 con "T", segundos y zona (Z o ±HH:MM). Hasta 6
+# decimales: datetime no guarda más y los cortaría en silencio.
 _ISO_RE = re.compile(
-    r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:\d{2})$"
+    r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,6})?(Z|[+-]\d{2}:\d{2})"
 )
 
 
@@ -36,7 +38,8 @@ def _parse_datetime(value: Any) -> Any:
     # aceptaría. Sin zona lo rechaza AwareDatetime.
     if isinstance(value, datetime):
         return value
-    if isinstance(value, str) and _ISO_RE.match(value):
+    # fullmatch: con match y "$", "…Z\n" también pasaría.
+    if isinstance(value, str) and _ISO_RE.fullmatch(value):
         return datetime.fromisoformat(value)
     raise ValueError("fecha ISO 8601 con T y zona, ej. 2026-10-17T20:00:00Z")
 
@@ -53,18 +56,35 @@ def _none_as_true(value: Any) -> Any:
     return True if value is None else value
 
 
-Timestamp = Annotated[AwareDatetime, BeforeValidator(_parse_datetime)]
+def _to_utc(value: datetime) -> datetime:
+    # El contrato pide UTC: se acepta cualquier zona pero se guarda en UTC, para que el
+    # log y los mensajes no mezclen zonas.
+    return value.astimezone(UTC)
+
+
+Timestamp = Annotated[
+    AwareDatetime, BeforeValidator(_parse_datetime), AfterValidator(_to_utc)
+]
 
 
 class _Model(BaseModel):
     # Sin conversiones implícitas ("0.8" -> 0.8) y sin campos desconocidos (atrapa typos
-    # como "fillRatio", que si no se perderían en silencio). validate_assignment: el motor
-    # modifica el aviso abierto (reminders_sent += 1) y el tope se tiene que seguir cumpliendo.
-    model_config = ConfigDict(strict=True, extra="forbid", validate_assignment=True)
+    # como "fillRatio", que si no se perderían en silencio).
+    model_config = ConfigDict(strict=True, extra="forbid")
 
 
-class ObservedPlate(_Model):
-    """Un plato visible y ya suavizado, dentro de una observación de mesa."""
+class _Input(_Model):
+    # La observación es de solo lectura. No usar validate_assignment con validadores de
+    # modelo: pydantic asigna antes de correrlos y un error dejaría el valor malo puesto.
+    model_config = ConfigDict(frozen=True)
+
+
+class ObservedPlate(_Input):
+    """Un plato visible y ya suavizado, dentro de una observación de mesa.
+
+    `fill_ratio` y `confidence` son los de la última lectura que coincidió con `state`
+    (así los devuelve smoothing.py), por eso se validan juntos y `confidence` nunca falta.
+    """
 
     track_id: str = Field(min_length=1)  # {table_id}-{id del Item}
     state: PlateState
@@ -87,7 +107,7 @@ class ObservedPlate(_Model):
         return self
 
 
-class TableObservation(_Model):
+class TableObservation(_Input):
     """Lo que el pipeline le pasa a `alerts.process()`: una mesa en una lectura."""
 
     schema_version: Annotated[Literal[1], BeforeValidator(_exact_int)]
@@ -120,6 +140,10 @@ class TableObservation(_Model):
 
 class Alert(_Model):
     """Un aviso al grupo de mozos."""
+
+    # El motor modifica el aviso abierto (reminders_sent += 1) y el tope se tiene que
+    # seguir cumpliendo. Sin validadores de modelo, así un error no deja el valor puesto.
+    model_config = ConfigDict(validate_assignment=True)
 
     id: str = Field(min_length=1)
     table_id: str = Field(min_length=1)
