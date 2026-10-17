@@ -11,8 +11,8 @@ from servio_vision.schemas import Item, TableReport, state_from_fill_ratio
     ("fill_ratio", "state"),
     [
         (1.0, "lleno"),
-        (0.81, "lleno"),
-        (0.80, "comiendo"),
+        (0.75, "lleno"),
+        (0.74, "comiendo"),
         (0.30, "comiendo"),
         (0.29, "por_terminar"),
         (0.05, "por_terminar"),

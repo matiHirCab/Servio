@@ -12,7 +12,7 @@ AlertStatus = Literal["abierta", "resuelta"]
 ```
 
 Estado según la comida que queda (`fill_ratio`, de 0 a 1), en `servio_vision/schemas.py`:
-`lleno` > 0,80 · `comiendo` 0,30–0,80 · `por_terminar` 0,05–0,30 · `vacio` < 0,05.
+`lleno` ≥ 0,75 · `comiendo` 0,30–0,75 · `por_terminar` 0,05–0,30 · `vacio` < 0,05.
 
 ## Zonas de mesas — `vision/config/zones.json`
 
