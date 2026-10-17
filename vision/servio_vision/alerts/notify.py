@@ -122,12 +122,16 @@ class ConsoleNotifier:
 
 def _print(text: str) -> None:
     """Imprime sin fallar: en Windows, con stdout redirigido (cp1252), los emojis
-    tiran `UnicodeEncodeError`; ahí salen como `?` en vez de cortar el aviso."""
+    tiran `UnicodeEncodeError`; ahí salen como `?` en vez de cortar el aviso. Como
+    `send`/`edit`, nunca lanza: si tampoco así se puede imprimir, se loguea."""
     try:
         print(text, flush=True)
     except UnicodeEncodeError:
-        encoding = sys.stdout.encoding or "utf-8"
-        print(text.encode(encoding, "replace").decode(encoding), flush=True)
+        try:
+            encoding = sys.stdout.encoding or "ascii"
+            print(text.encode(encoding, "replace").decode(encoding), flush=True)
+        except (UnicodeError, LookupError, OSError):
+            logger.warning("No se pudo imprimir el aviso en consola")
 
 
 def get_notifier(telegram: bool, env: Mapping[str, str] | None = None) -> Notifier:

@@ -39,11 +39,14 @@ def test_fake_loop_with_demo_thresholds_opens_and_closes_the_three_alerts(
         load_config(INTERVAL, demo=True, env={}), telegram=False, log_path=log
     )
     pipeline = loop.Pipeline(FakeClassifier(), ZONES, alerts.process)
-    with caplog.at_level(logging.ERROR):
-        for n in range(READINGS):
-            pipeline.process_frame(FRAME, T0 + timedelta(seconds=INTERVAL * n))
-    pipeline.close()
-    alerts._processor.close()
+    try:
+        with caplog.at_level(logging.ERROR):
+            for n in range(READINGS):
+                pipeline.process_frame(FRAME, T0 + timedelta(seconds=INTERVAL * n))
+    finally:
+        # cerrar siempre: en Windows un log abierto bloquea tmp_path
+        pipeline.close()
+        alerts._processor.close()
 
     assert not [r for r in caplog.records if r.levelno >= logging.ERROR]
     events = [json.loads(line) for line in log.read_text("utf-8").splitlines()]

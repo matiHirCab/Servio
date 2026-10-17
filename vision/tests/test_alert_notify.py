@@ -130,3 +130,19 @@ def test_console_notifier_survives_a_console_without_emojis(monkeypatch):
     out = raw.getvalue().decode("cp1252")
     assert "[telegram #1] ? Mesa 1: un plato sigue lleno" in out
     assert "? ya resuelto" in out
+
+
+def test_console_notifier_never_raises_even_if_the_fallback_fails(monkeypatch, caplog):
+    # stdout que dice "utf-8" pero no acepta nada fuera de ASCII (wrapper raro).
+    class LyingStdout(io.StringIO):
+        encoding = "utf-8"
+
+        def write(self, text):
+            text.encode("ascii")
+            return super().write(text)
+
+    monkeypatch.setattr(sys, "stdout", LyingStdout())
+    console = ConsoleNotifier()
+    assert console.send("❓ Mesa 1") == 1
+    assert console.edit(1, "✅")
+    assert "No se pudo imprimir" in caplog.text
