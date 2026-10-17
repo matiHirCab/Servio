@@ -2,49 +2,57 @@
 
 ## Vista general
 
+Un solo programa en Python, corriendo en una laptop:
+
 ```
- [Cámara cenital]
-       │ frames (RTSP / webcam / video grabado)
+ [Video o cámara]
+       │ frame cada 1 s
        ▼
- ┌──────────────────────────┐        POST /api/observations   ┌───────────────────────────┐
- │ vision/  (Python, local) │ ─────────────────────────────▶  │ web/  (Next.js en Vercel) │
- │ - captura                │        (cada 15–30 s, JSON)       │ - API routes              │
- │ - recorte por mesa       │                                 │ - motor de reglas         │
- │ - Claude visión (estado) │                                 │ - dashboard               │
- │ - suavizado              │                                 │ - webhook Telegram        │
- └──────────────────────────┘                                 └──────────┬────────────────┘
-                                                                         │
-                                         ┌───────────────────────────────┤
-                                         ▼                               ▼
-                                  [Postgres (Neon /             [Telegram Bot API]
-                                   Vercel Postgres)]              → celular mozo
+ ┌─────────────────────────────── vision/ (Python) ───────────────────────────────┐
+ │ captura → recorte por mesa → clasificador → suavizado → estado de mesa → reglas │
+ │                               (YOLO + Claude)                                   │
+ └───────────────────────────────────────────────────────────┬────────────────────┘
+                                                             │ sendMessage / editMessageText
+                                                             ▼
+                                                   [Telegram: grupo "Mozos"]
 ```
+
+No hay backend web, base de datos ni dashboard. El estado vive en memoria y se guarda un log en `vision/out/eventos.jsonl`.
 
 ## Componentes
 
-| Módulo | Carpeta | Tecnología | Dónde corre |
+| Parte | Carpeta | Qué hace | Dueño |
 |---|---|---|---|
-| Visión | `vision/` | Python 3.11, OpenCV (captura y recorte). Clasificación detrás de la interfaz `Classifier`: Claude multimodal vía AWS Bedrock por defecto; YOLO solo si gana la comparativa (ver [04-vision.md](04-vision.md)). | Laptop con la cámara (edge), sin GPU. Si se usa YOLO, se entrena en Colab con GPU e infiere `yolov8n` en la laptop con CPU. |
-| API + reglas + bot | `web/app/api/` | Next.js (App Router, TypeScript) | Vercel |
-| Dashboard | `web/app/` | Next.js + Tailwind + shadcn/ui, polling o SSE | Vercel |
-| Base de datos | — | Postgres (Neon desde el marketplace de Vercel) + Drizzle o Prisma | Nube |
-| Notificaciones | `web/lib/notify/` | Telegram Bot API | Vercel |
+| Pipeline | `vision/main.py`, `servio_vision/{capture,zones,change,smoothing}.py` | Lee el video, recorta cada mesa, decide cuándo clasificar, suaviza | Jessica |
+| Clasificador | `servio_vision/classifiers/` | YOLO encuentra los platos; Claude estima cuánta comida queda | Tomás |
+| Reglas y avisos | `servio_vision/alerts/` | Estado de cada mesa, reglas, envío a Telegram, log | Matías |
+
+Dueños por carpeta en [09-convenciones.md](09-convenciones.md).
 
 ## Por qué así
 
-- **Un solo deploy web (Vercel)** para API, bot y dashboard: menos piezas que se rompen.
-- **La captura corre local** porque la cámara está en el local. Al backend solo sube JSON chiquito (estado de cada plato). A Claude solo se mandan recortes de cada mesa cada 15–30 s, no video.
-- **Claude multimodal por defecto, YOLO a prueba**: cámara fija y cenital, mesas fijas, estados que cambian en minutos, así que no hace falta detección en tiempo real. Claude funciona sin entrenar; un YOLO entrenado se compara contra Claude con el mismo test set y solo entra si gana antes de la hora 12. Los dos van detrás de la misma interfaz `Classifier`, así que el resto del pipeline no cambia. Detalle en [04-vision.md](04-vision.md).
-- **Las reglas viven en el backend**, no en la visión: así se pueden ajustar umbrales sin tocar el modelo, y el dashboard ve lo mismo que el bot.
-- **Contrato JSON fijo** entre visión y backend ([03-contratos.md](03-contratos.md)) para que las 3 personas trabajen en paralelo desde la hora 1 con datos falsos.
+- **Un solo proceso:** el mozo no responde, así que no hace falta servidor ni webhook. Menos piezas que se rompen en la demo.
+- **YOLO + Claude juntos:** YOLO (entrenado con el dataset de Roboflow) encuentra cada plato rápido y en la laptop, y da su posición, lo que permite mantener el mismo id para el mismo plato. Claude mira el recorte de cada plato y estima cuánta comida queda, cosa que YOLO no sabe hacer bien (solo distingue lleno/vacío). Si Claude no responde (sin internet), el clasificador usa lo que dice YOLO.
+- **Interfaz única `Classifier`:** el pipeline no sabe qué modelo usa. Hay tres implementaciones: `fake` (sin modelo, para desarrollar), `yolo` (solo YOLO, plan B sin internet) y `hybrid` (YOLO + Claude, la de la demo).
+- **Las reglas viven aparte de la visión:** se ajustan umbrales sin tocar el modelo, y se prueban con fixtures sin video ni Claude.
 
 ## Flujo de datos
 
-1. `vision/` lee un frame cada ~1 s.
-2. Recorta cada mesa por su zona; si el recorte cambió (y cada 15–30 s), se lo manda a Claude, que devuelve los platos con su estado en JSON. Se suaviza.
-3. Después de cada lectura manda una **observación** por mesa: lista de ítems con id de seguimiento, tipo, estado y confianza.
-4. El backend guarda la observación, **reconcilia ids** (un ítem que cambia de id en la misma posición sigue siendo el mismo; ver [03-contratos.md](03-contratos.md)), actualiza el estado de cada ítem (`first_seen`, `state_since`) y corre las reglas.
-5. Si una regla dispara (y no está en cooldown) crea una **alerta** y la manda por Telegram.
-6. El mozo toca "Voy" / "Listo" → webhook → se actualiza la alerta → sirve para medir tiempo de respuesta.
-7. El dashboard consulta `/api/tables` y `/api/alerts` cada 2 s (o SSE) y muestra el mapa. El polling es más rápido que las lecturas a propósito: así un cambio de alerta (Voy/Listo) se ve enseguida.
+1. `main.py` lee un frame por segundo del video o la cámara.
+2. Recorta cada mesa según `config/zones.json`, desde la resolución original.
+3. Si el recorte cambió (o pasó el refresco forzado), llama a `classifier.classify(recorte, table_id, items_anteriores)`, que devuelve un `TableReport` con los platos, su estado y su posición.
+4. El suavizado acepta un cambio de estado solo si se repite (ver [04-vision.md](04-vision.md)).
+5. Con la lectura suavizada se arma una **observación** de la mesa (formato en [03-contratos.md](03-contratos.md)) y se pasa a `alerts`.
+6. `alerts` actualiza el estado de la mesa (desde cuándo cada plato está en cada estado), corre las reglas y manda o edita mensajes de Telegram.
+7. Cada observación y cada aviso se escriben en `vision/out/eventos.jsonl`.
 
+## Recursos
+
+| Recurso | Para qué |
+|---|---|
+| AWS (créditos) | Claude en Bedrock. |
+| API de Anthropic | Respaldo de Bedrock. |
+| Colab con GPU | Entrenar YOLO (`yolov8n`). La inferencia corre en la laptop con CPU. |
+| Roboflow | Dataset *AI Smart Restaurant Surveillance* (CC BY 4.0) para entrenar y evaluar. |
+| Telegram | Bot que manda los avisos al grupo "Mozos". |
+| GitHub | Repo, PRs y CI. |

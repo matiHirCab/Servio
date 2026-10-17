@@ -1,163 +1,130 @@
-# 04 — Visión (Claude por defecto, YOLO a prueba)
+# 04 — Visión (YOLO + Claude)
 
-La clasificación va detrás de una interfaz única, `Classifier` (ver [03-contratos.md](03-contratos.md)). La implementación **por defecto es Claude multimodal** vía AWS Bedrock (créditos) o la API de Anthropic. En paralelo se evalúa un **YOLO entrenado** con el mismo test set; solo reemplaza o complementa a Claude si gana antes de la hora 12 (ver «Decisión YOLO vs. Claude»). La parte en Python que captura, recorta, suaviza y envía (P3) no depende de cuál se use.
+**YOLO encuentra los platos y Claude estima cuánta comida queda en cada uno.** Los dos van detrás de la interfaz `Classifier` ([03-contratos.md](03-contratos.md)), así el pipeline no depende de cuál se use.
 
-## Por qué
+## Por qué los dos
 
-- **Claude por defecto:** cero entrenamiento; entiende "plato a medio comer" sin que le enseñemos y da los 4 estados (`lleno`, `comiendo`, `por_terminar`, `vacio`). En 2 horas hay clasificación funcionando.
-- **YOLO a prueba:** un YOLO preentrenado (COCO) no sirve tal cual (no tiene "plato" ni sabe si está lleno), pero entrenado con el dataset de Roboflow (`food` / `finished_food`) puede ser más rápido y barato. Vale la pena tener el dato real para decidir y para el pitch.
-- **Interfaz única:** como los dos devuelven un `TableReport`, cambiar de uno a otro es un flag (`--classifier`), no un cambio de pipeline.
-- La cámara es fija y cenital, las mesas no se mueven: no necesitamos detección ni tracking en tiempo real. Un estado cada 15–30 s por mesa alcanza (un plato no pasa de lleno a vacío en segundos).
+- **YOLO** (`yolov8n` entrenado con el dataset de Roboflow): encuentra cada plato rápido, en la laptop con CPU, y da su caja. Con la caja se mantiene el mismo id para el mismo plato entre lecturas y se recorta el plato a buena resolución aunque haya muchas mesas en el plano. Solo distingue `food` / `finished_food`, así que no alcanza para los estados intermedios.
+- **Claude** (Haiku en Bedrock, o la API de Anthropic): mira el recorte de cada plato y estima `fill_ratio` (cuánta comida queda), que da los 4 estados sin entrenar nada.
+- **Plan B:** si Claude no responde, el `hybrid` usa la clase de YOLO (`food` → `lleno`, `finished_food` → `vacio`). Si YOLO no está entrenado a tiempo, se usa `claude` con el recorte de la mesa entera.
 
-## Trade-offs a tener en cuenta
+## Clasificador `hybrid` (el de la demo)
+
+Por cada llamada a `classify(recorte_mesa, table_id, items_anteriores)`:
+
+1. **YOLO** detecta los platos en el recorte de la mesa → cajas + clase + confianza.
+2. **Ids:** empareja cada caja con los `items_anteriores` por distancia entre centros (`servio_vision/tracking.py`). Si no hay pareja cerca, es un plato nuevo (`p{n}` siguiente).
+3. **Claude:** una sola llamada por mesa con el recorte de la mesa (para `people_present`) y los recortes de cada plato numerados (con 10 % de margen). Devuelve, por plato, `fill_ratio`, `confidence` y `visible`.
+4. Arma el `TableReport` con `id`, `bbox`, `position` (derivada de la caja), `fill_ratio` y el estado.
+5. Si Claude falla o tarda más de 10 s: estado según la clase de YOLO, con confianza más baja.
+
+### Prompt de Claude (base, iterar con el video)
+
+```
+Sos el sistema de visión de un restaurante. La primera imagen es una vista desde arriba de la mesa {table_id}.
+Las siguientes son recortes de cada plato de esa mesa, numerados desde 1 en el mismo orden.
+Para cada plato estimá:
+- fill_ratio: cuánta comida queda, de 0 (vacío o solo restos) a 1 (recién servido, intacto).
+- confidence: de 0 a 1.
+- visible: false si una mano, un brazo, un cubierto grande o una persona tapa el plato.
+Indicá también si hay personas sentadas en la mesa (people_present).
+Respondé SOLO con la herramienta report_plates.
+```
+
+Herramienta `report_plates`:
+
+```json
+{ "plates": [ { "index": 1, "fill_ratio": 0.5, "confidence": 0.8, "visible": true } ],
+  "people_present": true }
+```
+
+`temperature: 0`, herramienta forzada, validación con Pydantic y un reintento.
+
+## Entrenar YOLO
+
+- Dataset: *AI Smart Restaurant Surveillance* de Roboflow (CC BY 4.0), versión **a color y sin augmentación**, formato YOLO, en `vision/data/roboflow/` (ignorado por git). Clases que nos importan: `food` y `finished_food`.
+- Separar un **test set** del 15 % que no se usa para entrenar ni para iterar el prompt.
+- `vision/tools/train_yolo.ipynb` en **Colab con GPU**: `yolov8n`, ~30 épocas, imagen 640. Pesos a `vision/models/best.pt` (ignorado por git; se comparten por la carpeta del equipo). Ruta en `YOLO_WEIGHTS`.
+- Dependencias de YOLO (`ultralytics`) en `vision/requirements-yolo.txt`, aparte, para que el CI no instale torch.
+
+## Trade-offs
 
 | Riesgo | Mitigación |
 |---|---|
-| **Latencia** (1–3 s por llamada) | No importa: muestreamos cada 15–30 s. El loop de cámara no espera la respuesta (llamadas asíncronas). |
-| **Costo por llamada** | Mandar recortes chicos por mesa (~512 px de lado), no el frame entero. Modelo Haiku (el más reciente en Bedrock). Solo llamar si el recorte **cambió** (diferencia de píxeles contra el último enviado). Ver cuenta abajo. |
-| **Rate limits de Bedrock** | Pedir aumento de cuota el primer día. Agrupar varias mesas en una sola llamada (varias imágenes en un mensaje). |
-| **Identidad de cada plato** entre llamadas | Claude no da ids estables. Le pasamos el estado anterior de la mesa en el prompt y le pedimos que mantenga los ids (`p1`, `p2`…) según la posición. Ver prompt. |
-| **Respuestas inconsistentes** | Salida JSON forzada (tool use / structured output), `temperature: 0`, y suavizado en el backend (ver abajo). |
-| **Depende de internet** | Plan B en la demo: video grabado + respuestas cacheadas, o el simulador. |
+| **Muchas mesas en un plano** → platos chicos | Recortar desde el frame original (no achicado); YOLO recorta cada plato antes de mandarlo a Claude. Probar temprano con el video de la demo qué tamaño mínimo de plato funciona. |
+| **Latencia de Claude** (1–3 s) | Muestreamos cada 15–30 s; llamadas asíncronas, el loop no espera. |
+| **Costo** | Una llamada por mesa, solo si el recorte cambió; recortes chicos; Haiku. |
+| **Rate limits de Bedrock** | Pedir aumento de cuota temprano; API de Anthropic como respaldo. |
+| **Sin internet** | `--classifier yolo` (solo YOLO) o reproducir un log con `tools/replay.py`. |
+| **Manos que tapan** | `visible: false` → no cuenta en el suavizado. |
 
-**Pendiente día 1:** reemplazar la cuenta de abajo por el número real. Cuenta rápida de costo: con 4 mesas, una llamada cada 20 s solo si hubo cambio, son unas pocas miles de llamadas por día de servicio. Calcular el número real con los precios vigentes de Bedrock para el modelo elegido el día 1 y anotarlo acá; para la hackathon los créditos de AWS sobran.
-
-## Cadencias (una sola tabla)
+## Cadencias
 
 | Qué | Producción | Modo demo |
 |---|---|---|
 | Captura de frame | 1 s | 1 s |
-| Llamada a Claude por mesa (si el recorte cambió) | 15–30 s | 5–10 s |
+| Llamada al clasificador por mesa (si el recorte cambió) | 15–30 s | 5–10 s |
 | Refresco forzado sin cambios | 60 s | 20 s |
-| Observación al backend | tras cada lectura | tras cada lectura |
+| Observación a `alerts` | tras cada lectura | tras cada lectura |
 
-Los umbrales de [05-reglas-alertas.md](05-reglas-alertas.md) deben ser ≥ 2 × la cadencia de llamada a Claude.
+Modo demo con `DEMO_MODE=true` o `--demo` (el flag le gana). Los umbrales de [05-reglas-alertas.md](05-reglas-alertas.md) deben ser ≥ 2 × la cadencia de llamada.
 
-## Setup de cámara
+## Video y cámara
 
-- Vista **cenital** (mirando recto hacia abajo).
-- Demo: celular o webcam en trípode/brazo a ~1,5–2 m arriba de una mesa armada. Celular como cámara IP (IP Webcam / DroidCam) → OpenCV lee la URL.
-- **Grabar videos de prueba desde la hora 1** (plato lleno → comiendo → vacío, con manos tapando). Sirven para desarrollar y de respaldo en la demo.
-- Luz pareja, sin reflejos fuertes.
+- Vista **desde arriba** (cenital o en alto), varias mesas, 1080p o más, luz pareja.
+- Fuente: archivo de video (`--source demo.mp4`, el ts es el tiempo del video), carpeta de fotos o cámara del celular como IP (IP Webcam / DroidCam).
+- Videos de YouTube: solo para probar, no para mostrar.
 
 ## Pipeline
 
 ```
-frame (cada 1 s) → recortar cada mesa por su zona → ¿cambió? → (cada 15–30 s) Claude → JSON → suavizar → POST al backend
+frame (1 s) → recorte por mesa → ¿cambió? → classify() → suavizado → observación → alerts
 ```
 
-1. **Zonas**: polígono/rectángulo por mesa en `vision/config/zones.json` (ver [03-contratos.md](03-contratos.md)), dibujado una vez con `tools/draw_zones.py`.
-2. **Recorte**: `cv2` recorta el rectángulo de la mesa y lo achica a ~512 px de lado, JPEG calidad 80.
-3. **Detector de cambio** (para ahorrar llamadas): diferencia media de píxeles contra el último recorte enviado; si es menor a un umbral, no se llama (salvo que pasen >60 s, para refrescar tiempos).
-4. **Claude**: una llamada con el recorte (o varias mesas juntas), el estado anterior y el prompt de abajo.
-5. **Validación**: parsear con Pydantic; si falla, reintentar una vez y si no, descartar esa lectura.
-6. **Envío**: `POST /api/observations` con el formato del contrato.
-
-### Prompt (base, iterar con los videos)
-
-```
-Sos el sistema de visión de un restaurante. La imagen es una vista cenital de la mesa {table_id}.
-Identificá cada plato de comida que esté sobre la mesa. Ignorá vasos, tazas, botellas y cubiertos.
-Para cada plato devolvé un estado:
-- "lleno": recién servido, casi intacto (más de 80 % de la comida)
-- "comiendo": entre 30 % y 80 %
-- "por_terminar": entre 5 % y 30 %
-- "vacio": menos de 5 % (sin comida o solo restos)
-Devolvé también fill_ratio (0 a 1): la fracción de comida que queda, coherente con el estado.
-Estado anterior de esta mesa: {previous_items_json}
-Si una mano, un brazo o una cabeza tapa un plato y no podés ver cuánta comida queda, devolvelo igual con "visible": false.
-Mantené el mismo id para el mismo objeto (por posición). Usá ids nuevos (p3, p4…) solo para objetos nuevos.
-No incluyas objetos que ya no están.
-Respondé SOLO con la herramienta report_table.
-```
-
-Herramienta (JSON schema) `report_table`:
-
-```json
-{
-  "items": [
-    { "id": "p1", "kind": "plate", "state": "comiendo", "fill_ratio": 0.5,
-      "position": "arriba-izquierda", "confidence": 0.8, "visible": true }
-  ],
-  "people_present": true,
-  "notes": "opcional, algo raro (plato volcado, mesa sin gente con platos llenos)"
-}
-```
-
-`visible`: `false` si algo tapa el plato. Esos ítems **no cuentan como lectura** en el suavizado (ni para cambiar de estado ni como ausencia) y no se mandan al backend.
-
-`people_present` es gratis de pedir y sirve para métricas de ocupación y para no avisar "plato lleno" si la mesa está vacía.
+1. **Zonas**: polígono por mesa en `config/zones.json`, dibujado con `tools/draw_zones.py`.
+2. **Recorte**: el rectángulo de la mesa desde el frame original, JPEG calidad 85.
+3. **Detector de cambio**: diferencia media de píxeles contra el último recorte clasificado; si es chica no se llama, salvo el refresco forzado.
+4. **Clasificador**: `--classifier fake|yolo|hybrid|claude`.
+5. **Suavizado** (abajo).
+6. **Observación** a `alerts.process()` y al log.
 
 ### Suavizado
 
-Aunque las llamadas son espaciadas, Claude puede dudar entre dos estados vecinos. Por cada item:
-- Solo aceptar un cambio de estado si aparece en **2 lecturas seguidas**.
-- Los estados avanzan (`lleno → comiendo → por_terminar → vacio`). Un **retroceso** (por ejemplo `vacio → comiendo`) y un **salto de más de un estado** (por ejemplo `lleno → vacio`) se aceptan solo si aparecen en **3 lecturas seguidas** con `confidence ≥ 0.8`. Así un error de Claude no deja un plato atascado en `vacio`, y un plato que el cliente vuelve a llenar o que sigue en consumo se corrige solo.
-- Si un item falta en una lectura, mantenerlo; si falta en 2 seguidas, se considera retirado.
-- Un item con `visible: false` se ignora en esa lectura: se mantiene su último estado suavizado.
+Por cada plato:
+- Un plato con `visible: false` no cuenta como lectura.
+- Cambio a un estado vecino: se acepta si aparece en **2 lecturas seguidas**.
+- Retroceso (`vacio → comiendo`) o salto de más de un estado (`lleno → vacio`): se acepta con **3 lecturas seguidas** con `confidence ≥ 0.8`.
+- Ausente en 1 lectura: se mantiene. Ausente en 2 seguidas: retirado (deja de venir en la observación).
 
-## Estructura sugerida
-
-Dueños por carpeta en [09-convenciones.md](09-convenciones.md).
+## Estructura
 
 ```
 vision/
-  main.py               # loop: captura → recorte → classify() → suavizado → envío   (P3)
-  config/zones.json     # (P3)
+  main.py                    # loop (Jessica)
+  config/zones.json          # (Jessica)
   servio_vision/
-    schemas.py          # Pydantic de report_table: Item, TableReport               (P1, contrato)
-    classifier.py       # Protocol Classifier + get_classifier(name)                (P1, contrato)
+    schemas.py, classifier.py   # contrato (Tomás; cambios con revisión de Jessica)
     classifiers/
-      fake.py           # sin modelo: script por tiempo o replay de fixtures        (P3)
-      claude.py         # Bedrock (boto3) o API de Anthropic, tool use              (P1)
-      yolo.py           # solo si se decide usar YOLO                               (P1)
-    prompt.py           # (P1)
-    capture.py          # carpeta / video / webcam / URL                            (P3)
-    zones.py            # recortes por mesa                                         (P3)
-    change.py           # detector de cambio                                        (P3)
-    smoothing.py        # (P3)
-    client.py           # POST al backend; --dry-run escribe .jsonl                 (P3)
+      fake.py                # (Jessica)
+      yolo.py, hybrid.py, claude.py   # (Tomás)
+    tracking.py              # emparejar cajas con ids anteriores (Tomás)
+    prompt.py                # (Tomás)
+    capture.py, zones.py, change.py, smoothing.py   # (Jessica)
+    alerts/                  # estado de mesa, reglas, Telegram, log (Matías)
   tools/
-    draw_zones.py       # (P3)
-    build_eval_set.py   # recortes y labels desde el dataset de Roboflow            (P1)
-    eval.py             # acierto de estado sobre un set etiquetado                 (P1)
-    id_stability.py     # estabilidad de ids sobre un video, sin el pipeline        (P1)
-    yolo_baseline.ipynb # entrenamiento de YOLO en Colab con GPU                    (P1)
-  tests/                # pytest
-  data/                 # ignorado: roboflow/, eval/, videos/
-  models/               # ignorado: pesos de YOLO
-  out/                  # ignorado: crops/, obs.jsonl
-  requirements.txt      # opencv-python, boto3, anthropic, pydantic, httpx
-  requirements-yolo.txt # ultralytics (aparte, para que el CI no instale torch)
+    draw_zones.py            # (Jessica)
+    build_eval_set.py, eval.py, train_yolo.ipynb   # (Tomás)
+    replay.py                # (Matías)
+    vista_demo.py            # (Jessica, opcional)
+  tests/
+  data/ models/ out/         # ignorados por git
+  requirements.txt           # opencv-python, pydantic, boto3, anthropic, httpx
+  requirements-yolo.txt      # ultralytics
 ```
 
-`python main.py --source data/videos/mesa1.mp4 --classifier fake --dry-run` tiene que funcionar sin backend ni modelo.
+`python main.py --source data/videos/demo.mp4 --classifier fake --no-telegram` tiene que andar sin modelo ni internet.
 
-## Evaluar el clasificador (importante)
+## Evaluar
 
-Es la única forma de saber si un cambio mejoró. Hay dos fuentes de datos:
-
-- **Fotos del dataset de Roboflow** (*AI Smart Restaurant Surveillance*, CC BY 4.0): `food` / `finished_food` ya etiquetados. Se separa un **test split** (15 %) que no se usa para iterar el prompt ni para entrenar YOLO; el resto (`dev`) es para iterar. Sirve para lleno vs. vacío, no para estados intermedios.
-- **Videos cenitales** (YouTube para probar, y el video de nuestra mesa para el ajuste fino): para estabilidad de ids y la línea de tiempo de estados.
-
-`tools/eval.py` y `tools/id_stability.py` reportan:
-
-- **% de acierto de estado** por plato.
-- **Estabilidad de ids**: sobre secuencias de frames consecutivos del mismo video, % de objetos que conservan su id entre lecturas. Si es baja, la reconciliación del backend (ver [03-contratos.md](03-contratos.md)) trabaja de más y los tiempos de las alertas se vuelven poco confiables.
- Probar también si mandar el frame a mayor resolución o con un modelo más grande (Sonnet) mejora lo suficiente como para pagar la diferencia.
-
-## Decisión YOLO vs. Claude
-
-Tarea P1-7 de [11-tareas.md](11-tareas.md), con tiempo límite de 1 h 30. Se entrena `yolov8n` en Colab con GPU sobre `dev` y se compara contra Claude en el mismo test split. Tabla de resultados en `vision/README.md`: acierto, latencia por imagen, costo por 1.000 imágenes, tiempo de armado y si da estados intermedios.
-
-| Resultado | Qué hacemos |
-|---|---|
-| Claude ≥ YOLO, o diferencia chica | Seguimos solo con Claude. |
-| YOLO claramente mejor y **antes de la hora 12** | `classifiers/yolo.py` detrás de `Classifier` (o híbrido: YOLO detecta y da lleno/vacío, Claude solo para estados intermedios). Inferencia de `yolov8n` en la laptop con CPU. |
-| YOLO claramente mejor, pero **después de la hora 12** | Seguimos con Claude; el híbrido queda como roadmap en el pitch. |
-
-**Decisión tomada:** _(completar en la hora 12)_
-
-## Futuro (roadmap, no MVP)
-
-Si el producto escala, un detector local liviano (YOLO entrenado con datos de restaurantes reales) puede filtrar frames y llamar a Claude solo cuando hace falta, para bajar costo por mesa.
+- `tools/eval.py --set data/eval/test --classifier hybrid`: acierto de estado en recortes de plato del test set (`food` → `lleno`, `finished_food` → `vacio`), latencia y costo. Sirve para ajustar el prompt, no para elegir modelo.
+- Sobre el video de la demo: revisar la línea de tiempo de estados de cada mesa en `out/eventos.jsonl` y que los ids no salten.

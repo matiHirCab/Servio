@@ -1,369 +1,213 @@
 # 11 — Tareas
 
-Lista de tareas concretas del MVP. Usa los contratos actuales (reconciliación de ids en el backend, `people_present` por mesa, `schema_version`, cadencias y `tableStatus()` único). Roles y horas: [08-plan-24h.md](08-plan-24h.md). Dueños por carpeta: [09-convenciones.md](09-convenciones.md).
+Alcance: solo platos de comida, tres avisos por Telegram (mesa por terminar, plato vacío, plato lleno mucho rato), todo en Python, YOLO + Claude. Roles y horas en [08-plan-24h.md](08-plan-24h.md); dueños por carpeta en [09-convenciones.md](09-convenciones.md). Todas las rutas son relativas a `vision/` salvo que digan otra cosa.
 
-## Reparto
-
-| Persona | Rol | Carpetas | Horas aprox. |
-|---|---|---|---|
-| **P1** | **Modelo** (dataset, eval, prompt, comparativa YOLO) + `TelegramNotifier` + demo y pitch | `vision/servio_vision/classifiers/`, `vision/servio_vision/prompt.py`, `vision/tools/` (salvo `draw_zones.py`), `web/lib/notify/telegram.ts` | ~9,5 h |
-| **P2** | **Backend**: funciones puras, DB, ingest, simulador, APIs, métricas, webhook de Telegram, deploy | `web/app/api/`, `web/lib/` (salvo `notify/telegram.ts`), `web/scripts/` | ~11 h |
-| **P3** | **Conexión de visión** (captura, zonas, loop, suavizado, `.jsonl`, envío) + dashboard + mesa física | `vision/` (resto), `web/app/page.tsx`, `web/app/(dashboard)/`, `web/components/` | ~10,5 h |
-
-## Cómo está pensado
-
-- **Tres puntos de unión fijos**, definidos en T0 y documentados en [03-contratos.md](03-contratos.md). Con ellos cada módulo corre solo, con mocks, hasta la integración (regla 4 de `AGENTS.md`):
-  1. **`fixtures/`**: escenarios concretos en JSON con la forma exacta de los contratos.
-  2. **Interfaz `Classifier`** (`classify(imagen, table_id, items_previos) -> TableReport`): separa el modelo (P1) de la conexión (P3). P3 arranca con un clasificador falso; P1 enchufa Claude (o YOLO) detrás de la misma interfaz. Se elige con `--classifier fake|claude|yolo`.
-  3. **Interfaz `Notifier`** (`send` + `update`) y **`web/lib/alerts/service.ts`**: separan el `TelegramNotifier` (P1) del backend (P2).
-- **Un solo formato de intercambio:** el `.jsonl` de observaciones. La visión en `--dry-run` lo escribe, el simulador del backend lo reproduce y los tests de reglas lo leen. La primera integración visión → backend es pasar un archivo.
-- **El video propio no está en el camino crítico:** se arranca con videos cenitales de YouTube; el de nuestra mesa sirve para el ajuste fino.
-- **Funciones puras primero:** reglas, `tableStatus()`, reconciliación y suavizado se escriben y testean sin DB, deploy ni cámara.
-- **Las horas siguen el plan de [08](08-plan-24h.md):** checkpoints en las horas 6, 12, 16 y 20.
-
-Formato de cada tarea: **dueño · estimación · horas del plan · depende de** → qué hacer → **Hecho cuando**.
-Al pasarle una tarea a Claude Code: *"leé AGENTS.md, 03-contratos.md, el doc de tu módulo y la tarea PX-N de 11-tareas.md; hacé solo esa tarea"*.
-
----
-
-## T0 — Arranque (hora 0–1, todos)
-
-### T0-1 · Congelar contratos
-**Todos · 15 min · depende de: nada**
-Decidir dos propuestas que **no** están en los contratos. Si se aprueban, agregarlas a `03-contratos.md` / `05-reglas-alertas.md` y a los fixtures en el mismo PR:
-- `visible: boolean` por ítem (false si una mano/cabeza lo tapa). La visión descarta los no visibles antes de suavizar.
-- Alerta `esperando_plato`: mesa con `people_present = true`, sin platos, hace ≥ T4 (prod 8 min / demo ≥ 2 × cadencia) desde que se retiraron los anteriores. Es el diferencial "tiempo entre platos".
-
-**Hecho cuando:** la decisión está anotada en `03` (sí o no para cada una) y nadie toca los contratos sin avisar.
-
-**Decisión:** ✅ se aprueban las dos (anotadas en `03`, `04` y `05`).
-
-### T0-2 · Puntos de unión: fixtures, `Classifier` y stubs
-**P1 + P2 + P3 en paralelo · 25 min · depende de: T0-1**
-
-**P2 — observaciones de ejemplo** en `fixtures/` (raíz del repo; ver [09](09-convenciones.md)):
-
-```
-fixtures/
-  README.md                          # P2: qué es cada archivo y cómo se usa
-  observations/
-    mesa_completa.jsonl              # P2
-    plato_lleno_mucho.jsonl          # P2
-    id_cambiado.jsonl                # P2
-  expected/
-    mesa_completa.alerts.json        # P2
-  api/
-    tables.json                      # P3
-    alerts.json                      # P3
-    metrics.json                     # P3
-```
-
-Reglas del `.jsonl`: **una observación completa por línea**, exactamente con la forma de `POST /api/observations` (`schema_version: 1`, `camera_id`, `ts`, `tables[]` con `people_present` e `items[]`). Timestamps cada 10 s desde `2026-10-17T20:00:00Z`.
-- `mesa_completa.jsonl` (T1): mesa vacía sin gente → llega gente → 2 platos `lleno` → `comiendo` → `por_terminar` → `vacio` → se retiran → 3 min sin platos con gente → plato nuevo `lleno`.
-- `plato_lleno_mucho.jsonl` (T2): un plato `lleno` 12 min con gente; después `people_present: false`.
-- `id_cambiado.jsonl` (T1): un plato `comiendo` en `arriba-izquierda` que en una lectura pasa de `p1` a `p4` en la misma posición.
-- `expected/mesa_completa.alerts.json`: `[{ "at_seconds": 130, "type": "mesa_por_terminar", "table_id": "T1" }, …]` con umbrales de **producción**.
-
-**P2 — stubs del backend** (tipos de `03` y funciones que tiran `not implemented`):
-- `web/lib/notify/types.ts`: interfaz `Notifier` de `03-contratos.md` (`send` y `update`) + `ConsoleNotifier`.
-- `web/lib/alerts/service.ts`: `ackAlert(alertId, waiterId)`, `resolveAlert(alertId, waiterId)`, `registerWaiter(chatId, name)`, `assignTables(waiterId, tableIds)`.
-
-**P3 — respuestas de API de ejemplo:** `fixtures/api/tables.json` (3 mesas en estados distintos), `alerts.json` (una abierta, una en camino, una resuelta), `metrics.json` (con los campos de `03`).
-
-**P1 — interfaz del clasificador** (la de `03-contratos.md`, «Visión interna»):
-- `vision/servio_vision/schemas.py`: modelos Pydantic de `report_table` (`04-vision.md`): `Item(id, kind, state, fill_ratio?, position, confidence)` y `TableReport(items, people_present, notes?)`. Incluye `visible: bool` (aprobado en T0-1).
-- `vision/servio_vision/classifier.py`: `Classifier` (Protocol) y `get_classifier(name)` con registro por nombre (`fake`, `claude`, `yolo`).
-
-**Hecho cuando:** todo está en `main`, `python -c "from servio_vision.classifier import get_classifier"` funciona y `npx tsc --noEmit` pasa con los stubs.
-
-### T0-3 · Accesos (cada uno el suyo, en paralelo)
-**15 min · depende de: nada**
-- **P1:** `ANTHROPIC_API_KEY` (respaldo) + acceso a Claude Haiku en Bedrock (`BEDROCK_MODEL_ID`, y cuota). Bot en @BotFather (`TELEGRAM_BOT_TOKEN`) y grupo "Mozos" con el bot y el equipo (`TELEGRAM_GROUP_CHAT_ID`).
-- **P2:** proyecto en Vercel conectado al repo (`web/`) + Postgres Neon (`DATABASE_URL`). Generar `INGEST_TOKEN` y `TELEGRAM_WEBHOOK_SECRET`.
-- **P3:** app de cámara IP en el celular (IP Webcam / DroidCam).
-
-**Hecho cuando:** P1 hizo una llamada de texto a Claude, P2 se conecta a Neon desde local, P3 ve la URL de la cámara desde la laptop, y cada variable está en el `.env` de quien la usa (todas ya figuran en `.env.example`).
-
----
-
-## P1 — Modelo + `TelegramNotifier` + demo
-
-Orden: P1-1 → P1-2 → P1-3 → P1-4 → P1-5 (hora 1–6) · P1-6 → P1-7 (hora 6–12) · P1-8 (hora 12–16) · P1-9 (hora 16–24).
-
-### P1-1 · Dataset de fotos
-**P1 · 30 min · hora 1–6 · depende de: nada**
-1. Bajar de Roboflow *AI Smart Restaurant Surveillance* (CC BY 4.0) una versión **a color y sin augmentación** (la v1 está en escala de grises y triplicada), formato YOLO.
-2. Guardar en `vision/data/roboflow/` (`vision/data/` está en `.gitignore`).
-3. Abrir 10 imágenes y anotar en `vision/README.md` el ángulo de cámara y la cita del dataset.
-
-**Hecho cuando:** imágenes y etiquetas en local, ángulo y cita en `vision/README.md`.
-
-### P1-2 · Set de evaluación y test split
-**P1 · 45 min · hora 1–6 · depende de: P1-1**
-1. Separar un **test set** (15 % de las imágenes) que no se use para iterar el prompt ni para entrenar YOLO → `vision/data/eval/test_split.txt`.
-2. `vision/tools/build_eval_set.py`: recorta 60–100 cajas balanceadas `food` / `finished_food` (margen 15 %) del resto → `vision/data/eval/dev/`, y del test set → `vision/data/eval/test/`.
-3. `labels.csv` en cada carpeta: `file,expected_state` (`food` → `lleno`, `finished_food` → `vacio`).
-
-**Hecho cuando:** existen `dev/labels.csv` y `test/labels.csv` y todas las imágenes listadas abren.
-
-### P1-3 · Clasificador de Claude
-**P1 · 1 h · hora 1–6 · depende de: T0-2, T0-3**
-`vision/servio_vision/classifiers/claude.py` implementa `Classifier`:
-- Proveedor por `CLAUDE_PROVIDER=bedrock|anthropic`. Bedrock con `boto3` (Converse API con herramienta); Anthropic con el SDK oficial (`ANTHROPIC_API_KEY`).
-- Prompt de `04-vision.md` en `vision/servio_vision/prompt.py`, con el estado anterior de la mesa.
-- Imagen JPEG base64, `temperature: 0`, herramienta `report_table` forzada.
-- Validar con Pydantic; 1 reintento; si vuelve a fallar, devolver `None` y loguear.
-- Loguear tokens y latencia por llamada. Registrarlo como `claude`.
-
-**Hecho cuando:** `python -m servio_vision.classifiers.claude foto.jpg` imprime un `TableReport` válido con los dos proveedores.
-
-### P1-4 · Evaluación de estado
-**P1 · 1 h · hora 1–6 · depende de: P1-2, P1-3**
-1. `vision/tools/eval.py --set vision/data/eval/dev --classifier claude`: corre sobre cada imagen (concurrencia 4) y guarda el detalle en `vision/data/eval/runs/<fecha>.json`.
-2. Reporta acierto lleno vs. vacío, matriz de confusión con los 4 estados, latencia media y costo estimado por llamada.
-3. Iterar el prompt sobre `dev` hasta **≥ 80 %**, no más (estas fotos no son nuestra cámara). Al final, una corrida sobre `test`.
-
-**Hecho cuando:** el acierto en `test`, la latencia y el costo están en `vision/README.md`.
-
-### P1-5 · Estabilidad de ids sobre video
-**P1 · 1 h · hora 1–6 · depende de: P1-3** (no depende del pipeline de P3)
-1. Bajar 2–3 videos cenitales de comida de YouTube (`yt-dlp`), solo uso interno, a `vision/data/videos/`. Pasárselos a P3.
-2. `vision/tools/id_stability.py --video … --interval 10`: saca un frame cada N s, llama a `classify()` en secuencia pasándole los ítems anteriores y guarda las respuestas.
-3. Reporta % de ítems que conservan su id entre lecturas y cuántos cambios de id hubo en la misma `position`.
-
-**Hecho cuando:** el número está en `vision/README.md` y P2 lo recibió **antes de la hora 6**.
-
-### P1-6 · `TelegramNotifier`
-**P1 · 1 h 30 · hora 6–12 · depende de: T0-2, T0-3**
-`web/lib/notify/telegram.ts` implementa `Notifier` (`03-contratos.md`) con `fetch` directo a la Bot API:
-- `send`: `sendMessage` con el texto de la alerta e `inline_keyboard` (`ack:<id>` "🏃 Voy", `done:<id>` "✅ Listo"). Devuelve `{ channel: "telegram", chat_id, message_id }` para que P2 lo guarde en `alert_messages`.
-- `update`: `editMessageText` según el estado ("🏃 Juan va en camino", "✅ Resuelta", "⌛ Ya no hace falta").
-- `web/scripts/send-test-alerts.ts`: manda las alertas de `fixtures/api/alerts.json` a `TELEGRAM_GROUP_CHAT_ID`.
-
-**Hecho cuando:** `npx tsx web/scripts/send-test-alerts.ts` deja en el grupo 3 mensajes con botones, y un segundo modo del script los edita.
-
-### P1-7 · Comparativa YOLO vs. Claude
-**P1 · máx. 1 h 30 · hora 6–12 · depende de: P1-2, P1-4**
-Spike con tiempo límite. **No traba a nadie**: el plan sigue con Claude. YOLO preentrenado (COCO) no tiene "plato" ni sabe si está lleno, así que se compara **YOLO entrenado** con `food` / `finished_food` contra **Claude sin entrenar**.
-1. `vision/tools/yolo_baseline.ipynb` para **Colab con GPU**: entrenar `yolov8n` sobre todo menos el test split, ~30 épocas, imagen 640. Mientras entrena, avanzar con P1-6.
-2. Correr YOLO sobre `vision/data/eval/test`.
-3. Tabla en `vision/README.md`: acierto, latencia por imagen, costo por 1.000 imágenes, tiempo de armado, estados intermedios (sí/no).
-4. Decidir con el criterio de `04-vision.md` («Decisión YOLO vs. Claude») y anotarlo ahí. Si gana YOLO antes de la hora 12: `vision/servio_vision/classifiers/yolo.py` detrás de `Classifier`, pesos en `YOLO_WEIGHTS` (ignorados por git), dependencias en `vision/requirements-yolo.txt`.
-
-**Hecho cuando:** tabla y decisión anotadas **antes de la hora 12**. A la 1 h 30 se corta y se anota lo que haya.
-
-### P1-8 · Ajuste fino del prompt
-**P1 · 1 h 15 · hora 12–16 · depende de: P3-6** (y P3-13 si ya está; si no, cualquier video cenital)
-Correr el pipeline con `--classifier claude --dry-run` sobre el video de nuestra mesa (o, mientras P3 lo graba, sobre un video de YouTube). Revisar la línea de tiempo de estados y ajustar el prompt. Con P3, ajustar el umbral del detector de cambio y la cadencia demo. Re-correr `eval.py`.
-
-**Hecho cuando:** sobre el video, la mesa pasa por los estados en orden sin saltos raros y el acierto en `test` no bajó.
-
-### P1-9 · Demo y pitch
-**P1 · 1 h · hora 16–24 · depende de: checkpoint de la hora 12**
-Guion de demo de 3 min (problema → en vivo → métricas → negocio y roadmap, con el diferencial "tiempo entre platos" de `esperando_plato`), lista de planes B (video grabado como fuente, simulador, video de la demo, feed del dashboard) y checklist pre-demo (`DEMO_MODE`, `web/scripts/reset.ts`, celular, cámara).
-
-**Hecho cuando:** el equipo ensayó la demo completa 2 veces con el guion.
-
----
-
-## P2 — Backend (`web/`)
-
-Orden: P2-1 → P2-2 → P2-3 → P2-4 → P2-5 → P2-6 (hora 1–6) · P2-7 → P2-8 → P2-11 → P2-9 → P2-12 → P2-13 → P2-10 (hora 6–12).
-
-### P2-1 · Scaffold mínimo
-**P2 · 20 min · hora 1–6 · depende de: T0-3**
-`create-next-app` en `web/` (App Router, TypeScript strict, Tailwind, ESLint), Vitest y Zod.
-
-**Hecho cuando:** el CI existente (`lint`, `tsc --noEmit`, `vitest`) pasa en un PR.
-
-### P2-2 · `tableStatus()`
-**P2 · 45 min · hora 1–6 · depende de: P2-1, T0-2**
-`web/lib/rules/tableStatus.ts`, función pura según `05-reglas-alertas.md` (solo platos, orden 1–5). Tests en `web/lib/rules/tableStatus.test.ts` con casos borde (sin platos, todo vacío, empate 50 %).
-
-**Hecho cuando:** tests de Vitest verdes.
-
-### P2-3 · Reconciliación de ids
-**P2 · 1 h · hora 1–6 · depende de: P2-1, T0-2**
-`web/lib/items/reconcile.ts`, función pura `(previos, nuevos, ts) → { items, reconciliations }` según `03-contratos.md`.
-
-**Hecho cuando:** un test que lee `fixtures/observations/id_cambiado.jsonl` verifica que el plato conserva `track_id`, `first_seen` y `state_since`, y otro verifica `removed_at` tras 2 lecturas ausente.
-
-### P2-4 · Motor de reglas
-**P2 · 1 h 30 · hora 1–6 · depende de: P2-2, P2-3**
-`web/lib/rules/engine.ts` con la firma de `05-reglas-alertas.md`: `(estadoMesa, ahora, config, alertasAbiertas) → { nuevas, expiradas }`.
-- Reglas de `05` (incluye `esperando_plato`).
-- `web/lib/rules/config.ts` con umbrales prod/demo según `DEMO_MODE` y validación umbral ≥ 2 × cadencia.
-- Cooldown por `(mesa, tipo)`, agrupado, expiración.
-
-**Hecho cuando:** un test que reproduce `fixtures/observations/mesa_completa.jsonl` con tiempo simulado produce exactamente `fixtures/expected/mesa_completa.alerts.json`.
-
-### P2-5 · Base de datos
-**P2 · 45 min · hora 1–6 · depende de: P2-1, T0-3**
-Drizzle en `web/lib/db/schema.ts` con las tablas de `03-contratos.md` (incluye `table_waiters` y `alert_messages`). Migración en Neon. `web/scripts/seed.ts` (mesas T1–T4) y `web/scripts/reset.ts`.
-
-**Hecho cuando:** `npm run db:reset && npm run db:seed` deja T1–T4 en Neon y las tablas vacías.
-
-### P2-6 · `POST /api/observations`
-**P2 · 1 h · hora 1–6 · depende de: P2-3, P2-4, P2-5**
-`web/app/api/observations/route.ts`: valida `INGEST_TOKEN`, body con Zod, `schema_version` (400 si no es 1). Guarda la observación cruda, actualiza `people_present`, reconcilia ítems y corre el motor. Por cada alerta **nueva**: la guarda y llama a `Notifier.send` por cada mozo de la mesa, guardando el resultado en `alert_messages`. Por cada alerta **expirada**: la pasa a `expirada` y llama a `Notifier.update` por cada fila de `alert_messages`. Usa `ConsoleNotifier` hasta que P1-6 esté. Responde `202`.
-
-**Hecho cuando:** un `curl` con una línea del fixture devuelve 202 y crea filas en `observations` e `items`.
-
-### P2-7 · Simulador que reproduce `.jsonl`
-**P2 · 45 min · hora 6–12 · depende de: P2-6**
-`web/scripts/simulate.ts --file <archivo.jsonl> --url <api> --speed 10`: reescribe cada `ts` relativo a "ahora" respetando los intervalos (÷ `speed`) y hace POST. Funciona con los fixtures **y** con el `.jsonl` de la visión. Avisarle a P3.
-
-**Hecho cuando:** reproducir `mesa_completa.jsonl` contra local genera en la DB las alertas de `expected/`.
-
-### P2-8 · `GET /api/tables` y `GET /api/alerts`
-**P2 · 1 h · hora 6–12 · depende de: P2-6**
-`web/app/api/tables/route.ts` y `web/app/api/alerts/route.ts`, con la forma exacta de `03` y de `fixtures/api/*.json`. Solo lectura: las reglas corren únicamente al recibir observaciones (`05`).
-
-**Hecho cuando:** un test compara las claves de cada respuesta contra `fixtures/api/tables.json` y `alerts.json`.
-
-### P2-9 · Servicio de alertas + rutas ack/resolve
-**P2 · 45 min · hora 6–12 · depende de: P2-5, T0-2**
-Implementar `web/lib/alerts/service.ts` (`ackAlert`, `resolveAlert`, `registerWaiter`, `assignTables`); al cambiar de estado, llamar a `Notifier.update` por cada fila de `alert_messages`. Rutas `POST /api/alerts/:id/ack` y `POST /api/alerts/:id/resolve` (`03`). Cambiar `ConsoleNotifier` por `TelegramNotifier` cuando P1-6 esté.
-
-**Hecho cuando:** tests de Vitest verdes para los cuatro métodos y un `curl` a `/ack` cambia la alerta a `en_camino` con `acked_at`.
-
-### P2-10 · `GET /api/metrics`
-**P2 · 1 h · hora 6–12 · depende de: P2-6**
-`web/app/api/metrics/route.ts` con los campos de `03`: `avg_meal_minutes`, `avg_response_seconds`, `alerts_by_type`, `plates_returned_full`, `id_reconciliations` y `avg_wait_between_courses`. Filtros `from`/`to`.
-
-**Hecho cuando:** después de reproducir `mesa_completa.jsonl`, la respuesta tiene las claves de `fixtures/api/metrics.json` con valores distintos de cero.
-
-### P2-11 · Deploy
-**P2 · 30 min · hora 6–12 · depende de: P2-8**
-Deploy en Vercel con las variables de entorno. Compartir `INGEST_TOKEN` con P3 y la URL pública con P1 y P3.
-
-**Hecho cuando:** `web/scripts/simulate.ts` funciona contra la URL de Vercel.
-
-### P2-12 · Webhook de Telegram
-**P2 · 1 h 30 · hora 6–12 · depende de: P2-9**
-`web/app/api/telegram/webhook/route.ts`:
-- Valida `X-Telegram-Bot-Api-Secret-Token` contra `TELEGRAM_WEBHOOK_SECRET`.
-- `/start` → `registerWaiter`. `/mesa 1,3` → `assignTables`.
-- `callback_query` → `ackAlert` / `resolveAlert` y `answerCallbackQuery` (la edición del mensaje la hace el servicio vía `Notifier.update`).
-
-**Hecho cuando:** tests de Vitest verdes con updates de Telegram de ejemplo (`/start`, `/mesa`, `ack:`, `done:`, secret inválido → 401).
-
-### P2-13 · Registrar el webhook en producción
-**P2 · 15 min · hora 6–12 · depende de: P2-11, P2-12**
-`setWebhook` con la URL de Vercel y `secret_token` (comando en `06-notificaciones.md`). Cada mozo hace `/start` y `/mesa`.
-
-**Hecho cuando:** tocar "Voy" en un mensaje real del grupo cambia la alerta a `en_camino` en la DB.
-
----
-
-## P3 — Conexión de visión + Dashboard
-
-Orden: P3-1 → P3-2 → P3-3 → P3-5 → P3-4 → P3-6 (hora 1–6) · P3-8 → P3-9 → P3-10 → P3-7 → P3-11 → P3-12 → P3-13 (hora 6–12).
-
-### P3-1 · Clasificador falso
-**P3 · 30 min · hora 1–6 · depende de: T0-2**
-`vision/servio_vision/classifiers/fake.py` implementa `Classifier` sin llamar a ningún modelo:
-- Modo `script`: avanza los platos lleno → comiendo → por_terminar → vacío según el tiempo transcurrido (configurable) y los retira al final.
-- Modo `replay`: devuelve, en orden, los ítems de una mesa leídos de `fixtures/observations/mesa_completa.jsonl`.
-- Registrado como `fake`.
-
-**Hecho cuando:** `pytest vision/tests/test_fake_classifier.py` pasa (los dos modos devuelven `TableReport` válidos en el orden esperado).
-
-### P3-2 · Captura desde 3 fuentes
-**P3 · 45 min · hora 1–6 · depende de: nada**
-`vision/servio_vision/capture.py`, iterador común que devuelve `(frame, ts)`:
-- **Carpeta** (`--source fotos/`): ts artificial cada `--interval` s.
-- **Video** (`--source mesa.mp4`): salta con `CAP_PROP_POS_MSEC` cada `--interval` s. **El ts es el tiempo del video**, no el reloj. `--speed` opcional.
-- **Cámara** (`--source 0` o URL de IP Webcam): reloj real.
-
-**Hecho cuando:** `python -m servio_vision.capture --source <x>` imprime ts y tamaño de frame para las 3 fuentes.
-
-### P3-3 · Zonas y recorte por mesa
-**P3 · 45 min · hora 1–6 · depende de: P3-2**
-`vision/tools/draw_zones.py` (clics para el rectángulo de cada mesa → `vision/config/zones.json`, formato de `03`) + `vision/servio_vision/zones.py` (recorte a ~512 px, JPEG 80).
-
-**Hecho cuando:** sobre un video cenital se guardan recortes por mesa en `vision/out/crops/` y se ven bien.
-
-### P3-4 · Loop principal con cadencias
-**P3 · 1 h 30 · hora 1–6 · depende de: P3-1, P3-3, P3-5**
-`vision/main.py --source … --classifier fake|claude|yolo [--demo]` (`--demo` le gana a `DEMO_MODE`):
-1. Frame cada 1 s → recorte por mesa.
-2. Detector de cambio (`vision/servio_vision/change.py`).
-3. Llama a `classify()` por mesa según la tabla de cadencias de `04` (prod 15–30 s / demo 5–10 s; refresco 60 s / 20 s), de forma asíncrona, pasando los ítems anteriores.
-4. Aplica el suavizado (P3-5).
-
-**Hecho cuando:** con `--classifier fake` sobre un video imprime una línea por lectura (mesa, ts, ítems suavizados) y respeta las cadencias.
-
-### P3-5 · Suavizado
-**P3 · 1 h · hora 1–6 · depende de: T0-2 (función pura)**
-`vision/servio_vision/smoothing.py` según `04-vision.md`:
-- Vecino: 2 lecturas seguidas. Retroceso o salto: 3 lecturas con `confidence ≥ 0.8`.
-- Ausente 1 lectura: se mantiene. Ausente 2: retirado.
-- Ítems con `visible: false` no cuentan como lectura.
-
-**Hecho cuando:** `pytest vision/tests/test_smoothing.py` pasa con un caso por regla.
-
-### P3-6 · Salida `.jsonl` (dry-run)
-**P3 · 30 min · hora 1–6 · depende de: P3-4**
-`vision/servio_vision/client.py` con `--dry-run --out vision/out/obs.jsonl`: una observación por línea con el formato exacto de los fixtures (`schema_version: 1`, `people_present` por mesa, `track_id = {table_id}-{id}`).
-
-**Hecho cuando:** un test compara las claves contra `fixtures/observations/mesa_completa.jsonl`, y P2 reproduce el archivo con `web/scripts/simulate.ts` sin tocar nada.
-
-### P3-7 · Envío real al backend
-**P3 · 30 min · hora 6–12 · depende de: P3-6, P2-11**
-Sin `--dry-run`: `POST /api/observations` a `SERVIO_API_URL` con `Authorization: Bearer $INGEST_TOKEN`, timeout 5 s; si falla, reintenta en la próxima lectura sin bloquear el loop.
-
-**Hecho cuando:** corriendo sobre un video, las observaciones aparecen en la DB de Vercel.
-
-### P3-8 · Dashboard desde fixtures
-**P3 · 1 h 30 · hora 6–12 · depende de: T0-2** (se puede escribir la spec en Kiro antes)
-Una pantalla para proyectar en `web/app/page.tsx`, leyendo `fixtures/api/*.json`:
-- **KPIs arriba:** tiempo medio de comida, tiempo de respuesta, alertas abiertas, platos devueltos llenos.
-- **Mapa de mesas:** tarjeta por mesa con color por `status` (`libre` gris, `servida` azul, `comiendo` verde, `por_terminar` amarillo, `terminada` rojo), minutos en la mesa, ícono de `people_present`, platos como círculos con color por estado.
-- **Feed de alertas** a la derecha: tipo, mesa, hace cuánto, quién la tomó.
-
-Componentes en `web/components/`: `KpiBar`, `TableCard`, `ItemDot`, `AlertFeed`.
-
-**Hecho cuando:** el dashboard muestra las 3 mesas de `fixtures/api/tables.json` con sus colores, las 3 alertas de `alerts.json` y los KPIs de `metrics.json`.
-
-### P3-9 · Botones Voy / Listo y vista de mesa
-**P3 · 1 h · hora 6–12 · depende de: P3-8**
-- En el feed, botones que llaman a `POST /api/alerts/:id/ack` y `/resolve` (mockeados hasta P2-9).
-- Al tocar una mesa: detalle con cada plato, su estado, desde cuándo y la línea de tiempo de sus alertas.
-
-**Hecho cuando:** con fixtures, tocar "Voy" cambia la alerta a "en camino" en pantalla y la vista de mesa abre desde cada tarjeta.
-
-### P3-10 · Conectar a la API real
-**P3 · 45 min · hora 6–12 · depende de: P2-8**
-SWR a `/api/tables`, `/api/alerts`, `/api/metrics` cada 2 s, con `NEXT_PUBLIC_USE_FIXTURES=true` para volver a los fixtures (plan B).
-
-**Hecho cuando:** el dashboard se mueve solo mientras corre el simulador, y con el flag en `true` vuelve a los fixtures.
-
-### P3-11 · Mesa física
-**P3 · 1 h · hora 6–12 · cualquier hueco**
-Platos blancos con comida (sin vasos ni botellas en la mesa); celular arriba a ~1,5 m con vista cenital, luz pareja sin reflejos.
-
-**Hecho cuando:** `python -m servio_vision.capture --source <url>` muestra la mesa entera, enfocada y sin reflejos.
-
-### P3-12 · Zonas sobre la cámara real
-**P3 · 15 min · hora 6–12 · depende de: P3-3, P3-11**
-Correr `vision/tools/draw_zones.py` sobre un frame de la cámara de la mesa.
-
-**Hecho cuando:** `vision/config/zones.json` definitivo commiteado y los recortes muestran cada mesa completa.
-
-### P3-13 · Grabar el video de prueba
-**P3 · 30 min · hora 6–12 · depende de: P3-11**
-5–10 min con la cámara fija: plato lleno → comen de a poco → mano tapando → retiran → pausa con gente → plato nuevo. Otro corto con 2–3 platos. Guardar en `vision/data/videos/` (ignorado) y compartirlos por la carpeta del equipo.
-
-**Hecho cuando:** P1 tiene los dos videos y los puede abrir con `--source`.
-
----
-
-## Checkpoints (los de [08](08-plan-24h.md))
-
-| Hora | Qué tiene que andar | Integración |
+| Persona | Rol | Horas aprox. |
 |---|---|---|
-| **6** | Cada módulo solo. P1: acierto en `test` + estabilidad de ids (ya en manos de P2). P2: funciones puras verdes contra fixtures + `POST /api/observations` en local. P3: pipeline con `--classifier fake` que escribe `vision/out/obs.jsonl`. | Ninguna obligatoria. |
-| **12** | Punta a punta: plato real → visión (`--classifier claude`) → backend en Vercel → Telegram → "Voy" → dashboard. Decisión YOLO vs. Claude anotada. **Grabarlo.** | P3-7, P3-10, P2-13, P1-6. |
-| **16** | Ajuste fino (P1-8), métricas en el dashboard, umbrales demo. | — |
-| **20** | Feature freeze. Demo ensayada (P1-9). | — |
+| **Tomás** | Modelo (YOLO + Claude) + guion y pitch | ~9 h |
+| **Matías** | Reglas + Telegram | ~7 h, y apoyo después de la hora 12 |
+| **Jessica** | Pipeline + video de la demo | ~8 h |
+
+Formato: **dueño · horas del plan · estimación · depende de** → qué hacer → **Hecho cuando**.
+Al pasarle una tarea a Claude Code: *"leé AGENTS.md, 03-contratos.md, el doc de tu parte y la tarea XXX-N de 11-tareas.md; hacé solo esa tarea"*.
+
+---
+
+## T0 — Arranque (hora 0–1)
+
+### T0-1 · Contrato mínimo y fixtures
+**Tomás, Matías, Jessica · 30 min · depende de: nada**
+- **Tomás:** agregar `bbox` a `Item` en `servio_vision/schemas.py` y sumar `hybrid` al registro de `classifier.py` (contrato en `03`).
+- **Matías:** modelo `Alert` en `servio_vision/alerts/models.py` y fixtures en `fixtures/observations/` (mesa que pasa de lleno a vacío y se retira, plato lleno 12 min con gente y después sin gente, id que cambia en la misma posición) con sus avisos esperados en `fixtures/expected/`.
+- **Jessica:** revisar los cambios de `schemas.py` con Tomás.
+
+**Hecho cuando:** está en `main` y `pytest` pasa.
+
+### T0-2a · Accesos: Claude
+**Tomás · 15 min**
+API key de Anthropic y acceso a Claude Haiku en Bedrock (y cuota). Probar una llamada de texto.
+
+**Hecho cuando:** la llamada responde y las variables están en el `.env` (y documentadas en `.env.example`).
+
+### T0-2b · Accesos: Telegram
+**Matías · 15 min**
+Bot en @BotFather y grupo "Mozos" con el bot y el equipo. Obtener el `chat_id` del grupo.
+
+**Hecho cuando:** un `curl` a `sendMessage` llega al grupo.
+
+---
+
+## Tomás — Modelo
+
+### TOM-1 · Dataset y test split
+**hora 1–6 · 45 min**
+Bajar *AI Smart Restaurant Surveillance* de Roboflow a color, sin augmentación y en formato YOLO a `data/roboflow/`. Separar un 15 % como test (`data/eval/test_split.txt`). Con `tools/build_eval_set.py`, recortar cajas `food` / `finished_food` del test en `data/eval/test/` con `labels.csv`. Anotar el ángulo de cámara y la cita del dataset en `README.md`.
+
+**Hecho cuando:** existen el split, los recortes y `labels.csv`, y la cita está en el README.
+
+### TOM-2 · Entrenar YOLO en Colab
+**hora 1–6 · 1 h (mientras entrena, avanzar con TOM-3)**
+`tools/train_yolo.ipynb` para Colab con GPU: `yolov8n`, clases `food` y `finished_food`, ~30 épocas, imagen 640, sin el test split. Bajar los pesos a `models/best.pt` (ignorado por git) y compartirlos por la carpeta del equipo. Dependencias en `requirements-yolo.txt`.
+
+**Hecho cuando:** `models/best.pt` detecta platos en 5 imágenes del test y el mAP está anotado en el README.
+
+### TOM-3 · Claude por plato
+**hora 1–6 · 1 h**
+`servio_vision/classifiers/claude_plates.py` (o dentro de `claude.py`): una función que recibe el recorte de la mesa y los recortes de cada plato y devuelve, por plato, `fill_ratio`, `confidence` y `visible`, más `people_present`. Bedrock o Anthropic según `CLAUDE_PROVIDER`; herramienta `report_plates` forzada, `temperature 0`, Pydantic con un reintento, timeout de 10 s, log de tokens y latencia. Prompt en `prompt.py` (base en `04-vision.md`).
+
+**Hecho cuando:** con 3 recortes de plato devuelve un resultado válido, y un test con la API mockeada pasa.
+
+### TOM-4 · Clasificador `yolo` y emparejado de ids
+**hora 1–6 · 1 h · depende de: TOM-2**
+`servio_vision/tracking.py`: empareja cajas nuevas con `previous_items` por distancia entre centros y asigna `p1`, `p2`… a los nuevos. `classifiers/yolo.py`: detecta platos en el recorte de la mesa y devuelve `TableReport` con `id`, `bbox`, `position` y estado `lleno` (`food`) o `vacio` (`finished_food`).
+
+**Hecho cuando:** tests de `tracking.py` (plato que se mueve poco conserva el id, plato nuevo recibe id nuevo) y `--classifier yolo` anda en el pipeline de Jessica.
+
+### TOM-5 · Clasificador `hybrid`
+**hora 1–6 · 1 h · depende de: TOM-3, TOM-4**
+`classifiers/hybrid.py`: YOLO encuentra los platos y empareja ids → recorta cada plato con 10 % de margen → Claude estima `fill_ratio` de todos en una llamada → arma el `TableReport`. Si Claude falla o tarda más de 10 s, usa el estado de YOLO con confianza baja.
+
+**Hecho cuando:** sobre 5 recortes de mesa devuelve platos con estados intermedios, y con Claude apagado sigue devolviendo lo de YOLO.
+
+### TOM-6 · Evaluación y prompt
+**hora 6–12 · 1 h · depende de: TOM-1, TOM-5**
+`tools/eval.py --set data/eval/test --classifier hybrid`: acierto lleno vs. vacío, latencia y costo por llamada. Ajustar el prompt hasta ≥ 80 %.
+
+**Hecho cuando:** acierto, latencia y costo en el README.
+
+### TOM-7 · Prueba con el video de la demo
+**hora 6–12 · 1 h · depende de: TOM-5, JES-1**
+Con el video de la demo, ver desde qué tamaño de plato YOLO deja de detectar y Claude deja de distinguir `comiendo` de `por_terminar`. Definir con Jessica el recorte y la cadencia.
+
+**Hecho cuando:** el tamaño mínimo y la configuración recomendada están en el README y Jessica los aplicó.
+
+### TOM-8 · Ajuste fino sobre el video de la demo
+**hora 12–16 · 1 h 15 · depende de: JES-8**
+Correr todo sobre el video final y revisar en `out/eventos.jsonl` la línea de tiempo de cada mesa. Ajustar el prompt; con Jessica, el umbral de cambio y la cadencia.
+
+**Hecho cuando:** cada mesa del video pasa por los estados en orden, sin saltos raros ni ids que cambien.
+
+### TOM-9 · Guion de demo y pitch
+**hora 16–20 · 1 h**
+Guion de 3 minutos (problema → demo en vivo → cómo funciona YOLO + Claude → negocio y roadmap), plan B (`--classifier yolo`, replay de un log, video de la demo) y checklist previo.
+
+**Hecho cuando:** el equipo ensayó 2 veces con el guion.
+
+---
+
+## Matías — Reglas + Telegram
+
+### MAT-1 · Paquete `alerts` y CI
+**hora 1–6 · 30 min**
+`servio_vision/alerts/` con `config.py` (umbrales de producción y demo de `05`). Ajustar `.github/workflows/ci.yml` para que solo corra Python (ruff + pytest, sin `continue-on-error`).
+
+**Hecho cuando:** el CI corre en verde en un PR.
+
+### MAT-2 · Estado de mesa
+**hora 1–6 · 1 h**
+`alerts/state.py`: por cada `track_id`, `first_seen`, `state`, `state_since`, `last_seen`; un id nuevo en la misma mesa y `position` que uno que desapareció en la misma lectura se trata como el mismo plato. Función pura `table_status(items)` según `05`.
+
+**Hecho cuando:** tests con el fixture del id cambiado (no reinicia tiempos) y con los 5 casos de `table_status`.
+
+### MAT-3 · Motor de reglas
+**hora 1–6 · 1 h 30 · depende de: MAT-2**
+`alerts/engine.py`: función pura `(estado_mesa, ahora, config, avisos_abiertos) → { abrir, recordar, cerrar }` para los tres avisos, con un aviso abierto por `(mesa, tipo)`, recordatorio cada R (máximo 2), cierre cuando la condición desaparece y agrupado por mesa. `config.py` valida umbrales ≥ 2 × cadencia.
+
+**Hecho cuando:** reproducir cada fixture con tiempo simulado produce exactamente los avisos de `fixtures/expected/`.
+
+### MAT-4 · Envío a Telegram
+**hora 1–6 · 1 h**
+`alerts/notify.py` con `httpx`: `sendMessage` al grupo (guarda `message_id`) y `editMessageText` con "✅ ya resuelto" al cerrar. Si Telegram falla, loguea y sigue. Modo `--no-telegram` que imprime. Script `tools/send_test_alert.py`.
+
+**Hecho cuando:** el script manda un aviso de ejemplo al grupo y después lo edita.
+
+### MAT-5 · `alerts.process()` y log
+**hora 6–12 · 45 min · depende de: MAT-3, MAT-4**
+`alerts/__init__.py`: `process(observation)` actualiza el estado, corre el motor y manda, recuerda o edita. Escribe cada observación y cada aviso en `out/eventos.jsonl` (formato en `03`).
+
+**Hecho cuando:** pasar a mano las líneas de un fixture por `process()` deja el log esperado y los mensajes en el grupo.
+
+### MAT-6 · Replay
+**hora 6–12 · 45 min · depende de: MAT-5**
+`tools/replay.py --file <jsonl> --speed 10 [--no-telegram]`: reproduce un fixture o el log de una corrida real por `process()`, respetando los tiempos divididos por `speed`. Es el plan B de la demo.
+
+**Hecho cuando:** `replay.py` con el fixture de la mesa completa manda los avisos esperados al grupo en menos de 1 minuto.
+
+### MAT-7 · Integración con el loop
+**hora 6–12 · 1 h · depende de: MAT-5, JES-6**
+Con Jessica, conectar `alerts.process()` al loop de `main.py` y probar con `--classifier fake` sobre un video.
+
+**Hecho cuando:** `python main.py --source <video> --classifier fake --demo` manda los tres tipos de aviso al grupo.
+
+### MAT-8 · Apoyo con video y plan B
+**hora 12–20**
+Ayudar a Jessica a conseguir o grabar el video, y a Tomás con el plan B y los umbrales de demo.
+
+---
+
+## Jessica — Pipeline + video
+
+### JES-1 · Conseguir el video de la demo
+**arranca ya · 1 h (en paralelo)**
+Video desde arriba (cenital o en alto), con varias mesas y platos que se van vaciando, 1080p o más, luz pareja. Ideal grabarlo el equipo, con permiso. Los de YouTube solo para probar, no para mostrar. Guardarlo en `data/videos/` (ignorado) y compartirlo por la carpeta del equipo.
+
+**Hecho cuando:** Tomás y Matías tienen una primera versión del video y la pueden abrir con `--source`.
+
+### JES-2 · Clasificador falso
+**hora 1–6 · 30 min**
+`classifiers/fake.py`: modo `script` (avanza los platos de lleno a vacío por tiempo y los retira) y modo `replay` (devuelve los ítems de un fixture en orden).
+
+**Hecho cuando:** `pytest tests/test_fake_classifier.py` pasa con los dos modos.
+
+### JES-3 · Captura
+**hora 1–6 · 45 min**
+`servio_vision/capture.py`: iterador `(frame, ts)` para video (salta cada `--interval` s, el ts es el tiempo del video, `--speed` opcional), carpeta de fotos y cámara o URL del celular.
+
+**Hecho cuando:** `python -m servio_vision.capture --source <x>` imprime ts y tamaño para las 3 fuentes.
+
+### JES-4 · Zonas para muchas mesas
+**hora 1–6 · 45 min · depende de: JES-3**
+`tools/draw_zones.py`: clics para marcar cada mesa → `config/zones.json`. `servio_vision/zones.py`: recorte de cada mesa desde el frame original, JPEG 85.
+
+**Hecho cuando:** sobre un video con varias mesas se guardan los recortes en `out/crops/` y cada uno muestra una mesa completa.
+
+### JES-5 · Suavizado
+**hora 1–6 · 1 h**
+`servio_vision/smoothing.py` según `04`: no visibles no cuentan, vecino con 2 lecturas, retroceso o salto con 3 lecturas y confianza ≥ 0,8, ausente 2 lecturas = retirado.
+
+**Hecho cuando:** `pytest tests/test_smoothing.py` pasa con un caso por regla.
+
+### JES-6 · Loop con cadencias
+**hora 1–6 · 1 h 30 · depende de: JES-2, JES-4, JES-5**
+`main.py --source … --classifier fake|yolo|hybrid|claude [--demo] [--no-telegram]`: frame cada 1 s, detector de cambio por mesa (`change.py`), llamada al clasificador según las cadencias de `04` (asíncrona), suavizado y armado de la observación de mesa (`03`). Mientras MAT-5 no esté, imprime las observaciones.
+
+**Hecho cuando:** con `--classifier fake` sobre un video imprime observaciones con el formato de `03` y respeta las cadencias.
+
+### JES-7 · Integración
+**hora 6–12 · 30 min · depende de: JES-6, MAT-5, TOM-5**
+Llamar a `alerts.process()` con cada observación y probar con `--classifier hybrid`. Aplicar el recorte y la cadencia que defina Tomás (TOM-7).
+
+**Hecho cuando:** el video de la demo con `--classifier hybrid` manda avisos al grupo.
+
+### JES-8 · Zonas sobre el video final
+**hora 6–12 · 30 min · depende de: JES-1, JES-4**
+Marcar las mesas del video final y commitear `config/zones.json`.
+
+**Hecho cuando:** los recortes del video final muestran cada mesa completa.
+
+### JES-9 · Vista de demo (opcional)
+**hora 12–16 · 1 h**
+`tools/vista_demo.py`: ventana de OpenCV con el video, cada mesa marcada, las cajas de los platos y su estado encima, para mostrar al lado del celular con Telegram.
+
+**Hecho cuando:** la vista se ve fluida durante la corrida de la demo.
+
+---
+
+## Checkpoints
+
+| Hora | Qué tiene que andar |
+|---|---|
+| **6** | Tomás: YOLO entrenado y `hybrid` respondiendo sobre recortes. Matías: reglas verdes contra fixtures y mensajes de prueba en el grupo. Jessica: loop con `--classifier fake` sobre un video. |
+| **12** | Video de la demo → `hybrid` → reglas → avisos en Telegram, completo al menos una vez. **Grabarlo.** |
+| **16** | Ajuste fino sobre el video final y umbrales de demo definidos. |
+| **20** | Feature freeze. Demo ensayada con el guion y plan B listo. |
