@@ -16,6 +16,19 @@ python main.py --source data/videos/demo.mp4 --classifier fake --no-telegram
 - `--no-telegram`: imprime los avisos en vez de mandarlos.
 - Cada corrida deja `out/eventos.jsonl`; se puede reproducir con `python tools/replay.py --file out/eventos.jsonl`.
 
+## Vista de la demo (pantalla dividida)
+
+- **Izquierda:** `tools/vista_demo.py`, con los mismos flags que `main.py`. Muestra el video con cada mesa coloreada por estado y la caja de cada plato.
+- **Derecha:** el celular con el grupo de Telegram, espejado con [`scrcpy`](https://github.com/Genymobile/scrcpy) (Android).
+
+```bash
+python tools/vista_demo.py --source data/videos/demo.mp4 --classifier hybrid --demo --interval 15
+python tools/vista_demo.py --source data/videos/demo.mp4 --classifier fake --record out/vista.mp4   # grabar (plan B)
+```
+
+- **Teclas:** `q` sale, espacio pausa. Con `--no-window --record` graba sin abrir la ventana.
+- **Colores de mesa:** gris libre · azul servida · verde comiendo · amarillo por terminar · rojo terminada. Los platos usan los mismos colores según su estado.
+
 ## Claude
 
 No hay créditos de AWS, así que Claude va por el Claude Code logueado (`claude -p`, suscripción del equipo). Probar con un recorte de mesa y los de sus platos:

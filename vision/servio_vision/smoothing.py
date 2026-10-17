@@ -13,8 +13,10 @@ Decisiones donde el doc no dice nada:
 - Un plato nuevo entra con su estado desde la primera lectura.
 - Un plato tapado o ausente una sola vez sigue saliendo con su último estado
   aceptado, para que `alerts` no lo vea desaparecer y cierre avisos de más.
-- El plato que sale es siempre la última lectura que coincidió con el estado
-  aceptado, así `fill_ratio` y `confidence` nunca contradicen al `state`.
+- `state`, `fill_ratio` y `confidence` salen de la última lectura que
+  coincidió con el estado aceptado, así nunca se contradicen. `position` y
+  `bbox` salen siempre de la lectura visible más reciente, aunque el cambio de
+  estado esté pendiente, para que el plato se dibuje y empareje donde está.
 
 Uso: un `TableSmoother` por mesa; `update()` con los ítems de cada lectura
 válida (si el clasificador devolvió `None`, no se llama).
@@ -82,6 +84,10 @@ class TableSmoother:
             track.candidate, track.streak = None, 0
             return
 
+        # el estado espera confirmación, pero el plato está donde se lo ve ahora
+        track.accepted = track.accepted.model_copy(
+            update={"position": item.position, "bbox": item.bbox}
+        )
         if new != track.candidate:
             track.candidate, track.streak = new, 0
         hard = is_hard_change(current, new)
