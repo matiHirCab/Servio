@@ -24,6 +24,7 @@ from datetime import datetime
 from pathlib import Path
 
 import numpy as np
+from dotenv import load_dotenv
 
 from servio_vision import alerts
 from servio_vision.alerts.config import DEFAULT_INTERVAL, AlertConfig, load_config
@@ -190,8 +191,14 @@ def setup_logging() -> None:
     )
 
 
+ENV_FILE = alerts.VISION_DIR.parent / ".env"
+
+
 def build_pipeline(args: argparse.Namespace) -> Pipeline | None:
     """Zonas, umbrales y clasificador según los flags. `None` si algo falta (ya logueado)."""
+    # antes de calcular los umbrales: si no, ALERT_T1/T2/REMINDER y DEMO_MODE del
+    # .env no se aplican (alerts.configure lo cargaba recién después)
+    load_dotenv(ENV_FILE)  # no pisa variables ya puestas
     if not args.zones.exists():
         logger.error(
             "No existe %s. Generalo con la detección de mesas o con "

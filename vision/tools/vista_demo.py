@@ -38,13 +38,20 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from main import Pipeline, build_parser, build_pipeline, setup_logging
 from servio_vision.alerts.state import table_status
-from servio_vision.capture import IMAGE_SUFFIXES, STREAM_PREFIXES
+from servio_vision.capture import (
+    IMAGE_SUFFIXES,
+    STREAM_PREFIXES,
+    declared_fps,
+    frame_seconds,
+)
 from servio_vision.schemas import Item
 from servio_vision.zones import Zones, scaled_polygon, table_rect
 
 logger = logging.getLogger("servio.vista")
 
 WINDOW = "Servio"
+MAX_PLAUSIBLE_FPS = 120
+FALLBACK_FPS = 25
 
 # colores BGR, por estado de mesa y de plato
 TABLE_COLORS = {
@@ -187,8 +194,14 @@ def open_view_source(source: str, interval: float) -> ViewSource:
         cap = cv2.VideoCapture(str(path))
         if not cap.isOpened():
             raise OSError(f"No se pudo abrir el video: {path}")
-        fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
-        frames = ((frame, i / fps) for i, frame in enumerate(_read_all(cap)))
+        fps = declared_fps(cap)
+        frames = (
+            (frame, frame_seconds(cap, i, fps))
+            for i, frame in enumerate(_read_all(cap))
+        )
+        if fps > MAX_PLAUSIBLE_FPS:  # fps falsos (cámaras de seguridad): para grabar
+            logger.warning("El video declara %g fps; grabo a %d", fps, FALLBACK_FPS)
+            fps = FALLBACK_FPS
         return ViewSource(frames, live=False, fps=fps)
     raise FileNotFoundError(f"No existe la fuente: {source}")
 

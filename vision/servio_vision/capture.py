@@ -58,33 +58,50 @@ def open_source(
     raise FileNotFoundError(f"No existe la fuente: {source}")
 
 
+def declared_fps(cap: cv2.VideoCapture) -> float:
+    """fps que declara el video, o 30 si no declara ninguno."""
+    return cap.get(cv2.CAP_PROP_FPS) or 30.0
+
+
+def frame_seconds(cap: cv2.VideoCapture, index: int, fps: float) -> float:
+    """Segundo del video del último frame leído (después de `grab()`/`read()`).
+
+    Se usa la marca de tiempo del frame: algunos videos (por ejemplo `.asf` de
+    cámaras de seguridad) declaran fps falsos, como 1000, y contar frames da
+    cualquier cosa. Si el backend no da marca de tiempo, se cuenta con los fps.
+    """
+    ms = cap.get(cv2.CAP_PROP_POS_MSEC)
+    if ms > 0 or index == 0:
+        return ms / 1000
+    return index / fps
+
+
 def read_video(
     path: Path, interval: float, speed: float | None, start: datetime
 ) -> Iterator[Frame]:
     cap = cv2.VideoCapture(str(path))
     if not cap.isOpened():
         raise OSError(f"No se pudo abrir el video: {path}")
-    fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
-    step = max(1, round(interval * fps))  # frames entre lecturas
+    fps = declared_fps(cap)
     pacer = _Pacer(speed)
-    index = 0  # índice del próximo frame que devuelve cap.grab()
-    target = 0
+    next_reading = 0.0  # segundo del video de la próxima lectura
+    index = 0
     try:
-        while True:
-            # grab() avanza sin decodificar: saltar así es más rápido y
-            # más preciso que buscar por tiempo con CAP_PROP_POS_MSEC.
-            while index < target:
-                if not cap.grab():
-                    return
-                index += 1
-            ok, frame = cap.read()
+        # grab() avanza sin decodificar; solo se decodifica (retrieve) el frame
+        # de cada lectura.
+        while cap.grab():
+            video_seconds = frame_seconds(cap, index, fps)
+            index += 1
+            # medio frame de tolerancia: el frame más cercano a la hora pedida
+            if video_seconds + 0.5 / fps < next_reading:
+                continue
+            ok, frame = cap.retrieve()
             if not ok:
                 return
-            index += 1
-            video_seconds = target / fps
             pacer.wait(video_seconds)
             yield frame, start + timedelta(seconds=video_seconds)
-            target += step
+            while next_reading <= video_seconds:
+                next_reading += interval
     finally:
         cap.release()
 
