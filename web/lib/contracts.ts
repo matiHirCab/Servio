@@ -23,18 +23,30 @@ export const ItemSchema = z.object({
   position: z.string().nullish(),
 });
 
+// Rechaza ids repetidos: la reconciliación y "ausente en 2 lecturas" suponen que son únicos.
+function uniqueBy<T>(key: (t: T) => string, label: string) {
+  return (list: T[], ctx: z.RefinementCtx) => {
+    const seen = new Set<string>();
+    for (const item of list) {
+      const k = key(item);
+      if (seen.has(k)) ctx.addIssue({ code: z.ZodIssueCode.custom, message: `${label} repetido: ${k}` });
+      seen.add(k);
+    }
+  };
+}
+
 export const TableReadingSchema = z.object({
   table_id: z.string().min(1),
   // Si falta (o es null) se asume true (ver 03-contratos.md).
   people_present: z.boolean().nullish(),
-  items: z.array(ItemSchema),
+  items: z.array(ItemSchema).superRefine(uniqueBy((it) => it.track_id, "track_id")),
 });
 
 export const ObservationSchema = z.object({
   schema_version: z.literal(1),
   camera_id: z.string().min(1),
   ts: isoDate,
-  tables: z.array(TableReadingSchema),
+  tables: z.array(TableReadingSchema).superRefine(uniqueBy((t) => t.table_id, "table_id")),
 });
 
 export const AlertSchema = z.object({

@@ -46,6 +46,14 @@ describe("contrato", () => {
     ["kind fuera de alcance", observation(undefined, { kind: "drink" })],
     ["ts sin zona", observation("2026-10-17T20:00:00")],
     ["confidence como string", observation(undefined, { confidence: "0.8" })],
+    ["track_id repetido en una mesa", (() => {
+      const data = observation();
+      return { ...data, tables: [{ ...data.tables[0], items: [...data.tables[0].items, ...data.tables[0].items] }] };
+    })()],
+    ["table_id repetido", (() => {
+      const data = observation();
+      return { ...data, tables: [...data.tables, ...data.tables] };
+    })()],
   ])("rechaza %s", (_, data) => {
     expect(ObservationSchema.safeParse(data).success).toBe(false);
   });

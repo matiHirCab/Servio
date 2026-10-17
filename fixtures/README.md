@@ -1,6 +1,6 @@
 # fixtures/
 
-Datos falsos fijos con la forma exacta de [03-contratos.md](../docs/context/03-contratos.md) (lista de archivos en T0-2 de [11-tareas.md](../docs/context/11-tareas.md)). Sirven para desarrollar y testear sin cámara ni modelo: tests de reglas, `web/scripts/simulate.ts`, clasificador `fake` en modo `replay` y mock del dashboard. Los validan `web/lib/contracts.test.ts` y `vision/tests/test_contracts.py`.
+Datos falsos fijos con la forma exacta de [03-contratos.md](../docs/context/03-contratos.md) (lista de archivos en T0-2 de [11-tareas.md](../docs/context/11-tareas.md)). Sirven para desarrollar y testear sin cámara ni modelo: tests de reglas, `web/scripts/simulate.ts`, clasificador `fake` en modo `replay` y mock del dashboard. Los validan `web/lib/contracts.test.ts` y `vision/tests/test_observation_contract.py`.
 
 Dueños: `observations/` y `expected/` P2, `api/` P3 (ver [09-convenciones.md](../docs/context/09-convenciones.md)). Si cambiás un contrato, actualizá los fixtures en el mismo PR.
 

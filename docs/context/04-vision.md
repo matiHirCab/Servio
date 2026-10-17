@@ -107,6 +107,7 @@ vision/
   servio_vision/
     schemas.py          # Pydantic de report_table: Item, TableReport               (P1, contrato)
     classifier.py       # Protocol Classifier + get_classifier(name)                (P1, contrato)
+    contracts.py        # Pydantic de POST /api/observations (espejo de contracts.ts) (P2, contrato)
     classifiers/
       fake.py           # sin modelo: script por tiempo o replay de fixtures        (P3)
       claude.py         # Bedrock (boto3) o API de Anthropic, tool use              (P1)

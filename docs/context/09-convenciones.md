@@ -23,6 +23,7 @@
 | `vision/servio_vision/classifiers/` (salvo `fake.py`), `vision/servio_vision/prompt.py`, `vision/tools/` (salvo `draw_zones.py`) | P1 |
 | `vision/` (resto: `main.py`, `capture.py`, `zones.py`, `change.py`, `smoothing.py`, `client.py`, `classifiers/fake.py`, `tools/draw_zones.py`, `config/`) | P3 |
 | `vision/servio_vision/classifier.py`, `schemas.py` | P1 (contrato con P3: cambios en PR revisado por P3) |
+| `vision/servio_vision/contracts.py` | P2 (espejo de `web/lib/contracts.ts`; cambios en PR revisado por P3, que lo usa en `client.py`) |
 | `web/lib/notify/telegram.ts` | P1 |
 | `web/app/api/`, `web/lib/` (resto), `web/scripts/` | P2 |
 | `web/app/page.tsx`, `web/app/(dashboard)/`, `web/components/` | P3 |

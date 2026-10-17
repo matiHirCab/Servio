@@ -23,7 +23,7 @@ Las lecturas llegan cada 15–30 s (demo: 5–10 s). Como el suavizado exige 2 l
 
 - **Cooldown** por `(mesa, tipo)`: no repetir la misma alerta si hay una `abierta`/`en_camino` o si se resolvió hace < 5 min (demo: 30 s).
 - **Agrupar**: si en la misma evaluación disparan `plato_vacio` y `mesa_por_terminar`, mandar un solo mensaje con ambas cosas.
-- **Expirar**: si la condición deja de cumplirse (retiraron el plato, o en `esperando_plato` llegó un plato nuevo), la alerta pasa a `expirada` sola y se edita el mensaje de Telegram ("✅ ya resuelto"). Para `mesa_por_terminar`, la condición es que `tableStatus()` siga en `por_terminar`: si la mesa pasa a `terminada`, `libre` u otro estado, expira (así no bloquea por cooldown la alerta del plato siguiente).
+- **Expirar**: si la condición deja de cumplirse (retiraron el plato, o en `esperando_plato` llegó un plato nuevo), la alerta pasa a `expirada` sola y se edita el mensaje de Telegram ("✅ ya resuelto"). Para `mesa_por_terminar`, expira solo cuando `tableStatus()` pasa a `terminada` o `libre`. Si la mesa vuelve a `comiendo` (llegó otro plato), la alerta sigue abierta y el cooldown evita repetirla en segundos; y como expira al terminar, no bloquea la alerta del plato siguiente. Un plato cuenta como retirado recién cuando tiene `removed_at` (2 lecturas ausente, regla 3 de la reconciliación en [03-contratos.md](03-contratos.md)): con 1 lectura ausente se mantiene y su alerta no expira.
 
 ## Estado de mesa (para el dashboard)
 
