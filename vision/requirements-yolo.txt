@@ -1,0 +1,2 @@
+# Solo para --classifier yolo o hybrid (trae torch y opencv). El CI no lo instala.
+ultralytics>=8.3

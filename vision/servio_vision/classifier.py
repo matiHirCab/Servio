@@ -26,8 +26,9 @@ class Classifier(Protocol):
 # nombre → "módulo:Clase"
 _REGISTRY: dict[str, str] = {
     "fake": "servio_vision.classifiers.fake:FakeClassifier",  # P3
-    "claude": "servio_vision.classifiers.claude:ClaudeClassifier",  # P1
-    "yolo": "servio_vision.classifiers.yolo:YoloClassifier",  # P1, solo si se decide
+    "claude": "servio_vision.classifiers.claude:ClaudeClassifier",  # Tomás, respaldo
+    "yolo": "servio_vision.classifiers.yolo:YoloClassifier",  # Tomás, plan B sin internet
+    "hybrid": "servio_vision.classifiers.hybrid:HybridClassifier",  # Tomás, el de la demo
 }
 
 
@@ -36,7 +37,7 @@ def available_classifiers() -> list[str]:
 
 
 def get_classifier(name: str, **kwargs: Any) -> Classifier:
-    """Crea el clasificador `name` ("fake" | "claude" | "yolo") con `kwargs`."""
+    """Crea el clasificador `name` ("fake" | "yolo" | "hybrid" | "claude") con `kwargs`."""
     try:
         target = _REGISTRY[name]
     except KeyError:

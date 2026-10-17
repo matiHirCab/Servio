@@ -1,0 +1,89 @@
+"""Clasificador `yolo` (TOM-4): solo YOLO, plan B sin internet.
+
+Encuentra los platos y les da estado según la clase del modelo entrenado:
+`food` → `lleno`, `finished_food` → `vacio`. Con YOLOE sin entrenar (sin
+`YOLO_WEIGHTS`) encuentra los platos pero no sabe su estado, y devuelve `None`.
+"""
+
+import io
+import logging
+from dataclasses import dataclass
+
+from PIL import Image
+
+from servio_vision.detector import Detection, PlateDetector
+from servio_vision.schemas import Item, PlateState, TableReport
+from servio_vision.tracking import match_ids, position_label
+
+logger = logging.getLogger(__name__)
+
+STATE_FROM_LABEL: dict[str, PlateState] = {"food": "lleno", "finished_food": "vacio"}
+
+
+@dataclass
+class FoundPlate:
+    id: str
+    bbox: tuple[float, float, float, float]  # normalizada 0–1
+    detection: Detection
+
+
+def decode(image: bytes) -> Image.Image:
+    return Image.open(io.BytesIO(image)).convert("RGB")
+
+
+def find_plates(
+    detector: PlateDetector, img: Image.Image, previous_items: list[Item]
+) -> list[FoundPlate]:
+    """Detecta los platos y les asigna ids estables, ordenados de arriba a abajo."""
+    dets = detector.detect(img)
+    w, h = img.size
+    bboxes = [
+        (
+            d.box[0] / w,
+            d.box[1] / h,
+            (d.box[2] - d.box[0]) / w,
+            (d.box[3] - d.box[1]) / h,
+        )
+        for d in dets
+    ]
+    ids = match_ids(bboxes, previous_items)
+    plates = [FoundPlate(i, b, d) for i, b, d in zip(ids, bboxes, dets)]
+    plates.sort(key=lambda p: (round(p.bbox[1] * 4), p.bbox[0]))
+    return plates
+
+
+def items_from_labels(plates: list[FoundPlate], confidence_factor: float = 1.0):
+    """Items con el estado de la clase de YOLO, o `None` si alguna clase no tiene estado."""
+    items = []
+    for p in plates:
+        state = STATE_FROM_LABEL.get(p.detection.label)
+        if state is None:
+            return None
+        items.append(
+            Item(
+                id=p.id,
+                state=state,
+                position=position_label(p.bbox),
+                bbox=p.bbox,
+                confidence=round(p.detection.confidence * confidence_factor, 3),
+            )
+        )
+    return items
+
+
+class YoloClassifier:
+    def __init__(self, detector: PlateDetector | None = None, **detector_kwargs):
+        self.detector = detector or PlateDetector(**detector_kwargs)
+
+    def classify(
+        self, image: bytes, table_id: str, previous_items: list[Item]
+    ) -> TableReport | None:
+        plates = find_plates(self.detector, decode(image), previous_items)
+        items = items_from_labels(plates)
+        if items is None:
+            logger.warning(
+                "Mesa %s: el detector no da estado (¿falta YOLO_WEIGHTS entrenado?)",
+                table_id,
+            )
+            return None
+        return TableReport(items=items)

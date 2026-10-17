@@ -28,6 +28,21 @@ python -m servio_vision.classifiers.claude_plates mesa.jpg plato1.jpg plato2.jpg
 - En Windows llama a `claude.exe` directo; si no está en el PATH, poner la ruta en `CLAUDE_CLI`.
 - Primera prueba (8 platos, video de IA): 6–8 s por mesa con `haiku`.
 
+## YOLO + Claude (`hybrid`)
+
+`--classifier hybrid` es el de la demo: YOLO encuentra los platos, se mantienen los ids por posición y Claude estima cuánto queda en cada uno.
+
+- Sin `YOLO_WEIGHTS` usa YOLOE preentrenado con los prompts `plate` y `bowl` (`imgsz=1280`, lo que funcionó en las pruebas: 11/11 platos en el video de IA). Encuentra los platos pero no su estado, así que sin Claude la lectura se descarta.
+- Con `YOLO_WEIGHTS` (el `yolov8n` entrenado con `food` / `finished_food`), si Claude falla usa el estado de YOLO con confianza más baja. Es también lo que usa `--classifier yolo`.
+- Probar sobre un video (un frame por segundo, el frame entero como una mesa):
+
+```bash
+pip install -r requirements.txt -r requirements-yolo.txt
+python tools/probar_video.py "C:/Users/tomas/Downloads/video mesa platos ia.mp4" --max-frames 5
+```
+
+Deja cada frame dibujado y `linea_de_tiempo.json` en `out/video/`.
+
 ## Resultados
 
 _(Tomás: mAP de YOLO, acierto del `hybrid`, latencia, costo y tamaño mínimo de plato; cita del dataset de Roboflow.)_
