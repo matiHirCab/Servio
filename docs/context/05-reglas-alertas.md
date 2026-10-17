@@ -50,7 +50,17 @@ Función pura `table_status(items)`, evaluada en este orden:
 
 ## Estado por plato
 
-`alerts/state.py` guarda por cada `track_id`: `first_seen`, `state`, `state_since` y `last_seen`. Si un `track_id` nuevo aparece en la misma mesa y `position` que uno que desapareció en esa misma lectura, se trata como el mismo plato (no reinicia `first_seen` ni `state_since`). Solo si hay **un único candidato**: si más de un plato desaparecido (o más de uno nuevo) comparte esa `position`, no se empareja y el nuevo cuenta como plato nuevo, para no pasarle los tiempos al plato equivocado.
+`alerts/state.py` (funciones puras `update_table` y `table_status`) guarda cada plato por su `track_id` actual, con `first_seen`, `state`, `state_since` y `last_seen`.
+
+Cuando el clasificador cambia el id de un plato (`p1 → p4`), el suavizado manda los dos juntos una lectura y después solo el nuevo. Para no reiniciar el tiempo del plato y no mezclar platos distintos:
+
+- **Provisional:** un id nuevo en la `position` de un plato que sigue en la mesa no cuenta para las reglas en esa lectura (`active_plates()` lo deja afuera), así no cambia el estado de la mesa ni dispara avisos.
+- **Herencia:** cuando un plato deja de venir y hay un **único** plato reciente (apareció en esa lectura o en la anterior) en su misma `position`, ese plato hereda `first_seen`, y también `state_since` si tiene el mismo estado.
+- **Solo si puede ser el mismo plato:** el candidato tiene que haber aparecido en esa `position` (no vale uno que se corrió ahí) y tener el mismo estado o un paso hacia adelante. Un retroceso o un salto (`smoothing.is_hard_change`, por ejemplo `vacio → lleno` cuando cambian el principal por el postre) es otro plato y cuenta con sus propios tiempos.
+- **Dos platos:** si el viejo y el nuevo siguen viniendo, eran dos platos (por ejemplo, sirvieron otro en el mismo casillero): el nuevo cuenta desde la lectura siguiente, con sus propios tiempos, y nunca hereda.
+- **Ambigüedad:** con dos candidatos, o dos platos retirados en la misma `position`, nadie hereda.
+- **Retirado:** un plato que no viene en la observación ya está retirado; el suavizado lo saca después de 2 lecturas ausente ([03-contratos.md](03-contratos.md)).
+- **Riesgo conocido:** si cambian un plato por otro en el mismo casillero y el estado del nuevo es igual o un paso adelante del viejo (por ejemplo, `lleno` por `lleno`), el nuevo hereda el tiempo del viejo. Los ids estables de la visión (emparejados por `bbox`) hacen que esto pase solo cuando falla ese emparejamiento.
 
 ## Tests
 
