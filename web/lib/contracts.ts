@@ -2,10 +2,10 @@
 // Si cambiás algo acá, cambiá también el doc, vision/servio_vision/contracts.py y fixtures/.
 import { z } from "zod";
 
-// Solo platos de comida: bebidas fuera de alcance.
+// Solo platos de comida: bebidas fuera de alcance. `visible` no viaja al backend (solo vive en la visión).
 export const ItemKind = z.enum(["plate"]);
 export const PlateState = z.enum(["lleno", "comiendo", "por_terminar", "vacio"]);
-export const AlertType = z.enum(["mesa_por_terminar", "plato_vacio", "plato_lleno_mucho"]);
+export const AlertType = z.enum(["mesa_por_terminar", "plato_vacio", "plato_lleno_mucho", "esperando_plato"]);
 export const AlertStatus = z.enum(["abierta", "en_camino", "resuelta", "expirada"]);
 export const TableStatus = z.enum(["libre", "servida", "comiendo", "por_terminar", "terminada"]);
 

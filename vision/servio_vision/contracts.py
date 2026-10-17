@@ -1,7 +1,8 @@
 """Contrato entre módulos. Fuente de verdad: docs/context/03-contratos.md.
 
 Modelos de lo que la visión manda al backend (`POST /api/observations`). Los de la
-herramienta `report_table` del clasificador van aparte, en `schemas.py` (P1).
+herramienta `report_table` del clasificador van aparte, en `schemas.py` (P1); `visible` vive
+solo ahí y no viaja al backend.
 Si cambiás algo acá, cambiá también el doc, web/lib/contracts.ts y fixtures/.
 """
 
@@ -9,10 +10,11 @@ from typing import Annotated, Literal
 
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field
 
-# Solo platos de comida: bebidas fuera de alcance.
-ItemKind = Literal["plate"]
-PlateState = Literal["lleno", "comiendo", "por_terminar", "vacio"]
-AlertType = Literal["mesa_por_terminar", "plato_vacio", "plato_lleno_mucho"]
+from servio_vision.schemas import ItemKind, PlateState
+
+AlertType = Literal[
+    "mesa_por_terminar", "plato_vacio", "plato_lleno_mucho", "esperando_plato"
+]
 AlertStatus = Literal["abierta", "en_camino", "resuelta", "expirada"]
 
 # Fecha ISO 8601 con zona, igual que Zod en web/: sin zona se rechaza. No estricta para
