@@ -1,7 +1,10 @@
 """Marcar las mesas con clics y guardar config/zones.json (JES-4).
 
+Herramienta de desarrollo y respaldo: en la demo las mesas las detecta la IA
+(Tomás), que escribe el mismo config/zones.json. Esto sirve para avanzar
+mientras tanto, o si la detección falla.
+
     python tools/draw_zones.py --source <video | foto | carpeta | 0 | url> [--at 10]
-    python tools/draw_zones.py --source <video> --load config/zones.json   # corregir
 
 Teclas en la ventana:
     clic izquierdo   agrega un punto a la mesa que estás marcando
@@ -10,9 +13,6 @@ Teclas en la ventana:
     d                borra la última mesa cerrada
     s                guarda y sale
     q / Esc          sale sin guardar
-
-Con --load se arranca desde zonas ya hechas (a mano o propuestas por la IA)
-y se pueden borrar y volver a marcar las que estén mal.
 """
 
 import argparse
@@ -29,7 +29,6 @@ from servio_vision.zones import (
     DEFAULT_ZONES,
     TableZone,
     Zones,
-    load_zones,
     save_zones,
 )
 
@@ -47,16 +46,6 @@ class ZoneEditor:
         self.camera_id = camera_id
         self.tables: list[TableZone] = []
         self.draft: list[tuple[int, int]] = []
-
-    @classmethod
-    def from_zones(cls, zones: Zones, frame_size: tuple[int, int]) -> "ZoneEditor":
-        editor = cls(frame_size, zones.camera_id)
-        sx = frame_size[0] / zones.frame_size[0]
-        sy = frame_size[1] / zones.frame_size[1]
-        for t in zones.tables:
-            polygon = [(round(x * sx), round(y * sy)) for x, y in t.polygon]
-            editor.tables.append(t.model_copy(update={"polygon": polygon}))
-        return editor
 
     def add_point(self, x: int, y: int) -> None:
         width, height = self.frame_size
@@ -134,15 +123,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--source", required=True)
     parser.add_argument("--at", type=float, default=0, help="segundo del video a usar")
     parser.add_argument("--out", type=Path, default=DEFAULT_ZONES)
-    parser.add_argument("--load", type=Path, help="zonas existentes para corregir")
     args = parser.parse_args(argv)
 
     frame = first_frame(args.source, args.at)
     height, width = frame.shape[:2]
-    if args.load:
-        editor = ZoneEditor.from_zones(load_zones(args.load), (width, height))
-    else:
-        editor = ZoneEditor((width, height))
+    editor = ZoneEditor((width, height))
 
     scale = min(1.0, MAX_WINDOW_WIDTH / width)  # la ventana entra en pantalla
 

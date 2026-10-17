@@ -81,13 +81,12 @@ def test_editor_marks_tables_in_order():
 
 
 def test_editor_reuses_free_numbers_after_delete():
-    editor = ZoneEditor.from_zones(ZONES, (200, 100))
+    editor = ZoneEditor((200, 100))
+    for _ in range(2):
+        for p in [(0, 0), (5, 0), (5, 5)]:
+            editor.add_point(*p)
+        editor.close_table()
     editor.delete_last_table()  # borra T2
     for p in [(0, 0), (5, 0), (5, 5)]:
         editor.add_point(*p)
     assert editor.close_table().table_id == "T2"
-
-
-def test_editor_loads_zones_at_another_resolution():
-    editor = ZoneEditor.from_zones(ZONES, (400, 200))
-    assert editor.tables[0].polygon == [(20, 20), (120, 20), (120, 80)]
