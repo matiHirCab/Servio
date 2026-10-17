@@ -22,7 +22,7 @@
 | `vision/servio_vision/classifiers/` (salvo `fake.py`), `tracking.py`, `prompt.py`, `tools/{build_eval_set,eval}.py`, `tools/train_yolo.ipynb` | Tomás |
 | `vision/servio_vision/schemas.py`, `classifier.py` | Tomás (contrato con Jessica: cambios con su revisión) |
 | `vision/servio_vision/alerts/`, `tools/replay.py`, `fixtures/` | Matías |
-| `vision/main.py`, `servio_vision/{capture,zones,smoothing}.py`, `classifiers/fake.py`, `tools/draw_zones.py`, `tools/vista_demo.py`, `config/` | Jessica |
+| `vision/main.py`, `servio_vision/{capture,zones,smoothing}.py`, `classifiers/fake.py`, `tools/draw_zones.py`, `tools/{vista_demo,resumen}.py`, `config/` | Jessica |
 | `docs/` | Todos, por PR |
 
 ## Código

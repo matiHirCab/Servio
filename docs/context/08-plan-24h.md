@@ -38,7 +38,7 @@ Los tres programan en Python, así que cualquiera puede cubrir a otro si se trab
 ## Hora 12–16 · Precisión (y dormir por turnos)
 
 - Tomás: ajuste fino del prompt sobre el video de la demo.
-- Jessica: zonas definitivas y vista de demo (opcional).
+- Jessica: zonas definitivas y vista de demo en pantalla dividida (video con las mesas marcadas + Telegram espejado). Si sobra tiempo, la tabla de lo que pasó (JES-10).
 - Matías: umbrales de demo, recordatorios y cierre probados con replay; apoyo con el video.
 - Turnos de descanso de 2–3 h: que nunca duerman los tres a la vez.
 

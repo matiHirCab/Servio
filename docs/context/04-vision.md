@@ -111,7 +111,8 @@ vision/
     draw_zones.py            # (Jessica)
     build_eval_set.py, eval.py, train_yolo.ipynb   # (Tomás)
     replay.py                # (Matías)
-    vista_demo.py            # (Jessica, opcional)
+    vista_demo.py            # vista de la demo (Jessica)
+    resumen.py               # tabla de lo que pasó, si sobra tiempo (Jessica)
   tests/
   data/ models/ out/         # ignorados por git
   requirements.txt           # opencv-python, pydantic, boto3, anthropic, httpx
