@@ -4,6 +4,7 @@ Fuente de verdad: docs/context/03-contratos.md («Observación de mesa» y «Avi
 Si cambiás algo acá, cambiá también el doc y fixtures/.
 """
 
+import re
 from collections import Counter
 from datetime import datetime
 from typing import Annotated, Any, Literal
@@ -23,11 +24,21 @@ AlertType = Literal["mesa_por_terminar", "plato_vacio", "plato_lleno_mucho"]
 AlertStatus = Literal["abierta", "resuelta"]
 
 
+# Forma de fecha del contrato: ISO 8601 con "T", segundos y zona (Z o ±HH:MM).
+_ISO_RE = re.compile(
+    r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:\d{2})$"
+)
+
+
 def _parse_datetime(value: Any) -> Any:
-    # Fechas desde JSON (fixtures, log) o datetime; sin zona las rechaza AwareDatetime.
-    if isinstance(value, str):
+    # Acepta un datetime o un string con la forma del contrato (fixtures, log). Rechaza
+    # timestamps unix, "2026-10-17 20:00:00Z" y formas compactas, que fromisoformat
+    # aceptaría. Sin zona lo rechaza AwareDatetime.
+    if isinstance(value, datetime):
+        return value
+    if isinstance(value, str) and _ISO_RE.match(value):
         return datetime.fromisoformat(value)
-    return value
+    raise ValueError("fecha ISO 8601 con T y zona, ej. 2026-10-17T20:00:00Z")
 
 
 def _exact_int(value: Any) -> Any:
@@ -47,8 +58,9 @@ Timestamp = Annotated[AwareDatetime, BeforeValidator(_parse_datetime)]
 
 class _Model(BaseModel):
     # Sin conversiones implícitas ("0.8" -> 0.8) y sin campos desconocidos (atrapa typos
-    # como "fillRatio", que si no se perderían en silencio).
-    model_config = ConfigDict(strict=True, extra="forbid")
+    # como "fillRatio", que si no se perderían en silencio). validate_assignment: el motor
+    # modifica el aviso abierto (reminders_sent += 1) y el tope se tiene que seguir cumpliendo.
+    model_config = ConfigDict(strict=True, extra="forbid", validate_assignment=True)
 
 
 class ObservedPlate(_Model):
@@ -89,9 +101,15 @@ class TableObservation(_Model):
     def _valid_track_ids(self) -> "TableObservation":
         # El estado por plato (alerts/state.py) supone un track_id único y de esta mesa.
         prefix = f"{self.table_id}-"
-        foreign = [i.track_id for i in self.items if not i.track_id.startswith(prefix)]
-        if foreign:
-            raise ValueError(f"track_id de otra mesa: {', '.join(foreign)}")
+        invalid = [
+            i.track_id
+            for i in self.items
+            if not i.track_id.startswith(prefix) or len(i.track_id) == len(prefix)
+        ]
+        if invalid:
+            raise ValueError(
+                f"track_id tiene que ser {prefix}<id>: {', '.join(invalid)}"
+            )
         repeated = [
             tid for tid, n in Counter(i.track_id for i in self.items).items() if n > 1
         ]
@@ -109,7 +127,6 @@ class Alert(_Model):
     message: str  # texto que se manda
     created_at: Timestamp
     status: AlertStatus
-    reminders_sent: int = Field(
-        default=0, ge=0, le=2
-    )  # máximo 2 (05-reglas-alertas.md)
+    # Máximo 2 recordatorios (05-reglas-alertas.md).
+    reminders_sent: int = Field(default=0, ge=0, le=2)
     telegram_message_id: int | None = None

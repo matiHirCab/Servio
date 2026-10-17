@@ -41,7 +41,7 @@ Función pura `table_status(items)`, evaluada en este orden:
 
 ## Estado por plato
 
-`alerts/state.py` guarda por cada `track_id`: `first_seen`, `state`, `state_since` y `last_seen`. Si un `track_id` nuevo aparece en la misma mesa y `position` que uno que desapareció en esa misma lectura, se trata como el mismo plato (no reinicia `first_seen` ni `state_since`).
+`alerts/state.py` guarda por cada `track_id`: `first_seen`, `state`, `state_since` y `last_seen`. Si un `track_id` nuevo aparece en la misma mesa y `position` que uno que desapareció en esa misma lectura, se trata como el mismo plato (no reinicia `first_seen` ni `state_since`). Solo si hay **un único candidato**: si más de un plato desaparecido (o más de uno nuevo) comparte esa `position`, no se empareja y el nuevo cuenta como plato nuevo, para no pasarle los tiempos al plato equivocado.
 
 ## Tests
 

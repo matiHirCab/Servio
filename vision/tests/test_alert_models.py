@@ -36,6 +36,15 @@ def load(name: str) -> list[TableObservation]:
     ]
 
 
+PLATE = {
+    "track_id": "T1-p1",
+    "state": "lleno",
+    "fill_ratio": 0.9,
+    "confidence": 0.9,
+    "position": "centro",
+}
+
+
 def observation(**overrides):
     data = {
         "schema_version": 1,
@@ -43,36 +52,19 @@ def observation(**overrides):
         "ts": "2026-10-17T20:00:00Z",
         "table_id": "T1",
         "people_present": True,
-        "items": [
-            {
-                "track_id": "T1-p1",
-                "state": "lleno",
-                "fill_ratio": 0.9,
-                "confidence": 0.9,
-                "position": "centro",
-            }
-        ],
+        "items": [dict(PLATE)],
     }
     return data | overrides
 
 
 def with_plate(**plate):
-    base = {
-        "track_id": "T1-p1",
-        "state": "lleno",
-        "confidence": 0.9,
-        "position": "centro",
-    }
+    # Sin fill_ratio por defecto, para poder probar estados sueltos.
+    base = {k: v for k, v in PLATE.items() if k != "fill_ratio"}
     return observation(items=[base | plate])
 
 
 def without(key: str):
-    plate = {
-        "track_id": "T1-p1",
-        "state": "lleno",
-        "confidence": 0.9,
-        "position": "centro",
-    }
+    plate = dict(PLATE)
     del plate[key]
     return observation(items=[plate])
 
@@ -192,6 +184,15 @@ def test_alert_rejects_more_than_two_reminders():
         Alert.model_validate(ALERT | {"reminders_sent": 3})
 
 
+def test_alert_validates_assignment():
+    alert = Alert.model_validate(ALERT)
+    alert.reminders_sent = 2
+    with pytest.raises(ValidationError):
+        alert.reminders_sent = 3
+    with pytest.raises(ValidationError):
+        alert.status = "cerrada"
+
+
 @pytest.mark.parametrize(
     "data",
     [
@@ -208,6 +209,10 @@ def test_alert_rejects_more_than_two_reminders():
             observation(items=observation()["items"] * 2), id="duplicate_track_id"
         ),
         pytest.param(with_plate(track_id="T2-p1"), id="track_id_from_other_table"),
+        pytest.param(with_plate(track_id="T1-"), id="track_id_without_plate_id"),
+        pytest.param(observation(ts="2026-10-17 20:00:00Z"), id="ts_with_space"),
+        pytest.param(observation(ts="20261017T200000Z"), id="ts_compact"),
+        pytest.param(observation(ts=1792267200), id="ts_unix"),
         pytest.param(without("position"), id="missing_position"),
         pytest.param(without("confidence"), id="missing_confidence"),
     ],
