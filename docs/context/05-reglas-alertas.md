@@ -26,6 +26,7 @@ Las observaciones llegan cada 15–30 s (demo: 5–10 s) y el suavizado exige 2 
 ## `people_present`
 
 - Si es `false`, no se abre `plato_lleno_mucho`.
+- Un `plato_lleno_mucho` abierto se cierra por falta de gente recién con **2 lecturas seguidas** con `people_present: false`. Una sola lectura sin gente (el detector no vio a alguien sentado) no lo cierra, para no cerrar y reabrir el aviso por un parpadeo.
 - Si es `false` y hay platos vacíos, `plato_vacio` sigue (hay que retirar).
 
 ## Estado de mesa

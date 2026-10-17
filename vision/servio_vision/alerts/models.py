@@ -57,8 +57,10 @@ class ObservedPlate(_Model):
     track_id: str = Field(min_length=1)  # {table_id}-{id del Item}
     state: PlateState
     fill_ratio: float | None = Field(default=None, ge=0, le=1)
-    confidence: float | None = Field(default=None, ge=0, le=1)
-    position: str | None = None
+    # Obligatorios: solo llegan platos visibles (schemas.Item los exige para esos), y
+    # alerts/state.py empareja ids por posición, así que una vacía uniría platos distintos.
+    confidence: float = Field(ge=0, le=1)
+    position: str = Field(min_length=1)
 
     @model_validator(mode="after")
     def _state_matches_fill_ratio(self) -> "ObservedPlate":
@@ -84,8 +86,12 @@ class TableObservation(_Model):
     items: list[ObservedPlate]
 
     @model_validator(mode="after")
-    def _unique_track_ids(self) -> "TableObservation":
-        # El estado por plato (alerts/state.py) supone un track_id único por mesa.
+    def _valid_track_ids(self) -> "TableObservation":
+        # El estado por plato (alerts/state.py) supone un track_id único y de esta mesa.
+        prefix = f"{self.table_id}-"
+        foreign = [i.track_id for i in self.items if not i.track_id.startswith(prefix)]
+        if foreign:
+            raise ValueError(f"track_id de otra mesa: {', '.join(foreign)}")
         repeated = [
             tid for tid, n in Counter(i.track_id for i in self.items).items() if n > 1
         ]
@@ -103,5 +109,7 @@ class Alert(_Model):
     message: str  # texto que se manda
     created_at: Timestamp
     status: AlertStatus
-    reminders_sent: int = Field(default=0, ge=0)
+    reminders_sent: int = Field(
+        default=0, ge=0, le=2
+    )  # máximo 2 (05-reglas-alertas.md)
     telegram_message_id: int | None = None

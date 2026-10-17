@@ -21,7 +21,7 @@ SCENARIOS = ["mesa_completa", "plato_lleno_mucho", "id_cambiado"]
 class ExpectedEvent(BaseModel):
     """Formato de fixtures/expected/*.alerts.json."""
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(strict=True, extra="forbid")
 
     at_seconds: int = Field(ge=0)
     event: Literal["alert_opened", "alert_reminder", "alert_resolved"]
@@ -49,6 +49,7 @@ def observation(**overrides):
                 "state": "lleno",
                 "fill_ratio": 0.9,
                 "confidence": 0.9,
+                "position": "centro",
             }
         ],
     }
@@ -56,15 +57,33 @@ def observation(**overrides):
 
 
 def with_plate(**plate):
-    base = {"track_id": "T1-p1", "state": "lleno", "confidence": 0.9}
+    base = {
+        "track_id": "T1-p1",
+        "state": "lleno",
+        "confidence": 0.9,
+        "position": "centro",
+    }
     return observation(items=[base | plate])
+
+
+def without(key: str):
+    plate = {
+        "track_id": "T1-p1",
+        "state": "lleno",
+        "confidence": 0.9,
+        "position": "centro",
+    }
+    del plate[key]
+    return observation(items=[plate])
 
 
 # --- fixtures ---
 
 
-def test_scenarios_exist():
-    assert {p.stem for p in OBSERVATIONS.glob("*.jsonl")} >= set(SCENARIOS)
+@pytest.mark.parametrize("name", SCENARIOS)
+def test_scenario_has_observations_and_expected(name: str):
+    assert (OBSERVATIONS / f"{name}.jsonl").exists()
+    assert (EXPECTED / f"{name}.alerts.json").exists()
 
 
 @pytest.mark.parametrize(
@@ -82,17 +101,19 @@ def test_observations_match_contract(path: Path):
 @pytest.mark.parametrize(
     "path", sorted(EXPECTED.glob("*.alerts.json")), ids=lambda p: p.name
 )
-def test_expected_matches_format_and_has_observations(path: Path):
+def test_expected_matches_its_observations(path: Path):
     events = [
         ExpectedEvent.model_validate(e) for e in json.loads(path.read_text("utf-8"))
     ]
     assert [e.at_seconds for e in events] == sorted(e.at_seconds for e in events)
-    assert (OBSERVATIONS / f"{path.name.removesuffix('.alerts.json')}.jsonl").exists()
-
-
-def test_every_scenario_has_expected():
-    for name in SCENARIOS:
-        assert (EXPECTED / f"{name}.alerts.json").exists(), name
+    observations = load(path.name.removesuffix(".alerts.json"))
+    ticks = {int((obs.ts - START).total_seconds()) for obs in observations}
+    tables = {obs.table_id for obs in observations}
+    for e in events:
+        assert e.at_seconds in ticks, (
+            f"{e.at_seconds} s no es una lectura del escenario"
+        )
+        assert e.table_id in tables, f"{e.table_id} no está en el escenario"
 
 
 def test_mesa_completa_goes_from_full_to_empty_in_order():
@@ -149,19 +170,26 @@ def test_json_round_trip():
     assert TableObservation.model_validate_json(obs.model_dump_json()) == obs
 
 
+ALERT = {
+    "id": "a1",
+    "table_id": "T1",
+    "type": "plato_vacio",
+    "message": "🧹 Mesa 1: hay platos vacíos para retirar.",
+    "created_at": "2026-10-17T20:04:00Z",
+    "status": "abierta",
+}
+
+
 def test_alert_defaults():
-    alert = Alert.model_validate(
-        {
-            "id": "a1",
-            "table_id": "T1",
-            "type": "plato_vacio",
-            "message": "🧹 Mesa 1: hay platos vacíos para retirar.",
-            "created_at": "2026-10-17T20:04:00Z",
-            "status": "abierta",
-        }
-    )
+    alert = Alert.model_validate(ALERT)
     assert alert.reminders_sent == 0
     assert alert.telegram_message_id is None
+
+
+def test_alert_rejects_more_than_two_reminders():
+    Alert.model_validate(ALERT | {"reminders_sent": 2})
+    with pytest.raises(ValidationError):
+        Alert.model_validate(ALERT | {"reminders_sent": 3})
 
 
 @pytest.mark.parametrize(
@@ -179,6 +207,9 @@ def test_alert_defaults():
         pytest.param(
             observation(items=observation()["items"] * 2), id="duplicate_track_id"
         ),
+        pytest.param(with_plate(track_id="T2-p1"), id="track_id_from_other_table"),
+        pytest.param(without("position"), id="missing_position"),
+        pytest.param(without("confidence"), id="missing_confidence"),
     ],
 )
 def test_rejects(data):
