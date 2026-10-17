@@ -5,10 +5,15 @@
   platos pero no sabe si están llenos.
 - Con `YOLO_WEIGHTS`: el `yolov8n` entrenado en Colab con `food` / `finished_food`.
 
+`imgsz` es un tope: una imagen más chica va a su tamaño (redondeado a 32), sin
+agrandarla. En un video de 640×480 el recorte de una mesa mide ~350 px y, agrandado a
+1280, YOLOE no encontraba ningún plato; a 352 encuentra los que hay.
+
 `ultralytics` está en `requirements-yolo.txt` y se importa recién al crear el detector.
 """
 
 import logging
+import math
 import os
 import statistics
 from dataclasses import dataclass
@@ -17,6 +22,14 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_YOLOE = "yoloe-11s-seg.pt"
 PLATE_PROMPTS = ("plate", "bowl")
+STRIDE = 32  # YOLO necesita lados múltiplos de 32
+
+
+def fit_imgsz(width: int, height: int, max_size: int) -> int:
+    """`imgsz` para una imagen de `width`×`height`: su lado mayor redondeado a 32,
+    sin pasar de `max_size` (no agranda las imágenes chicas)."""
+    side = math.ceil(max(width, height) / STRIDE) * STRIDE
+    return max(STRIDE, min(max_size, side))
 
 
 @dataclass
@@ -90,10 +103,11 @@ class PlateDetector:
 
     def detect(self, image) -> list[Detection]:
         """`image`: PIL.Image o array RGB."""
+        width, height = image.size if hasattr(image, "mode") else image.shape[1::-1]
         r = self.model.predict(
             image,
             conf=self.conf,
-            imgsz=self.imgsz,
+            imgsz=fit_imgsz(width, height, self.imgsz),
             device=self.device,
             verbose=False,
         )[0]
