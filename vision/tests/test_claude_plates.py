@@ -124,7 +124,7 @@ def test_cli_reads_structured_output(monkeypatch):
 
     def fake_run(args, **kwargs):
         assert "--json-schema" in args
-        assert json.loads(kwargs["input"])["message"]["content"] == ["x"]
+        assert json.loads(kwargs["input"])["message"]["content"][1:] == ["x"]
         return subprocess.CompletedProcess(args, 0, stdout=stdout, stderr="")
 
     monkeypatch.setattr(claude_plates, "_find_cli", lambda: "claude")
@@ -142,3 +142,43 @@ def test_cli_timeout_is_a_call_error(monkeypatch):
     monkeypatch.setattr(claude_plates.subprocess, "run", fake_run)
     with pytest.raises(ClaudeCallError):
         claude_plates._call_cli(["x"], "haiku", 10)
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        '{"plates": [], "people_present": true}',
+        '```json\n{"plates": [], "people_present": true}\n```',
+        'Acá va:\n{"plates": [], "people_present": true}',
+    ],
+)
+def test_json_from_text(text):
+    assert claude_plates.json_from_text(text) == {"plates": [], "people_present": True}
+
+
+def test_json_from_text_without_json_shows_the_answer():
+    with pytest.raises(ClaudeCallError, match="no puedo ver"):
+        claude_plates.json_from_text("no puedo ver las imágenes")
+
+
+def test_cli_on_windows_cmd_skips_schema_and_parses_text(monkeypatch):
+    """Con claude.cmd no se pasan argumentos con comillas y el JSON se lee del texto."""
+    result = {
+        "type": "result",
+        "is_error": False,
+        "result": "```json\n" + json.dumps(_answer(1)) + "\n```",
+    }
+
+    def fake_run(args, **kwargs):
+        assert "--json-schema" not in args
+        assert "--system-prompt" not in args
+        content = json.loads(kwargs["input"])["message"]["content"]
+        assert content[0]["type"] == "text"  # el prompt va en el mensaje
+        return subprocess.CompletedProcess(
+            args, 0, stdout=json.dumps(result), stderr=""
+        )
+
+    monkeypatch.setattr(claude_plates, "_find_cli", lambda: r"C:\npm\claude.cmd")
+    monkeypatch.setattr(claude_plates.subprocess, "run", fake_run)
+    data, _ = claude_plates._call_cli([{"type": "text", "text": "x"}], "haiku", 10)
+    assert data == _answer(1)

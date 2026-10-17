@@ -89,14 +89,31 @@ def _find_cli() -> str:
     return exe
 
 
+def json_from_text(text: str) -> dict:
+    """Saca el objeto JSON de una respuesta de texto (puede venir entre ``` o con texto)."""
+    start, end = text.find("{"), text.rfind("}")
+    if start != -1 and end > start:
+        try:
+            return json.loads(text[start : end + 1])
+        except json.JSONDecodeError:
+            pass
+    raise ClaudeCallError(f"claude -p no devolvió JSON: {text[:300]!r}")
+
+
 def _call_cli(content: list, model: str, timeout_s: float) -> tuple[dict, dict]:
-    """`claude -p` con las imágenes por stdin (stream-json) y salida con esquema."""
+    """`claude -p` con las imágenes por stdin (stream-json).
+
+    El prompt va dentro del mensaje y no como argumento: en Windows, si `claude` es
+    un `.cmd`, los argumentos de varias líneas o con comillas llegan rotos.
+    """
+    exe = _find_cli()
+    instructions = {"type": "text", "text": prompt.SYSTEM_PROMPT}
     message = {
         "type": "user",
-        "message": {"role": "user", "content": content},
+        "message": {"role": "user", "content": [instructions, *content]},
     }
     args = [
-        _find_cli(),
+        exe,
         "-p",
         "--input-format",
         "stream-json",
@@ -107,14 +124,13 @@ def _call_cli(content: list, model: str, timeout_s: float) -> tuple[dict, dict]:
         model,
         "--effort",
         "low",
-        "--system-prompt",
-        prompt.SYSTEM_PROMPT,
-        "--json-schema",
-        json.dumps(prompt.REPORT_PLATES_SCHEMA),
         "--tools",
         "",
         "--no-session-persistence",
     ]
+    if not exe.lower().endswith((".cmd", ".bat")):
+        # salida validada contra el esquema (structured_output)
+        args += ["--json-schema", json.dumps(prompt.REPORT_PLATES_SCHEMA)]
     try:
         out = subprocess.run(
             args,
@@ -140,11 +156,8 @@ def _call_cli(content: list, model: str, timeout_s: float) -> tuple[dict, dict]:
         detail = (result or {}).get("result") or out.stderr or out.stdout
         raise ClaudeCallError(f"claude -p falló: {str(detail)[:500]}")
     data = result.get("structured_output")
-    if data is None:  # versiones viejas: el JSON viene como texto
-        try:
-            data = json.loads(result.get("result") or "")
-        except json.JSONDecodeError as e:
-            raise ClaudeCallError("claude -p no devolvió JSON") from e
+    if data is None:  # sin --json-schema o versión vieja: el JSON viene como texto
+        data = json_from_text(result.get("result") or "")
     usage = result.get("usage") or {}
     return data, {
         "input_tokens": usage.get("input_tokens"),

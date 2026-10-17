@@ -47,4 +47,9 @@ def plate_caption(index: int) -> str:
 
 
 def closing_text(n_plates: int) -> str:
-    return f"Hay {n_plates} platos. Devolvé un elemento por cada uno, con index de 1 a {n_plates}."
+    return (
+        f"Hay {n_plates} platos. Devolvé un elemento por cada uno, con index de 1 a {n_plates}. "
+        "Respondé solo con el JSON, sin texto antes ni después, con esta forma: "
+        '{"plates": [{"index": 1, "fill_ratio": 0.5, "confidence": 0.8, "visible": true}], '
+        '"people_present": true}'
+    )
