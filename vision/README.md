@@ -55,3 +55,20 @@ Imprime los ids de cada frame y `conservan`: qué fracción de los platos de un 
 ## Resultados
 
 _(Tomás: mAP de YOLO, acierto del `hybrid`, latencia, costo y tamaño mínimo de plato; cita del dataset de Roboflow.)_
+
+## Evaluación de estado (TOM-6)
+
+```
+python tools/eval.py --set data/eval
+```
+
+`data/eval/` tiene `labels.csv` (`archivo,estado,nota`) y las imágenes de cada plato; no va al repo. El set actual está en la carpeta compartida del proyecto (`servio-eval/`): 119 platos, 110 `lleno` (recortes del video de IA y platos de más de 300 g de Nutrition5k), 8 `por_terminar` y 1 `vacio` (Nutrition5k, etiquetados a ojo). Falta sumar platos a medio comer y vacíos (dataset de Roboflow).
+
+Manda los platos de a 8 por llamada, como una mesa. Resultado con `claude -p` y Haiku (2026-10-17):
+
+| Prompt | Acierto | A un estado | `fill_ratio` medio de los llenos | Latencia por llamada |
+|---|---|---|---|---|
+| Original | 19,5 % | 100 % | 0,67 | 6,9 s |
+| Porción servida + manos/cubiertos no cuentan | 67–69 % | 98–99 % | 0,83–0,84 | 6,6 s |
+
+Casi todos los errores que quedan son platos llenos que Claude puntúa 0,8 justo en el corte (`lleno` es > 0,80) o 0,5–0,7 con brazos encima.
