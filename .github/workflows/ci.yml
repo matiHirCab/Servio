@@ -17,8 +17,8 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-      # Versiones fijas: `ruff format --check` cambia entre releases.
-      - run: pip install -r requirements.txt pytest==9.1.1 ruff==0.17.1
+      # Versiones fijas en requirements-dev.txt: `ruff format --check` cambia entre releases.
+      - run: pip install -r requirements-dev.txt
       - run: ruff check .
       - run: ruff format --check .
       - run: pytest -q

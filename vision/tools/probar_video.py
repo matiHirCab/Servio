@@ -1,7 +1,7 @@
 """Corre un clasificador sobre un video y deja la línea de tiempo de cada plato.
 
 Saca un frame cada `--cada` segundos, lo clasifica como una sola mesa (el frame
-entero) pasándole los platos de la lectura anterior, y guarda cada frame dibujado
+entero, frames de `servio_vision.capture`) pasándole los platos de la lectura anterior, y guarda cada frame dibujado
 (`f_NNN.jpg`), una hoja con el recorte de cada plato y su clasificación
 (`f_NNN_platos.jpg`) y `linea_de_tiempo.json`, cada corrida en su carpeta (`out/video/run1`, `run2`, ...). Sirve para TOM-7/TOM-8 antes de tener el loop de Jessica.
 
@@ -23,6 +23,7 @@ from PIL import Image, ImageDraw, ImageFont
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from servio_vision.capture import open_source
 from servio_vision.classifier import get_classifier
 
 COLORS = {
@@ -33,23 +34,15 @@ COLORS = {
 }
 
 
-def frames(path: str, every_s: float, max_frames: int):
-    """(segundo, imagen PIL) cada `every_s` segundos."""
-    cap = cv2.VideoCapture(path)
-    if not cap.isOpened():
-        raise SystemExit(f"No pude abrir el video: {path}")
-    fps = cap.get(cv2.CAP_PROP_FPS) or 30
-    total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-    step = max(1, round(fps * every_s))
-    for n, idx in enumerate(range(0, total, step), 1):
-        cap.set(cv2.CAP_PROP_POS_FRAMES, idx)
-        ok, frame = cap.read()
-        if not ok:
-            break
-        yield idx / fps, Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
+def frames(source: str, every_s: float, max_frames: int):
+    """(segundo, imagen PIL) cada `every_s` segundos, con la captura de Jessica."""
+    first = None
+    for n, (frame, ts) in enumerate(open_source(source, interval=every_s), 1):
+        first = first or ts
+        img = Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
+        yield (ts - first).total_seconds(), img
         if max_frames and n >= max_frames:
             break
-    cap.release()
 
 
 def _font(size: int):

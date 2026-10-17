@@ -82,7 +82,7 @@ Lo que el pipeline le pasa a `alerts` después de suavizar, una por mesa y por l
 }
 ```
 
-- `ts`: en un video, el tiempo del video (no el reloj), para que los umbrales tengan sentido.
+- `ts`: en un video, el tiempo del video (no el reloj), para que los umbrales tengan sentido. Siempre **con zona horaria** (UTC): un `datetime` sin zona se rechaza. En JSON va como `2026-10-17T20:15:03.120Z` (con `T`, segundos y `Z` o `±HH:MM`).
 - `track_id`: `{table_id}-{id del Item}`.
 - Solo platos visibles y ya suavizados. Un plato ausente en 2 lecturas seguidas deja de venir.
 - Cadencia: una observación por mesa cada 15–30 s (demo: 5–10 s), y como mínimo cada 60 s (demo: 20 s) aunque la mesa no cambie, para que las reglas por tiempo corran.
@@ -95,7 +95,7 @@ class Alert(BaseModel):
     table_id: str
     type: AlertType
     message: str            # texto que se manda
-    created_at: datetime
+    created_at: datetime   # con zona horaria (UTC), igual que ts
     status: AlertStatus     # "abierta" | "resuelta"
     reminders_sent: int
     telegram_message_id: int | None
@@ -108,7 +108,9 @@ Telegram: `sendMessage` al grupo `TELEGRAM_GROUP_CHAT_ID` al abrir o recordar; `
 Ejemplos concretos de este contrato para probar sin video ni modelo:
 
 - `fixtures/observations/*.jsonl`: una observación de mesa por línea (formato de arriba). Escenarios mínimos: mesa que pasa de lleno a vacío y se retira, plato lleno 12 min con gente y después sin gente, id que cambia en la misma posición.
-- `fixtures/expected/*.alerts.json`: avisos que tienen que salir para cada escenario, con el segundo en que salen.
+- `fixtures/expected/*.alerts.json`: avisos que tienen que salir para cada escenario, con el segundo en que salen. Una lista de eventos en orden, con los nombres del log: `{ "at_seconds": 130, "event": "alert_opened" | "alert_reminder" | "alert_resolved", "type": "mesa_por_terminar", "table_id": "T1" }`, con `at_seconds` contado desde la primera línea del `.jsonl` (umbrales de producción).
+
+Los modelos de la observación de mesa (`TableObservation`, `ObservedPlate`) y del aviso (`Alert`) están en `vision/servio_vision/alerts/models.py`. Rechazan campos desconocidos y un `state` que no coincide con su `fill_ratio`.
 
 ## Log — `vision/out/eventos.jsonl`
 
