@@ -1,23 +1,32 @@
 # 05 — Reglas de avisos
 
-Viven en `vision/servio_vision/alerts/` (Matías). Se evalúan cada vez que llega una observación de mesa. Umbrales en `alerts/config.py`, con valores de producción y de demo (`DEMO_MODE` / `--demo`).
+Viven en `vision/servio_vision/alerts/` (Matías). Se evalúan cada vez que llega una observación de mesa. Umbrales en `alerts/config.py`, con valores de producción y de demo (`DEMO_MODE` / `--demo`). Todos son configurables (ver «Umbrales configurables»).
 
 ## Avisos
 
 | Aviso | Se abre cuando | Mensaje | Producción | Demo |
 |---|---|---|---|---|
 | `mesa_por_terminar` | El estado de la mesa **pasa a** `por_terminar` (ver «Estado de mesa») | "🍽️ Mesa 3 está terminando." | — | — |
-| `plato_vacio` | Un plato está en `vacio` hace ≥ T1 | "🧹 Mesa 3: hay platos vacíos para retirar." | T1 = 60 s | 10 s |
-| `plato_lleno_mucho` | Un plato está en `lleno` hace ≥ T2 desde que apareció **y** `people_present` no es `false` | "❓ Mesa 3: un plato sigue lleno hace 12 min. ¿Está todo bien?" | T2 = 10 min | 45 s |
+| `plato_vacio` | Un plato está en `vacio` hace ≥ T1 | "🧹 Mesa 3: hay platos vacíos para retirar." | T1 = 60 s | 2 × `interval` |
+| `plato_lleno_mucho` | Un plato está en `lleno` hace ≥ T2 desde que apareció **y** `people_present` no es `false` | "❓ Mesa 3: un plato sigue lleno hace 12 min. ¿Está todo bien?" | T2 = 10 min | 2 × `interval` |
 
 ## Sin respuesta del mozo: recordatorio y cierre
 
 El mozo no responde, así que el antispam es por tiempo:
 
 - **Un aviso abierto por `(mesa, tipo)`.** Mientras esté abierto no se manda otro igual.
-- **Recordatorio:** si la condición sigue después de R minutos, se manda un recordatorio ("Mesa 3: los platos vacíos siguen sin retirar hace 4 min"). Producción R = 3 min, demo 30 s. Máximo 2 recordatorios.
+- **Recordatorio:** si la condición sigue después de R minutos, se manda un recordatorio ("Mesa 3: los platos vacíos siguen sin retirar hace 4 min"). Producción R = 3 min, demo 2 × `interval`. Máximo 2 recordatorios.
 - **Cierre:** cuando la condición deja de cumplirse (retiraron el plato, la mesa dejó de estar por terminar), el aviso pasa a `resuelta` y se edita el mensaje original con "✅ ya resuelto".
 - **Agrupar:** si en la misma evaluación se abren varios avisos de la misma mesa, se manda un solo mensaje con todo.
+
+## Umbrales configurables
+
+Los umbrales cuentan **tiempo de video** (el `ts` de las observaciones), así que `--speed` acelera la demo en el reloj pero no la acorta: con un video corto, lo que hace falta son umbrales cortos.
+
+- **Producción:** T1 = 60 s, T2 = 10 min, R = 3 min.
+- **Demo (`--demo`):** cada umbral vale por defecto `2 × interval`, lo mínimo que el suavizado puede confirmar. Con `--interval 30` son 60 s; con `--interval 15`, 30 s (para videos cortos).
+- **A mano:** `--t1`, `--t2` y `--reminder` (o `ALERT_T1`, `ALERT_T2`, `ALERT_REMINDER` en `.env`) fijan cualquier umbral; el flag le gana a la variable.
+- `config.py` recibe el `interval` del loop y no arranca si algún umbral queda por debajo de `2 × interval`.
 
 ## Umbrales y cadencia
 
@@ -26,6 +35,7 @@ Las observaciones llegan cada 30 s (en un video, 30 s del video; ver [04-vision.
 ## `people_present`
 
 - Si es `false`, no se abre `plato_lleno_mucho`.
+- Un `plato_lleno_mucho` abierto se cierra por falta de gente recién con **2 lecturas seguidas** con `people_present: false`. Una sola lectura sin gente (el detector no vio a alguien sentado) no lo cierra, para no cerrar y reabrir el aviso por un parpadeo.
 - Si es `false` y hay platos vacíos, `plato_vacio` sigue (hay que retirar).
 
 ## Estado de mesa
@@ -40,7 +50,17 @@ Función pura `table_status(items)`, evaluada en este orden:
 
 ## Estado por plato
 
-`alerts/state.py` guarda por cada `track_id`: `first_seen`, `state`, `state_since` y `last_seen`. Si un `track_id` nuevo aparece en la misma mesa y `position` que uno que desapareció en esa misma lectura, se trata como el mismo plato (no reinicia `first_seen` ni `state_since`).
+`alerts/state.py` (funciones puras `update_table` y `table_status`) guarda cada plato por su `track_id` actual, con `first_seen`, `state`, `state_since` y `last_seen`.
+
+Cuando el clasificador cambia el id de un plato (`p1 → p4`), el suavizado manda los dos juntos una lectura y después solo el nuevo. Para no reiniciar el tiempo del plato y no mezclar platos distintos:
+
+- **Provisional:** un id nuevo en la `position` de un plato que sigue en la mesa no cuenta para las reglas en esa lectura (`active_plates()` lo deja afuera), así no cambia el estado de la mesa ni dispara avisos.
+- **Herencia:** cuando un plato deja de venir y hay un **único** plato reciente (apareció en esa lectura o en la anterior) en su misma `position`, ese plato hereda `first_seen`, y también `state_since` si tiene el mismo estado.
+- **Solo si puede ser el mismo plato:** el candidato tiene que haber aparecido en esa `position` (no vale uno que se corrió ahí) y tener el mismo estado o un paso hacia adelante. Un retroceso o un salto (`smoothing.is_hard_change`, por ejemplo `vacio → lleno` cuando cambian el principal por el postre) es otro plato y cuenta con sus propios tiempos.
+- **Dos platos:** si el viejo y el nuevo siguen viniendo, eran dos platos (por ejemplo, sirvieron otro en el mismo casillero): el nuevo cuenta desde la lectura siguiente, con sus propios tiempos, y nunca hereda.
+- **Ambigüedad:** con dos candidatos, o dos platos retirados en la misma `position`, nadie hereda.
+- **Retirado:** un plato que no viene en la observación ya está retirado; el suavizado lo saca después de 2 lecturas ausente ([03-contratos.md](03-contratos.md)).
+- **Riesgo conocido:** si cambian un plato por otro en el mismo casillero y el estado del nuevo es igual o un paso adelante del viejo (por ejemplo, `lleno` por `lleno`), el nuevo hereda el tiempo del viejo. Los ids estables de la visión (emparejados por `bbox`) hacen que esto pase solo cuando falla ese emparejamiento.
 
 ## Tests
 

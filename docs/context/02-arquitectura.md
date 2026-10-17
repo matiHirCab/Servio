@@ -50,8 +50,8 @@ Dueños por carpeta en [09-convenciones.md](09-convenciones.md).
 
 | Recurso | Para qué |
 |---|---|
-| AWS (créditos) | Claude en Bedrock. |
-| API de Anthropic | Respaldo de Bedrock. |
+| Claude Code (suscripciones Pro/Max) | Claude por `claude -p` (`CLAUDE_PROVIDER=cli`). No hay créditos de AWS. |
+| API de Anthropic | Respaldo si se consigue una API key. |
 | Colab con GPU | Entrenar YOLO (`yolov8n`). La inferencia corre en la laptop con CPU. |
 | Roboflow | Dataset *AI Smart Restaurant Surveillance* (CC BY 4.0) para entrenar y evaluar. |
 | Telegram | Bot que manda los avisos al grupo "Mozos". |

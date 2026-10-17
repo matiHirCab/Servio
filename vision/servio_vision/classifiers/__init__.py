@@ -1,1 +1,1 @@
-"""Implementaciones de `Classifier`: fake (P3), claude y yolo (P1)."""
+"""Implementaciones de `Classifier`: fake (Jessica); yolo, hybrid y claude (Tomás)."""

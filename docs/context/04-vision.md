@@ -5,7 +5,7 @@
 ## Por qué los dos
 
 - **YOLO** (`yolov8n` entrenado con el dataset de Roboflow): encuentra cada plato rápido, en la laptop con CPU, y da su caja. Con la caja se mantiene el mismo id para el mismo plato entre lecturas y se recorta el plato a buena resolución aunque haya muchas mesas en el plano. Solo distingue `food` / `finished_food`, así que no alcanza para los estados intermedios.
-- **Claude** (Haiku en Bedrock, o la API de Anthropic): mira el recorte de cada plato y estima `fill_ratio` (cuánta comida queda), que da los 4 estados sin entrenar nada.
+- **Claude** (Haiku por `claude -p` con la suscripción del equipo, o la API de Anthropic si hay key): mira el recorte de cada plato y estima `fill_ratio` (cuánta comida queda), que da los 4 estados sin entrenar nada.
 - **Plan B:** si Claude no responde, el `hybrid` usa la clase de YOLO (`food` → `lleno`, `finished_food` → `vacio`). Si YOLO no está entrenado a tiempo, se usa `claude` con el recorte de la mesa entera.
 
 ## Clasificador `hybrid` (el de la demo)
@@ -26,7 +26,8 @@ Las siguientes son recortes de cada plato de esa mesa, numerados desde 1 en el m
 Para cada plato estimá:
 - fill_ratio: cuánta comida queda, de 0 (vacío o solo restos) a 1 (recién servido, intacto).
 - confidence: de 0 a 1.
-- visible: false si una mano, un brazo, un cubierto grande o una persona tapa el plato.
+- visible: false solo si no se ve la comida del plato (una persona o un brazo tapa más de la mitad).
+  Cubiertos, servilletas o una mano en el borde no cuentan: estimá igual con lo que se ve.
 Indicá también si hay personas sentadas en la mesa (people_present).
 Respondé SOLO con la herramienta report_plates.
 ```
@@ -52,17 +53,17 @@ Herramienta `report_plates`:
 | Riesgo | Mitigación |
 |---|---|
 | **Muchas mesas en un plano** → platos chicos | Recortar desde el frame original (no achicado); YOLO recorta cada plato antes de mandarlo a Claude. Probar temprano con el video de la demo qué tamaño mínimo de plato funciona. |
-| **Latencia de Claude** (1–3 s) | Miramos cada 30 s: sobra tiempo para clasificar todas las mesas antes de la próxima lectura. |
+| **Latencia de Claude** (1–3 s por llamada) | Miramos cada 30 s y las mesas se clasifican en paralelo: sobra tiempo para todas antes de la próxima lectura. |
 | **Costo** | Una llamada por mesa cada 30 s; recortes chicos; Haiku. |
-| **Rate limits de Bedrock** | Pedir aumento de cuota temprano; API de Anthropic como respaldo. |
+| **Límites de uso de la suscripción** (`claude -p`) | Una llamada por mesa cada 30 s; usar la cuenta Max para la demo; API de Anthropic como respaldo. |
 | **Sin internet** | `--classifier yolo` (solo YOLO) o reproducir un log con `tools/replay.py`. |
-| **Manos que tapan** | `visible: false` → no cuenta en el suavizado. |
+| **Manos que tapan** | Claude marca `visible: false` solo si no ve la comida; el plato conserva su última lectura con `visible: false` (`hybrid`) y no cuenta en el suavizado. |
 
 ## Cadencias
 
 Una sola cadencia: **se mira cada 30 s** (`--interval 30`, configurable). En cada lectura se clasifican todas las mesas y sale una observación por mesa a `alerts`, haya cambiado o no. Sin detector de cambio: a esta cadencia no hace falta ahorrar llamadas.
 
-- En un **video**, son 30 s *del video*. Para que la demo no dure de más, se reproduce acelerado con `--speed` (por ejemplo `--speed 10`: una lectura cada 3 s de reloj); los tiempos de las reglas siguen contando en tiempo de video.
+- En un **video**, son 30 s *del video*. `--speed` lo reproduce más rápido en el reloj (`--speed 10`: una lectura cada 3 s), pero **no acorta la demo**: las reglas cuentan tiempo de video. Con un video corto, lo que sirve es bajar `--interval` (por ejemplo 15), que baja también los umbrales de demo (ver «Umbrales configurables» en [05-reglas-alertas.md](05-reglas-alertas.md)).
 - Como el suavizado pide **2 lecturas seguidas** para aceptar un cambio, un cambio de estado se confirma recién a los **60 s**. Todo umbral de [05-reglas-alertas.md](05-reglas-alertas.md) (también los de demo) debe ser ≥ 2 × `interval`.
 - `--demo` (o `DEMO_MODE=true`, el flag le gana) solo cambia los umbrales de las reglas, no la cadencia.
 
@@ -87,7 +88,7 @@ frame (cada 30 s) → recorte por mesa → classify() → suavizado → observac
 ### Suavizado
 
 Por cada plato:
-- Un plato con `visible: false` no cuenta como lectura.
+- Un plato con `visible: false` no cuenta como lectura. Si ya se había visto, el `hybrid` lo manda con su última lectura y `visible: false`: se sigue mostrando su último estado pero no suma a la racha. Recién con 3 lecturas seguidas sin verlo se muestra «tapado» (sin estado).
 - Cambio a un estado vecino: se acepta si aparece en **2 lecturas seguidas**.
 - Retroceso (`vacio → comiendo`) o salto de más de un estado (`lleno → vacio`): se acepta con **3 lecturas seguidas** con `confidence ≥ 0.8`.
 - Ausente en 1 lectura: se mantiene. Ausente en 2 seguidas: retirado (deja de venir en la observación).
@@ -115,7 +116,7 @@ vision/
     resumen.py               # tabla de lo que pasó, si sobra tiempo (Jessica)
   tests/
   data/ models/ out/         # ignorados por git
-  requirements.txt           # opencv-python, pydantic, boto3, anthropic, httpx
+  requirements.txt           # opencv-python, pydantic, httpx (anthropic solo si CLAUDE_PROVIDER=anthropic)
   requirements-yolo.txt      # ultralytics
 ```
 
