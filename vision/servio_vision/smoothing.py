@@ -80,13 +80,16 @@ class TableSmoother:
         current = track.accepted.state
         new = item.state
         if new == current:
-            track.accepted = item
+            track.accepted = _keep_box(item, track.accepted)
             track.candidate, track.streak = None, 0
             return
 
         # el estado espera confirmación, pero el plato está donde se lo ve ahora
-        track.accepted = track.accepted.model_copy(
-            update={"position": item.position, "bbox": item.bbox}
+        track.accepted = _keep_box(
+            track.accepted.model_copy(
+                update={"position": item.position, "bbox": item.bbox}
+            ),
+            track.accepted,
         )
         if new != track.candidate:
             track.candidate, track.streak = new, 0
@@ -97,5 +100,12 @@ class TableSmoother:
             return
         track.streak += 1
         if track.streak >= (HARD_READINGS if hard else NEIGHBOR_READINGS):
-            track.accepted = item
+            track.accepted = _keep_box(item, track.accepted)
             track.candidate, track.streak = None, 0
+
+
+def _keep_box(item: Item, previous: Item) -> Item:
+    """Si la lectura nueva no trae caja, conserva la que se conocía del plato."""
+    if item.bbox is None and previous.bbox is not None:
+        return item.model_copy(update={"bbox": previous.bbox})
+    return item

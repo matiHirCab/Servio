@@ -134,3 +134,14 @@ def test_output_fill_ratio_matches_smoothed_state():
     [item] = smoother.update([plate("comiendo")])  # todavía no se acepta
     assert item.state == "lleno"
     assert item.fill_ratio == FILL["lleno"]
+
+
+def test_pending_change_keeps_latest_box_but_not_none():
+    smoother = TableSmoother()
+    first = plate("lleno").model_copy(update={"bbox": (0.1, 0.1, 0.2, 0.2)})
+    smoother.update([first])
+    moved = plate("comiendo").model_copy(update={"bbox": (0.5, 0.5, 0.2, 0.2)})
+    [item] = smoother.update([moved])  # cambio pendiente: estado viejo, caja nueva
+    assert item.state == "lleno" and item.bbox == (0.5, 0.5, 0.2, 0.2)
+    [item] = smoother.update([plate("lleno")])  # sin caja: se conserva la anterior
+    assert item.bbox == (0.5, 0.5, 0.2, 0.2)

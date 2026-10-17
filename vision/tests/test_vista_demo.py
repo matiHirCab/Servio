@@ -73,32 +73,75 @@ def test_overlay_draws_table_and_plate_colors():
     assert frame.sum() == 0  # no toca el frame original
 
 
-def test_records_video_without_window(tmp_path, monkeypatch):
+def _video(tmp_path, seconds: int = 65) -> Path:
     video = tmp_path / "salon.avi"
     writer = cv2.VideoWriter(
         str(video), cv2.VideoWriter_fourcc(*"MJPG"), 10, (400, 200)
     )
-    for _ in range(10 * 65):
+    for _ in range(10 * seconds):
         writer.write(np.full((200, 400, 3), 90, np.uint8))
     writer.release()
+    return video
+
+
+def _run(tmp_path, monkeypatch, caplog, source, *extra) -> int:
     zones_path = tmp_path / "zones.json"
     save_zones(ZONES, zones_path)
-    out = tmp_path / "out" / "demo.mp4"
     monkeypatch.delenv("DEMO_MODE", raising=False)
+    caplog.set_level("INFO")
+    args = ["--source", str(source), "--zones", str(zones_path), "--no-window"]
+    return vista_demo.main([*args, *extra])
 
-    code = vista_demo.main(
-        [
-            "--source",
-            str(video),
-            "--zones",
-            str(zones_path),
-            "--no-window",
-            "--record",
-            str(out),
-        ]
-    )
 
+def test_records_video_with_last_reading(tmp_path, monkeypatch, caplog):
+    out = tmp_path / "out" / "demo.mp4"
+    code = _run(tmp_path, monkeypatch, caplog, _video(tmp_path), "--record", str(out))
     assert code == 0
+    assert "3 lecturas" in caplog.text  # 0, 30 y 60 s: la última también cuenta
     recorded = cv2.VideoCapture(str(out))
-    assert int(recorded.get(cv2.CAP_PROP_FRAME_COUNT)) == 650
+    # 650 frames del video + 1 con la última lectura ya dibujada
+    assert int(recorded.get(cv2.CAP_PROP_FRAME_COUNT)) == 651
     recorded.release()
+
+
+def test_limit_stops_after_n_readings(tmp_path, monkeypatch, caplog):
+    code = _run(tmp_path, monkeypatch, caplog, _video(tmp_path), "--limit", "1")
+    assert code == 0
+    assert "1 lecturas" in caplog.text
+
+
+def test_folder_source(tmp_path, monkeypatch, caplog):
+    photos = tmp_path / "fotos"
+    photos.mkdir()
+    for i in range(2):
+        cv2.imwrite(str(photos / f"{i}.jpg"), np.zeros((200, 400, 3), np.uint8))
+    assert _run(tmp_path, monkeypatch, caplog, photos) == 0
+    assert "2 lecturas" in caplog.text
+
+
+def test_missing_source_exits_with_message(tmp_path, monkeypatch, caplog):
+    code = _run(tmp_path, monkeypatch, caplog, tmp_path / "no_existe.mp4")
+    assert code == 2
+    assert "No existe la fuente" in caplog.text
+
+
+def test_overlay_boxes_match_crop_at_frame_edge():
+    # la mesa se sale por la izquierda: el recorte va de x=0 a x=100
+    zones = Zones(
+        frame_size=(400, 200),
+        tables=[
+            TableZone(
+                table_id="T1",
+                name="Mesa 1",
+                polygon=[(-100, 0), (100, 0), (100, 199), (-100, 199)],
+            )
+        ],
+    )
+    state = vista_demo.DemoState(zones)
+    state.update(FakePipeline({"T1": [plate("vacio", 0.0)]}), T0)
+    image = vista_demo.draw_overlay(
+        np.zeros((200, 400, 3), np.uint8), zones, state, T0, "Servio"
+    )
+    # bbox x de 0.25 a 0.75 del recorte (ancho 101) → bordes en x=25 y x=76
+    assert tuple(image[100, 25]) == vista_demo.PLATE_COLORS["vacio"]
+    assert tuple(image[100, 76]) == vista_demo.PLATE_COLORS["vacio"]

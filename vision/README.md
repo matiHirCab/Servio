@@ -27,6 +27,8 @@ python tools/vista_demo.py --source data/videos/demo.mp4 --classifier fake --rec
 ```
 
 - **Teclas:** `q` sale, espacio pausa. Con `--no-window --record` graba sin abrir la ventana.
+- **`--speed`:** a diferencia de `main.py`, sin `--speed` la vista reproduce en tiempo real (es para mirar). Después de una pausa o de esperar al modelo, el video retoma su ritmo sin adelantarse.
+- **Grabar en vivo:** con la cámara, la grabación puede quedar más rápida que la realidad si el loop va más lento que los fps de la cámara. Para el plan B, grabar sobre el video.
 - **Colores de mesa:** gris libre · azul servida · verde comiendo · amarillo por terminar · rojo terminada. Los platos usan los mismos colores según su estado.
 
 ## Claude
