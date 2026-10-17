@@ -1,0 +1,6 @@
+[
+  { "at_seconds": 130, "event": "alert_opened", "type": "mesa_por_terminar", "table_id": "T1" },
+  { "at_seconds": 180, "event": "alert_resolved", "type": "mesa_por_terminar", "table_id": "T1" },
+  { "at_seconds": 240, "event": "alert_opened", "type": "plato_vacio", "table_id": "T1" },
+  { "at_seconds": 310, "event": "alert_resolved", "type": "plato_vacio", "table_id": "T1" }
+]
