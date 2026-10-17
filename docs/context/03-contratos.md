@@ -47,11 +47,16 @@ Separa el modelo (P1) de la conexión de visión (P3). Vive en `vision/servio_vi
 class Classifier(Protocol):
     def classify(self, image: bytes, table_id: str, previous_items: list[Item]) -> TableReport | None: ...
 
-def get_classifier(name: str) -> Classifier: ...   # "fake" | "claude" | "yolo"
+def get_classifier(name: str, **kwargs) -> Classifier: ...   # "fake" | "claude" | "yolo"
 ```
 
 - `image`: recorte JPEG de la mesa (~512 px). `previous_items`: los ítems de la lectura anterior, para mantener ids.
 - `None` = lectura fallida (se descarta, no cuenta para el suavizado).
+- `get_classifier(name, **kwargs)`: los `kwargs` van al constructor de la clase (ej. `get_classifier("fake", mode="replay")`). Nombre desconocido → `ValueError`; clasificador todavía no implementado → `NotImplementedError`.
+- Validación de `TableReport` (`schemas.py`):
+  - Los ítems con `kind` distinto de `"plate"` (vasos, botellas) **se descartan**, no invalidan la lectura.
+  - Si viene `fill_ratio`, el `state` se calcula de ahí con los umbrales de «Enums» (pisa el que mande el modelo).
+  - Un ítem con `visible: false` puede venir sin `state` ni `confidence`; uno visible los necesita.
 - Implementaciones: `classifiers/fake.py` (P3, sin modelo), `classifiers/claude.py` (P1), `classifiers/yolo.py` (P1, solo si se decide en [04-vision.md](04-vision.md)). Se elige con `main.py --classifier`.
 
 ## Visión → Backend: `POST /api/observations`
