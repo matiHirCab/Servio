@@ -2,7 +2,8 @@
 
 Saca un frame cada `--cada` segundos, lo clasifica como una sola mesa (el frame
 entero) pasándole los platos de la lectura anterior, y guarda cada frame dibujado
-y `linea_de_tiempo.json`. Sirve para TOM-7/TOM-8 antes de tener el loop de Jessica.
+(`f_NNN.jpg`), una hoja con el recorte de cada plato y su clasificación
+(`f_NNN_platos.jpg`) y `linea_de_tiempo.json`. Sirve para TOM-7/TOM-8 antes de tener el loop de Jessica.
 
 Uso (desde vision/):
   python tools/probar_video.py "C:/Users/tomas/Downloads/video mesa platos ia.mp4"
@@ -60,6 +61,52 @@ def _font(size: int):
     return ImageFont.load_default()
 
 
+def label(it) -> str:
+    if not it.visible:
+        return f"{it.id} tapado"
+    if it.fill_ratio is not None:
+        return f"{it.id} {it.state} {round(100 * it.fill_ratio)}%"
+    return f"{it.id} {it.state}"
+
+
+def plate_sheet(img: Image.Image, items, path: Path, side: int = 300) -> None:
+    """Hoja con el recorte de cada plato (10 % de margen) y su clasificación abajo."""
+    items = [it for it in items if it.bbox is not None]
+    if not items:
+        return
+    cols = min(4, len(items))
+    rows = -(-len(items) // cols)
+    bar = 56
+    sheet = Image.new("RGB", (cols * side, rows * (side + bar)), "white")
+    d = ImageDraw.Draw(sheet)
+    big, small = _font(20), _font(16)
+    w, h = img.size
+    for k, it in enumerate(
+        sorted(items, key=lambda i: int(i.id[1:]) if i.id[1:].isdigit() else 0)
+    ):
+        x, y, bw, bh = it.bbox
+        m = 0.10
+        crop = img.crop(
+            (
+                max(0, (x - m * bw) * w),
+                max(0, (y - m * bh) * h),
+                min(w, (x + bw * (1 + m)) * w),
+                min(h, (y + bh * (1 + m)) * h),
+            )
+        )
+        crop.thumbnail((side, side))
+        cx, cy = (k % cols) * side, (k // cols) * (side + bar)
+        sheet.paste(
+            crop, (cx + (side - crop.width) // 2, cy + (side - crop.height) // 2)
+        )
+        color = COLORS.get(it.state, "#1565c0") if it.visible else "#616161"
+        d.rectangle((cx, cy + side, cx + side - 1, cy + side + bar - 1), fill=color)
+        d.text((cx + 8, cy + side + 4), label(it), fill="white", font=big)
+        conf = "" if it.confidence is None else f"confianza {it.confidence:.2f}"
+        d.text((cx + 8, cy + side + 32), conf, fill="white", font=small)
+    sheet.save(path, quality=85)
+
+
 def draw(img: Image.Image, items, path: Path) -> None:
     img = img.copy()
     d = ImageDraw.Draw(img)
@@ -71,13 +118,7 @@ def draw(img: Image.Image, items, path: Path) -> None:
         x, y, bw, bh = it.bbox
         box = (x * w, y * h, (x + bw) * w, (y + bh) * h)
         color = COLORS.get(it.state, "#1565c0")
-        text = it.id
-        if not it.visible:
-            text += " tapado"
-        elif it.fill_ratio is not None:
-            text += f" {it.state} {round(100 * it.fill_ratio)}%"
-        elif it.state:
-            text += f" {it.state}"
+        text = label(it)
         d.rectangle(box, outline=color, width=5)
         tb = d.textbbox(box[:2], text, font=font)
         d.rectangle((tb[0] - 4, tb[1] - 4, tb[2] + 4, tb[3] + 4), fill=color)
@@ -114,6 +155,7 @@ def main() -> None:
             continue
         previous = report.items
         draw(img, report.items, out / f"{name}.jpg")
+        plate_sheet(img, report.items, out / f"{name}_platos.jpg")
         timeline.append(
             {"frame": name, "segundo": round(sec, 1), "report": report.model_dump()}
         )
