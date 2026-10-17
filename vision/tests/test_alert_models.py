@@ -134,14 +134,16 @@ def test_plato_lleno_mucho_stays_full_with_people_12_min_in_a_row():
 
 
 def test_id_cambiado_changes_one_id_in_same_position():
+    # Como el suavizado real: el id nuevo llega junto al viejo (retenido una lectura)
+    # en la misma posición, y en la lectura siguiente el viejo ya no viene.
     observations = load("id_cambiado")
     swaps = 0
     for prev, curr in itertools.pairwise(observations):
         prev_ids = {it.track_id: it for it in prev.items}
-        curr_ids = {it.track_id: it for it in curr.items}
-        gone = [it for tid, it in prev_ids.items() if tid not in curr_ids]
-        added = [it for tid, it in curr_ids.items() if tid not in prev_ids]
-        swaps += sum(1 for g in gone if any(a.position == g.position for a in added))
+        added = [it for it in curr.items if it.track_id not in prev_ids]
+        swaps += sum(
+            1 for a in added if any(p.position == a.position for p in prev.items)
+        )
     assert swaps == 1
 
 

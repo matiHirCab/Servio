@@ -50,7 +50,12 @@ Función pura `table_status(items)`, evaluada en este orden:
 
 ## Estado por plato
 
-`alerts/state.py` guarda por cada `track_id`: `first_seen`, `state`, `state_since` y `last_seen`. Si un `track_id` nuevo aparece en la misma mesa y `position` que uno que desapareció en esa misma lectura, se trata como el mismo plato (no reinicia `first_seen` ni `state_since`). Solo si hay **un único candidato**: si más de un plato desaparecido (o más de uno nuevo) comparte esa `position`, no se empareja y el nuevo cuenta como plato nuevo, para no pasarle los tiempos al plato equivocado.
+`alerts/state.py` (funciones puras `update_table` y `table_status`) guarda por cada plato: `first_seen`, `state`, `state_since` y `last_seen`.
+
+- **Id que cambia:** un `track_id` nuevo en la misma `position` que un plato que ya estaba en la mesa se trata como ese mismo plato: se guarda el alias (por ejemplo `T1-p4 → T1-p1`) y no se reinician `first_seen` ni `state_since`. Vale venga o no el id viejo en esa lectura, porque el suavizado retiene una lectura al viejo y manda los dos juntos.
+- **Solo con un único candidato:** si más de un plato de la mesa comparte esa `position`, o llegan dos ids nuevos con la misma, no se empareja y el nuevo cuenta como plato nuevo, para no pasarle los tiempos al plato equivocado.
+- **Retirado:** un plato que no viene en la observación ya está retirado; el suavizado lo saca después de 2 lecturas ausente ([03-contratos.md](03-contratos.md)).
+- **Riesgo conocido:** un plato realmente nuevo que el clasificador ponga en la misma `position` de texto que uno que sigue en la mesa se toma como ese plato. Se puede mejorar emparejando por `bbox`.
 
 ## Tests
 
