@@ -160,7 +160,7 @@ class FeedbackDesk:
     ) -> None:
         now = datetime.now(UTC)
         with self._lock:
-            question.feedback.append(f"📝 {who}: {answer}")
+            question.feedback.append(f"📝 {answer}")  # quién respondió queda en la base
             text = question.text + "".join(f"\n\n{line}" for line in question.feedback)
         if question.message_id is not None:
             self.notifier.edit(question.message_id, text)  # saca los botones

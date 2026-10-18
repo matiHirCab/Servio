@@ -95,8 +95,8 @@ def test_button_answer_is_logged_and_shown():
         "No le gustaron",
     )
     assert event["answered_by"] == "Ana" and not event["free_text"]
-    assert d.notifier.edits[-1][1].endswith("📝 Ana: No le gustaron")
-    assert d.suffix(101) == "\n\n📝 Ana: No le gustaron"
+    assert d.notifier.edits[-1][1].endswith("📝 No le gustaron")  # sin el nombre
+    assert d.suffix(101) == "\n\n📝 No le gustaron"
 
 
 def test_other_answer_asks_to_write_and_takes_the_reply():

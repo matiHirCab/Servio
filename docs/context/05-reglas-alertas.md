@@ -6,7 +6,7 @@ Viven en `vision/servio_vision/alerts/` (Matías). Se evalúan cada vez que lleg
 
 | Aviso | Se abre cuando | Mensaje | Producción | Demo |
 |---|---|---|---|---|
-| `mesa_terminada` | La mesa queda **terminada**: todos sus platos en `vacio` (ver «Estado de mesa»). Se cierra **solo** si retiran los platos (mesa `libre`) o sirven algo nuevo | "🍽️ Mesa 3 terminó: retirá los platos y ofrecé postre, café o la cuenta." | — | — |
+| `mesa_terminada` | La mesa queda **terminada**: todos sus platos en `vacio` (ver «Estado de mesa»). Se cierra **solo** si retiran los platos (mesa `libre`) o sirven algo nuevo | "🍽️ Mesa 3 terminó." | — | — |
 | `plato_vacio` | Un plato está en `vacio` hace ≥ T1 **mientras el resto de la mesa sigue comiendo** (la mesa no está `terminada`). Ya abierto, se cierra cuando retiran ese plato | "🧹 Mesa 3: hay platos vacíos para retirar." | T1 = 60 s | 2 × `interval` |
 | `plato_lleno_mucho` | Un plato está en `lleno` hace ≥ T2 desde que apareció **y** `people_present` no es `false` | "❓ Mesa 3: un plato sigue lleno hace 12 min. ¿Está todo bien?" | T2 = 10 min | 2 × `interval` |
 

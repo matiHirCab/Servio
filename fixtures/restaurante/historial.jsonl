@@ -474,7 +474,7 @@
 {"tipo": "servido", "fecha": "2026-09-22", "servicio": "almuerzo", "mesa": "T2", "mozo": "Sofía", "plato": "Milanesa napolitana"}
 {"tipo": "mesa_terminada", "fecha": "2026-09-22", "servicio": "almuerzo", "mesa": "T2", "mozo": "Sofía", "minutos_hasta_atender": 3.2}
 {"tipo": "servido", "fecha": "2026-09-22", "servicio": "almuerzo", "mesa": "T2", "mozo": "Sofía", "plato": "Donas glaseadas"}
-{"tipo": "plato_lleno", "fecha": "2026-09-22", "servicio": "almuerzo", "mesa": "T2", "mozo": "Sofía", "plato": "Donas glaseadas", "respuesta": "Pidió otro postre", "segundos_respuesta": 37}
+{"tipo": "plato_lleno", "fecha": "2026-09-22", "servicio": "almuerzo", "mesa": "T2", "mozo": "Sofía", "plato": "Donas glaseadas", "respuesta": "Comanda equivocada", "segundos_respuesta": 37}
 {"tipo": "mesa_terminada", "fecha": "2026-09-22", "servicio": "almuerzo", "mesa": "T2", "mozo": "Sofía", "minutos_hasta_atender": 2.6}
 {"tipo": "servido", "fecha": "2026-09-22", "servicio": "almuerzo", "mesa": "T2", "mozo": "Sofía", "plato": "Cookies con chips de chocolate"}
 {"tipo": "servido", "fecha": "2026-09-22", "servicio": "almuerzo", "mesa": "T2", "mozo": "Sofía", "plato": "Lomo con papas"}
@@ -544,7 +544,7 @@
 {"tipo": "servido", "fecha": "2026-09-22", "servicio": "cena", "mesa": "T2", "mozo": "Sofía", "plato": "Risotto de hongos"}
 {"tipo": "mesa_terminada", "fecha": "2026-09-22", "servicio": "cena", "mesa": "T2", "mozo": "Sofía", "minutos_hasta_atender": 1.9}
 {"tipo": "servido", "fecha": "2026-09-22", "servicio": "cena", "mesa": "T2", "mozo": "Sofía", "plato": "Cookies con chips de chocolate"}
-{"tipo": "plato_lleno", "fecha": "2026-09-22", "servicio": "cena", "mesa": "T2", "mozo": "Sofía", "plato": "Cookies con chips de chocolate", "respuesta": "Pidió otro postre", "segundos_respuesta": 39}
+{"tipo": "plato_lleno", "fecha": "2026-09-22", "servicio": "cena", "mesa": "T2", "mozo": "Sofía", "plato": "Cookies con chips de chocolate", "respuesta": "Comanda equivocada", "segundos_respuesta": 39}
 {"tipo": "mesa_terminada", "fecha": "2026-09-22", "servicio": "cena", "mesa": "T2", "mozo": "Sofía", "minutos_hasta_atender": 1.7}
 {"tipo": "servido", "fecha": "2026-09-22", "servicio": "cena", "mesa": "T2", "mozo": "Sofía", "plato": "Flan con dulce de leche"}
 {"tipo": "servido", "fecha": "2026-09-22", "servicio": "cena", "mesa": "T2", "mozo": "Sofía", "plato": "Sorrentinos con fileto"}
@@ -798,7 +798,7 @@
 {"tipo": "servido", "fecha": "2026-09-24", "servicio": "cena", "mesa": "T4", "mozo": "Lucía", "plato": "Flan con dulce de leche"}
 {"tipo": "mesa_terminada", "fecha": "2026-09-24", "servicio": "cena", "mesa": "T4", "mozo": "Lucía", "minutos_hasta_atender": 4.1}
 {"tipo": "servido", "fecha": "2026-09-24", "servicio": "cena", "mesa": "T4", "mozo": "Lucía", "plato": "Cookies con chips de chocolate"}
-{"tipo": "plato_lleno", "fecha": "2026-09-24", "servicio": "cena", "mesa": "T4", "mozo": "Lucía", "plato": "Cookies con chips de chocolate", "respuesta": "Pidió otro postre", "segundos_respuesta": 44}
+{"tipo": "plato_lleno", "fecha": "2026-09-24", "servicio": "cena", "mesa": "T4", "mozo": "Lucía", "plato": "Cookies con chips de chocolate", "respuesta": "Comanda equivocada", "segundos_respuesta": 44}
 {"tipo": "servido", "fecha": "2026-09-24", "servicio": "cena", "mesa": "T4", "mozo": "Lucía", "plato": "Ensalada César"}
 {"tipo": "mesa_terminada", "fecha": "2026-09-24", "servicio": "cena", "mesa": "T4", "mozo": "Lucía", "minutos_hasta_atender": 4.0}
 {"tipo": "servido", "fecha": "2026-09-24", "servicio": "cena", "mesa": "T4", "mozo": "Lucía", "plato": "Risotto de hongos"}
@@ -1341,7 +1341,7 @@
 {"tipo": "servido", "fecha": "2026-09-29", "servicio": "cena", "mesa": "T3", "mozo": "Martín", "plato": "Flan con dulce de leche"}
 {"tipo": "mesa_terminada", "fecha": "2026-09-29", "servicio": "cena", "mesa": "T3", "mozo": "Martín", "minutos_hasta_atender": 6.0}
 {"tipo": "servido", "fecha": "2026-09-29", "servicio": "cena", "mesa": "T3", "mozo": "Martín", "plato": "Cookies con chips de chocolate"}
-{"tipo": "plato_lleno", "fecha": "2026-09-29", "servicio": "cena", "mesa": "T3", "mozo": "Martín", "plato": "Cookies con chips de chocolate", "respuesta": "Pidió otro postre", "segundos_respuesta": 128}
+{"tipo": "plato_lleno", "fecha": "2026-09-29", "servicio": "cena", "mesa": "T3", "mozo": "Martín", "plato": "Cookies con chips de chocolate", "respuesta": "Comanda equivocada", "segundos_respuesta": 128}
 {"tipo": "mesa_terminada", "fecha": "2026-09-29", "servicio": "cena", "mesa": "T3", "mozo": "Martín", "minutos_hasta_atender": 7.0}
 {"tipo": "servido", "fecha": "2026-09-29", "servicio": "cena", "mesa": "T3", "mozo": "Martín", "plato": "Ensalada César"}
 {"tipo": "servido", "fecha": "2026-09-29", "servicio": "cena", "mesa": "T3", "mozo": "Martín", "plato": "Flan con dulce de leche"}
@@ -1379,7 +1379,7 @@
 {"tipo": "servido", "fecha": "2026-09-30", "servicio": "almuerzo", "mesa": "T2", "mozo": "Sofía", "plato": "Milanesa napolitana"}
 {"tipo": "mesa_terminada", "fecha": "2026-09-30", "servicio": "almuerzo", "mesa": "T2", "mozo": "Sofía", "minutos_hasta_atender": 3.7}
 {"tipo": "servido", "fecha": "2026-09-30", "servicio": "almuerzo", "mesa": "T2", "mozo": "Sofía", "plato": "Donas glaseadas"}
-{"tipo": "plato_lleno", "fecha": "2026-09-30", "servicio": "almuerzo", "mesa": "T2", "mozo": "Sofía", "plato": "Donas glaseadas", "respuesta": "Pidió otro postre", "segundos_respuesta": 35}
+{"tipo": "plato_lleno", "fecha": "2026-09-30", "servicio": "almuerzo", "mesa": "T2", "mozo": "Sofía", "plato": "Donas glaseadas", "respuesta": "Comanda equivocada", "segundos_respuesta": 35}
 {"tipo": "servido", "fecha": "2026-09-30", "servicio": "almuerzo", "mesa": "T2", "mozo": "Sofía", "plato": "Risotto de hongos"}
 {"tipo": "plato_lleno", "fecha": "2026-09-30", "servicio": "almuerzo", "mesa": "T2", "mozo": "Sofía", "plato": "Risotto de hongos", "respuesta": "Muy salado", "segundos_respuesta": 29}
 {"tipo": "mesa_terminada", "fecha": "2026-09-30", "servicio": "almuerzo", "mesa": "T2", "mozo": "Sofía", "minutos_hasta_atender": 2.6}
@@ -2053,7 +2053,7 @@
 {"tipo": "mesa_terminada", "fecha": "2026-10-05", "servicio": "cena", "mesa": "T4", "mozo": "Lucía", "minutos_hasta_atender": 6.6}
 {"tipo": "servido", "fecha": "2026-10-05", "servicio": "cena", "mesa": "T4", "mozo": "Lucía", "plato": "Cookies con chips de chocolate"}
 {"tipo": "servido", "fecha": "2026-10-05", "servicio": "cena", "mesa": "T4", "mozo": "Lucía", "plato": "Flan con dulce de leche"}
-{"tipo": "plato_lleno", "fecha": "2026-10-05", "servicio": "cena", "mesa": "T4", "mozo": "Lucía", "plato": "Flan con dulce de leche", "respuesta": "Pidió otro postre", "segundos_respuesta": 41}
+{"tipo": "plato_lleno", "fecha": "2026-10-05", "servicio": "cena", "mesa": "T4", "mozo": "Lucía", "plato": "Flan con dulce de leche", "respuesta": "Comanda equivocada", "segundos_respuesta": 41}
 {"tipo": "servido", "fecha": "2026-10-05", "servicio": "cena", "mesa": "T4", "mozo": "Lucía", "plato": "Lomo con papas"}
 {"tipo": "mesa_terminada", "fecha": "2026-10-05", "servicio": "cena", "mesa": "T4", "mozo": "Lucía", "minutos_hasta_atender": 3.4}
 {"tipo": "servido", "fecha": "2026-10-05", "servicio": "cena", "mesa": "T4", "mozo": "Lucía", "plato": "Lomo con papas"}

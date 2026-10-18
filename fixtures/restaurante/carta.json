@@ -3,11 +3,11 @@
   "platos": {
     "cookies": {
       "nombre": "Cookies con chips de chocolate",
-      "respuestas": ["Está todo bien, come despacio", "No le gustaron", "Están duras", "Pidió otro postre"]
+      "respuestas": ["Está todo bien, come despacio", "No le gustaron", "Están duras", "Comanda equivocada"]
     },
     "donas": {
       "nombre": "Donas glaseadas",
-      "respuestas": ["Está todo bien, las va a llevar", "No le gustaron", "Muy dulces", "Pidió otro postre"]
+      "respuestas": ["Está todo bien, las va a llevar", "No le gustaron", "Muy dulces", "Comanda equivocada"]
     },
     "lomo": {
       "nombre": "Lomo con papas",
@@ -31,7 +31,7 @@
     },
     "flan": {
       "nombre": "Flan con dulce de leche",
-      "respuestas": ["Está todo bien", "No le gustó", "Muy dulce", "Pidió otro postre"]
+      "respuestas": ["Está todo bien", "No le gustó", "Muy dulce", "Comanda equivocada"]
     }
   }
 }
