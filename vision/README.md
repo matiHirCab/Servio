@@ -26,7 +26,7 @@ Con [DroidCam](https://www.dev47apps.com/) (Android y iPhone) el celular sirve d
 3. `python main.py --source http://<IP>:4747/video --classifier hybrid --demo --interval 10`
 
 - Dejá la app en primer plano, el celular enchufado y sin ahorro de batería para DroidCam.
-- La cámara se lee en un hilo aparte (si no, DroidCam corta la conexión mientras Claude clasifica) y, si se corta, se reconecta sola durante 60 s.
+- La cámara se lee en un hilo aparte (si no, DroidCam corta la conexión mientras Claude clasifica) y, si se corta, se reconecta sola: se da por vencida si pasan 60 s sin un frame bueno. Una lectura por red que se cuelga (celular sin Wi-Fi) corta a los 5 s.
 - Para una sola mesa alcanza con un `config/zones.json` que ocupe todo el cuadro; las zonas se escalan si cambia la resolución.
 
 ## Tests
