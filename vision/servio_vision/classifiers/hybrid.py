@@ -54,6 +54,9 @@ LOST_MAX_IOU = 0.3
 # Lecturas seguidas que se sigue recordando un plato perdido que Claude ve. Con un tope:
 # si Claude se equivoca con el hueco, el plato fantasma no queda para siempre.
 LOST_KEEP_MAX = 10
+# Un plato que YOLO deja de ver y cuya última lectura de Claude era menos que esto
+# (vacío o restos) no se le manda a Claude: se da por retirado.
+LOST_EMPTY_FILL = 0.3
 # Referencia: el recorte de un plato recién servido, que va a Claude junto al actual para
 # que mida contra lo que se sirvió. Se toma solo en las primeras lecturas visibles del plato
 # y si Claude lo ve lleno: un id nuevo a mitad de comida (p. ej., tras perder el plato) no
@@ -152,6 +155,9 @@ class HybridClassifier:
             FoundPlate(pid, bbox, None)
             for pid, bbox in self.ids.missing(table_id)
             if all(bbox_iou(bbox, p.bbox) <= LOST_MAX_IOU for p in plates)
+            # vacío o con restos y YOLO ya no lo ve: lo retiraron. Si se le pregunta
+            # a Claude, lee el hueco como "plato vacío" y queda un fantasma.
+            and self.last_fill.get((table_id, pid), 1.0) >= LOST_EMPTY_FILL
         ]
         everything = plates + lost
         return Prepared(
