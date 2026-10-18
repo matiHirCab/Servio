@@ -111,6 +111,7 @@ python -m servio_vision.classifiers.claude_plates mesa.jpg plato1.jpg plato2.jpg
 ```
 
 - `CLAUDE_PROVIDER=cli` (por defecto), `anthropic` (necesita `ANTHROPIC_API_KEY` y `pip install anthropic`) u `openai` (Decisions API de OpenAI, modelo `gpt-6-luna` o el de `OPENAI_MODEL`, timeout de 14 s o el de `OPENAI_TIMEOUT_S`; necesita `OPENAI_API_KEY` y `pip install "openai>=3.26.0"`). Con `openai` no hay JSON libre: se hacen preguntas tipadas por plato (`prompt.decision_questions`) y se arma el mismo `PlatesReport`.
+- **Prompts:** están en `vision/prompts/` (`claude.txt` para Claude, `openai.json` para la Decisions API: instrucciones, preguntas con `{i}` = número de plato y los 5 niveles de comida). Para probar otro sin pisar el default, poné la ruta en `CLAUDE_PROMPT_FILE` / `OPENAI_PROMPT_FILE` del `.env`. Se leen en cada lectura y se validan al arrancar.
 - En Windows llama a `claude.exe` directo; si no está en el PATH, poner la ruta en `CLAUDE_CLI`.
 - Primera prueba (8 platos, video de IA): 6–8 s por mesa con `haiku`.
 

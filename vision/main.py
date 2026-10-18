@@ -27,7 +27,7 @@ from pathlib import Path
 import numpy as np
 from dotenv import load_dotenv
 
-from servio_vision import alerts
+from servio_vision import alerts, prompt
 from servio_vision.alerts.config import DEFAULT_INTERVAL, AlertConfig, load_config
 from servio_vision.alerts.models import TableObservation
 from servio_vision.capture import open_source
@@ -440,6 +440,15 @@ def build_pipeline(args: argparse.Namespace) -> Pipeline | None:
         config.reminder,
     )
 
+    if args.classifier in ("claude", "hybrid"):
+        # un prompt del .env roto se avisa ahora, no en cada lectura
+        provider = os.environ.get("CLAUDE_PROVIDER") or "cli"
+        try:
+            prompt.check(provider)
+        except prompt.PromptError as e:
+            logger.error("%s", e)
+            return None
+        logger.info("IA: %s · prompt %s", provider, prompt.prompt_file(provider))
     classifier = get_classifier(args.classifier, **classifier_kwargs(args))
     restaurant = load_restaurant(args.restaurante)
     finished_after = finished_after_seconds(args, demo_enabled(args.demo))

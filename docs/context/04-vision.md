@@ -21,7 +21,7 @@ Por cada llamada a `classify(recorte_mesa, table_id, items_anteriores)`:
 
 ### Prompt de Claude (iterar con el video)
 
-El texto vigente está en `vision/servio_vision/prompt.py` (`SYSTEM_PROMPT`). En resumen, por plato:
+El texto vigente está en `vision/prompts/claude.txt` (Claude) y `vision/prompts/openai.json` (Decisions API de OpenAI, `CLAUDE_PROVIDER=openai`); `CLAUDE_PROMPT_FILE` / `OPENAI_PROMPT_FILE` del `.env` apuntan a otro archivo sin tocar el default. En resumen, por plato:
 
 - `fill_ratio`: fracción de la porción servida que queda, de 0 (vacío o restos) a 1 (intacto). Con referencia, la referencia vale 1 y se cuentan las piezas.
 - `confidence`: de 0 a 1.

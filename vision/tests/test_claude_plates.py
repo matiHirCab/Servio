@@ -7,6 +7,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from servio_vision import prompt
 from servio_vision.classifiers import claude_plates
 from servio_vision.classifiers.claude_plates import ClaudeCallError, estimate_plates
 
@@ -154,7 +155,7 @@ def test_cli_reads_structured_output(monkeypatch):
     def fake_run(args, **kwargs):
         assert "--json-schema" in args
         content = json.loads(kwargs["input"])["message"]["content"]
-        assert content[0]["text"] == claude_plates.prompt.SYSTEM_PROMPT
+        assert content[0]["text"] == claude_plates.prompt.system_prompt()
         assert content[1:] == REQUEST.content
         return subprocess.CompletedProcess(args, 0, stdout=stdout, stderr="")
 
@@ -327,7 +328,7 @@ def test_openai_sends_images_as_data_urls(openai_api):
     openai_api.responses.append(_decisions(1))
     estimate_plates(b"mesa", [b"p1"], "T1")
     parts = openai_api.requests[0]["input"][0]["content"]
-    assert parts[0]["text"] == claude_plates.prompt.INSTRUCTIONS
+    assert parts[0]["text"] == claude_plates.prompt.openai_instructions()
     # con preguntas tipadas no se pide JSON en ningún lado
     assert not any("JSON" in p.get("text", "") for p in parts)
     images = [p["image_url"] for p in parts if p["type"] == "input_image"]
@@ -422,7 +423,7 @@ def test_fill_levels_land_in_their_state():
     from servio_vision.schemas import state_from_fill_ratio
 
     prompt = claude_plates.prompt
-    assert len(prompt.FILL_RATIOS) == len(prompt.FILL_LEVELS)
+    assert len(prompt.FILL_RATIOS) == len(prompt.fill_levels())
     states = [state_from_fill_ratio(r) for r in prompt.FILL_RATIOS]
     assert states == ["vacio", "por_terminar", "comiendo", "comiendo", "lleno"]
 
@@ -503,3 +504,32 @@ def test_openai_has_its_own_timeout(openai_api, monkeypatch):
     openai_api.responses.append(_decisions(1))
     estimate_plates(JPEG, [JPEG], "T1")
     assert openai_api.client_kwargs["timeout"] == 30.0
+
+
+# --- prompts configurables (vision/prompts/, CLAUDE_PROMPT_FILE / OPENAI_PROMPT_FILE) ---
+
+
+def test_prompt_files_can_be_swapped_from_env(tmp_path, monkeypatch):
+    custom = tmp_path / "mio.txt"
+    custom.write_text("Contá las donas.\n", encoding="utf-8")
+    monkeypatch.setenv("CLAUDE_PROMPT_FILE", str(custom))
+    assert prompt.instructions() == "Contá las donas."
+    assert prompt.system_prompt().startswith("Contá las donas.\nRespondé solo con")
+    monkeypatch.delenv("CLAUDE_PROMPT_FILE")
+    assert prompt.instructions().startswith("Sos el sistema de visión")
+
+
+def test_openai_prompt_uses_the_plate_number_and_is_validated(tmp_path, monkeypatch):
+    questions = prompt.decision_questions([True])
+    assert questions[0]["instructions"].startswith("Plato 1:")
+    assert [q["name"] for q in questions] == [
+        "fill_1",
+        "visible_1",
+        "same_plate_1",
+        "people_present",
+    ]
+    broken = tmp_path / "roto.json"
+    broken.write_text('{"instructions": "x", "questions": {}, "levels": []}', "utf-8")
+    monkeypatch.setenv("OPENAI_PROMPT_FILE", str(broken))
+    with pytest.raises(prompt.PromptError):
+        prompt.check("openai")

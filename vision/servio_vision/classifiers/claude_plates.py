@@ -186,7 +186,7 @@ def _call_cli(
     un `.cmd`, los argumentos de varias líneas o con comillas llegan rotos.
     """
     exe = _find_cli()
-    instructions = ANTHROPIC_FORMAT.text(prompt.SYSTEM_PROMPT)
+    instructions = ANTHROPIC_FORMAT.text(prompt.system_prompt())
     message = {
         "type": "user",
         "message": {"role": "user", "content": [instructions, *request.content]},
@@ -271,7 +271,7 @@ def _call_anthropic(
         resp = client.messages.create(
             model=model,
             max_tokens=2048,
-            system=prompt.SYSTEM_PROMPT,
+            system=prompt.system_prompt(),
             messages=[{"role": "user", "content": request.content}],
             output_config={
                 "format": {
@@ -296,10 +296,14 @@ def _call_anthropic(
     }
 
 
-FILL_RATIO_BY_LABEL = {
-    level["label"]: ratio
-    for level, ratio in zip(prompt.FILL_LEVELS, prompt.FILL_RATIOS)
-}
+def _ratio_by_label() -> dict[str, float]:
+    """label de cada nivel (de openai.json) → su fill_ratio."""
+    return {
+        level["label"]: ratio
+        for level, ratio in zip(prompt.fill_levels(), prompt.FILL_RATIOS)
+    }
+
+
 # Las probabilities de un score tienen que sumar ~1; si no, la lista vino incompleta.
 PROBABILITIES_SUM_TOLERANCE = 0.05
 
@@ -325,7 +329,8 @@ def _fill_ratio(answer, name: str) -> float:
     está equiespaciado: 50% vacío y 50% intacto da 0.5. Si no vienen, o vienen
     incompletas, se interpola `score` (promedio de los índices de nivel ponderado por
     probabilidad, desde 0). Una entrada mal formada es `ClaudeCallError`, como el resto."""
-    top = len(prompt.FILL_LEVELS) - 1
+    top = len(prompt.FILL_RATIOS) - 1
+    ratio_by_label = _ratio_by_label()
     # fuera de 0..top es otra escala y no se recorta: mejor caer a YOLO que avisar mal
     score = _number(_get(answer, "score"), f"{name}.score", 0, top)
     probabilities = _get(answer, "probabilities")
@@ -337,11 +342,11 @@ def _fill_ratio(answer, name: str) -> float:
         total = expected = 0.0
         for entry in probabilities:
             label = _get(entry, "label")
-            if label not in FILL_RATIO_BY_LABEL:
+            if label not in ratio_by_label:
                 raise ClaudeCallError(f"{name}: nivel desconocido {label!r}")
             p = _number(_get(entry, "probability"), f"{name}.{label}", 0, 1)
             total += p
-            expected += p * FILL_RATIO_BY_LABEL[label]
+            expected += p * ratio_by_label[label]
         if abs(total - 1) <= PROBABILITIES_SUM_TOLERANCE:
             return expected / total
         logger.warning("%s: las probabilities suman %.2f, uso el score", name, total)
@@ -415,7 +420,7 @@ def _call_openai(
             'falta el paquete openai: pip install "openai>=3.26.0"'
         ) from e
 
-    parts = [OPENAI_FORMAT.text(prompt.INSTRUCTIONS), *request.content]
+    parts = [OPENAI_FORMAT.text(prompt.openai_instructions()), *request.content]
     # las preguntas same_plate_i solo van para los platos con referencia
     questions = prompt.decision_questions(request.has_reference)
     client = openai.OpenAI(timeout=timeout_s, max_retries=0)
