@@ -3,7 +3,7 @@
 Base en docs/context/04-vision.md («Prompt de Claude»). Iterar acá con el video.
 """
 
-SYSTEM_PROMPT = """\
+INSTRUCTIONS = """\
 Sos el sistema de visión de un restaurante. La primera imagen es una vista desde arriba de una mesa.
 Las siguientes son recortes de cada plato de esa mesa, numerados desde 1 en el mismo orden.
 Algunos platos traen antes una referencia: ese mismo plato recién servido, intacto.
@@ -25,8 +25,13 @@ Para cada plato estimá:
   lo que se ve. Un plato con los cubiertos apoyados y sin comida a la vista está vacío (0).
 - same_plate: si el plato trae referencia, false cuando la referencia muestra otra comida
   que la de ahora (entonces ignorá la referencia y estimá sin ella). Sin referencia, true.
-Indicá también si hay personas sentadas en la mesa (people_present).
-Respondé solo con el JSON pedido, un elemento por plato."""
+Indicá también si hay personas sentadas en la mesa (people_present)."""
+
+# cli y anthropic piden un JSON libre; la Decisions API (openai) usa INSTRUCTIONS solas
+# porque responde preguntas tipadas.
+SYSTEM_PROMPT = (
+    INSTRUCTIONS + "\nRespondé solo con el JSON pedido, un elemento por plato."
+)
 
 # Esquema JSON de la respuesta (report_plates). Lo usan los dos proveedores.
 REPORT_PLATES_SCHEMA: dict = {
@@ -58,6 +63,77 @@ REPORT_PLATES_SCHEMA: dict = {
     "required": ["plates", "people_present"],
     "additionalProperties": False,
 }
+
+
+# Decisions API de OpenAI (CLAUDE_PROVIDER=openai): en vez de un JSON libre, una
+# pregunta tipada por dato. Los niveles de fill van de menos a más (la API los numera
+# desde 0) y se describen con las palabras de la guía de INSTRUCTIONS, sin números: los
+# rangos de la guía no coinciden con los umbrales de estado de schemas.py.
+FILL_LEVELS: list[dict] = [
+    {"label": "vacío", "description": "Vacío o solo restos mínimos."},
+    {"label": "restos", "description": "Quedan restos: se comió casi todo."},
+    {"label": "mitad", "description": "Se comió bastante: queda cerca de la mitad."},
+    {"label": "parte", "description": "Se comió una parte, pero queda la mayoría."},
+    {
+        "label": "intacto",
+        "description": "Recién servido: sin señales de que se comió, o igual a la referencia.",
+    },
+]
+# fill_ratio de cada nivel (mismo orden), uno por estado de schemas.py: vacio,
+# por_terminar, comiendo, comiendo, lleno. Va aparte porque a la API solo le llegan
+# label y description.
+FILL_RATIOS: list[float] = [0.0, 0.15, 0.45, 0.65, 1.0]
+
+
+def decision_questions(has_reference: list[bool]) -> list[dict]:
+    """Preguntas para la Decisions API: por plato fill, visible y (con referencia)
+    same_plate; más people_present para la mesa."""
+    questions: list[dict] = []
+    for i, ref in enumerate(has_reference, start=1):
+        questions.append(
+            {
+                "type": "score",
+                "name": f"fill_{i}",
+                "instructions": (
+                    f"Plato {i}: ¿qué fracción de la porción servida queda? "
+                    "Elegí el nivel que mejor describe cuánto queda, con los criterios de "
+                    "fill_ratio de las instrucciones (referencia, contar piezas, señales "
+                    "de que se comió). Si la referencia muestra otra comida que la de "
+                    "ahora, ignorala y estimá sin ella."
+                ),
+                "levels": FILL_LEVELS,
+            }
+        )
+        questions.append(
+            {
+                "type": "predicate",
+                "name": f"visible_{i}",
+                "instructions": (
+                    f"Plato {i}: ¿se puede medir la comida? Falso solo si una mano, un brazo "
+                    "o un cubierto agarrado está encima de la comida o agarrando comida del "
+                    "plato. Cubiertos apoyados, una servilleta o una mano en el borde: verdadero."
+                ),
+            }
+        )
+        if ref:
+            questions.append(
+                {
+                    "type": "predicate",
+                    "name": f"same_plate_{i}",
+                    "instructions": (
+                        f"Plato {i}: ¿la referencia (recién servido) muestra la misma "
+                        "comida que el recorte de ahora?"
+                    ),
+                }
+            )
+    questions.append(
+        {
+            "type": "predicate",
+            "name": "people_present",
+            "instructions": "¿Hay personas sentadas en la mesa?",
+        }
+    )
+    return questions
 
 
 def table_caption(table_id: str) -> str:

@@ -8,10 +8,13 @@ Proveedor según `CLAUDE_PROVIDER`:
 - `cli` (por defecto): el Claude Code instalado y logueado (`claude -p`), con la
   suscripción del equipo. No necesita API key.
 - `anthropic`: la API de Anthropic con `ANTHROPIC_API_KEY` (respaldo; `pip install anthropic`).
+- `openai`: la Decisions API de OpenAI con `OPENAI_API_KEY` (`pip install "openai>=3.26.0"`).
+  En vez de un JSON libre hace preguntas tipadas por plato (ver `prompt.decision_questions`).
 
-Variables opcionales: `CLAUDE_MODEL` (por defecto `haiku` / `claude-haiku-5-5`),
-`CLAUDE_TIMEOUT_S` (por defecto 15 s con `cli`, 10 s con `anthropic`), `CLAUDE_CLI`
-(ruta a `claude.exe` si no está en el PATH).
+Variables opcionales: `CLAUDE_MODEL` (por defecto `haiku` / `claude-haiku-5-5`), `CLAUDE_TIMEOUT_S`
+(por defecto 15 s con `cli`, 10 s con `anthropic`), `CLAUDE_CLI` (ruta a `claude.exe` si no está en
+el PATH). Con `openai`: `OPENAI_MODEL` (por defecto `gpt-6-luna`) y `OPENAI_TIMEOUT_S` (por defecto
+14 s); van aparte para que un valor pensado para Claude no termine en OpenAI.
 
 Prueba rápida: `python -m servio_vision.classifiers.claude_plates mesa.jpg plato1.jpg plato2.jpg`
 """
@@ -19,12 +22,15 @@ Prueba rápida: `python -m servio_vision.classifiers.claude_plates mesa.jpg plat
 import base64
 import json
 import logging
+import math
 import os
 import shutil
 import subprocess
 import sys
 import tempfile
 import time
+from collections.abc import Callable
+from dataclasses import dataclass
 from pathlib import Path
 
 from pydantic import BaseModel, Field, ValidationError
@@ -33,9 +39,26 @@ from servio_vision import prompt
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_MODELS = {"cli": "haiku", "anthropic": "claude-haiku-5-5"}
+DEFAULT_MODELS = {
+    "cli": "haiku",
+    "anthropic": "claude-haiku-5-5",
+    "openai": "gpt-6-luna",
+}
+MODEL_ENV = {
+    "cli": "CLAUDE_MODEL",
+    "anthropic": "CLAUDE_MODEL",
+    "openai": "OPENAI_MODEL",
+}
 # `claude -p` tarda ~6-8 s con 8 platos (arranque del CLI incluido).
-DEFAULT_TIMEOUTS = {"cli": 15.0, "anthropic": 10.0}
+# openai: unas 25 preguntas tipadas y ~17 imágenes en una mesa de 8 platos con referencias.
+# Con el reintento, el peor caso es 2 × timeout + RETRY_WAIT_S: 14 s deja 30 s, el
+# --interval por defecto, para no atrasar la lectura siguiente.
+DEFAULT_TIMEOUTS = {"cli": 15.0, "anthropic": 10.0, "openai": 14.0}
+TIMEOUT_ENV = {
+    "cli": "CLAUDE_TIMEOUT_S",
+    "anthropic": "CLAUDE_TIMEOUT_S",
+    "openai": "OPENAI_TIMEOUT_S",
+}
 RETRY_WAIT_S = 2.0
 ATTEMPTS = 2  # un intento + un reintento
 
@@ -57,12 +80,46 @@ class ClaudeCallError(RuntimeError):
     """La llamada a Claude falló o devolvió algo que no se pudo leer."""
 
 
-def _image_block(jpeg: bytes) -> dict:
-    data = base64.standard_b64encode(jpeg).decode()
-    return {
+@dataclass(frozen=True)
+class PlatesRequest:
+    """Lo que se manda por una mesa: el contenido ya armado y, por plato, si lleva
+    referencia (la Decisions API pregunta same_plate solo para esos)."""
+
+    content: list
+    has_reference: list[bool]
+
+
+@dataclass(frozen=True)
+class _Format:
+    """Cómo arma los bloques cada API."""
+
+    text: Callable[[str], dict]
+    image: Callable[[str], dict]  # recibe la imagen en base64
+    closing: bool  # agrega el cierre que pide el JSON
+
+
+ANTHROPIC_FORMAT = _Format(
+    text=lambda text: {"type": "text", "text": text},
+    image=lambda data: {
         "type": "image",
         "source": {"type": "base64", "media_type": "image/jpeg", "data": data},
-    }
+    },
+    closing=True,
+)
+# La Decisions API responde preguntas tipadas: sin el cierre que pide JSON.
+OPENAI_FORMAT = _Format(
+    text=lambda text: {"type": "input_text", "text": text},
+    image=lambda data: {
+        "type": "input_image",
+        "image_url": f"data:image/jpeg;base64,{data}",
+    },
+    closing=False,
+)
+_FORMATS = {
+    "cli": ANTHROPIC_FORMAT,
+    "anthropic": ANTHROPIC_FORMAT,
+    "openai": OPENAI_FORMAT,
+}
 
 
 def build_content(
@@ -70,25 +127,28 @@ def build_content(
     plate_jpegs: list[bytes],
     table_id: str,
     references: list[bytes | None] | None = None,
+    fmt: _Format = ANTHROPIC_FORMAT,
 ) -> list:
-    """Bloques del mensaje (texto + imágenes), iguales para los dos proveedores.
+    """Bloques del mensaje (texto + imágenes) en el formato `fmt`.
 
     `references[i]`, si está, es el plato i recién servido y va antes del recorte actual."""
-    content: list[dict] = [
-        {"type": "text", "text": prompt.table_caption(table_id)},
-        _image_block(table_jpeg),
-    ]
+
+    def image(jpeg: bytes) -> dict:
+        return fmt.image(base64.standard_b64encode(jpeg).decode())
+
+    content: list[dict] = [fmt.text(prompt.table_caption(table_id)), image(table_jpeg)]
     references = references or [None] * len(plate_jpegs)
     # strict: un plato sin su lugar en `references` no se manda en silencio
     for i, (jpeg, ref) in enumerate(zip(plate_jpegs, references, strict=True), start=1):
         if ref is None:
-            content.append({"type": "text", "text": prompt.plate_caption(i)})
+            content.append(fmt.text(prompt.plate_caption(i)))
         else:
-            content.append({"type": "text", "text": prompt.reference_caption(i)})
-            content.append(_image_block(ref))
-            content.append({"type": "text", "text": prompt.current_caption(i)})
-        content.append(_image_block(jpeg))
-    content.append({"type": "text", "text": prompt.closing_text(len(plate_jpegs))})
+            content.append(fmt.text(prompt.reference_caption(i)))
+            content.append(image(ref))
+            content.append(fmt.text(prompt.current_caption(i)))
+        content.append(image(jpeg))
+    if fmt.closing:
+        content.append(fmt.text(prompt.closing_text(len(plate_jpegs))))
     return content
 
 
@@ -117,17 +177,19 @@ def json_from_text(text: str) -> dict:
     raise ClaudeCallError(f"claude -p no devolvió JSON: {text[:300]!r}")
 
 
-def _call_cli(content: list, model: str, timeout_s: float) -> tuple[dict, dict]:
+def _call_cli(
+    request: PlatesRequest, model: str, timeout_s: float
+) -> tuple[dict, dict]:
     """`claude -p` con las imágenes por stdin (stream-json).
 
     El prompt va dentro del mensaje y no como argumento: en Windows, si `claude` es
     un `.cmd`, los argumentos de varias líneas o con comillas llegan rotos.
     """
     exe = _find_cli()
-    instructions = {"type": "text", "text": prompt.SYSTEM_PROMPT}
+    instructions = ANTHROPIC_FORMAT.text(prompt.SYSTEM_PROMPT)
     message = {
         "type": "user",
-        "message": {"role": "user", "content": [instructions, *content]},
+        "message": {"role": "user", "content": [instructions, *request.content]},
     }
     args = [
         exe,
@@ -193,9 +255,16 @@ def _call_cli(content: list, model: str, timeout_s: float) -> tuple[dict, dict]:
     }
 
 
-def _call_anthropic(content: list, model: str, timeout_s: float) -> tuple[dict, dict]:
+def _call_anthropic(
+    request: PlatesRequest, model: str, timeout_s: float
+) -> tuple[dict, dict]:
     """API de Anthropic con salida estructurada (`output_config.format`)."""
-    import anthropic
+    try:
+        import anthropic
+    except ImportError as e:
+        raise ClaudeCallError(
+            "falta el paquete anthropic: pip install anthropic"
+        ) from e
 
     client = anthropic.Anthropic(timeout=timeout_s, max_retries=0)
     try:
@@ -203,7 +272,7 @@ def _call_anthropic(content: list, model: str, timeout_s: float) -> tuple[dict, 
             model=model,
             max_tokens=2048,
             system=prompt.SYSTEM_PROMPT,
-            messages=[{"role": "user", "content": content}],
+            messages=[{"role": "user", "content": request.content}],
             output_config={
                 "format": {
                     "type": "json_schema",
@@ -227,7 +296,149 @@ def _call_anthropic(content: list, model: str, timeout_s: float) -> tuple[dict, 
     }
 
 
-_BACKENDS = {"cli": _call_cli, "anthropic": _call_anthropic}
+FILL_RATIO_BY_LABEL = {
+    level["label"]: ratio
+    for level, ratio in zip(prompt.FILL_LEVELS, prompt.FILL_RATIOS)
+}
+# Las probabilities de un score tienen que sumar ~1; si no, la lista vino incompleta.
+PROBABILITIES_SUM_TOLERANCE = 0.05
+
+
+def _get(obj, field: str):
+    """Campo de un objeto del SDK o de un dict."""
+    return obj.get(field) if isinstance(obj, dict) else getattr(obj, field, None)
+
+
+def _number(value, what: str, low: float, high: float) -> float:
+    """Valida un número de la respuesta: finito y dentro de [low, high]."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ClaudeCallError(f"{what} no es un número: {value!r}")
+    if not math.isfinite(value) or not low <= value <= high:
+        raise ClaudeCallError(f"{what} fuera de {low}..{high}: {value!r}")
+    return float(value)
+
+
+def _fill_ratio(answer, name: str) -> float:
+    """Respuesta de score → fill_ratio.
+
+    Con `probabilities` (una por nivel) es el valor esperado sobre `FILL_RATIOS`, que no
+    está equiespaciado: 50% vacío y 50% intacto da 0.5. Si no vienen, o vienen
+    incompletas, se interpola `score` (promedio de los índices de nivel ponderado por
+    probabilidad, desde 0). Una entrada mal formada es `ClaudeCallError`, como el resto."""
+    top = len(prompt.FILL_LEVELS) - 1
+    # fuera de 0..top es otra escala y no se recorta: mejor caer a YOLO que avisar mal
+    score = _number(_get(answer, "score"), f"{name}.score", 0, top)
+    probabilities = _get(answer, "probabilities")
+    if probabilities is not None:
+        if not isinstance(probabilities, (list, tuple)):
+            raise ClaudeCallError(
+                f"{name}.probabilities no es una lista: {probabilities!r}"
+            )
+        total = expected = 0.0
+        for entry in probabilities:
+            label = _get(entry, "label")
+            if label not in FILL_RATIO_BY_LABEL:
+                raise ClaudeCallError(f"{name}: nivel desconocido {label!r}")
+            p = _number(_get(entry, "probability"), f"{name}.{label}", 0, 1)
+            total += p
+            expected += p * FILL_RATIO_BY_LABEL[label]
+        if abs(total - 1) <= PROBABILITIES_SUM_TOLERANCE:
+            return expected / total
+        logger.warning("%s: las probabilities suman %.2f, uso el score", name, total)
+    low = min(int(score), top - 1)
+    frac = score - low
+    return prompt.FILL_RATIOS[low] * (1 - frac) + prompt.FILL_RATIOS[low + 1] * frac
+
+
+def _answers_to_report(
+    answers: list, questions: list[dict], has_reference: list[bool]
+) -> dict:
+    """Respuestas tipadas → el mismo dict que devuelven los otros proveedores.
+
+    Cualquier respuesta con forma rara es `ClaudeCallError`, así se reintenta y, si
+    vuelve a fallar, la mesa usa lo de YOLO en vez de cortar el pipeline."""
+    expected = {q["name"] for q in questions}
+    by_name = {}
+    for answer in answers:
+        name = _get(answer, "name")
+        if _get(answer, "type") == "refusal":
+            raise ClaudeCallError(f"la Decisions API rechazó {name!r}")
+        if name not in expected:
+            raise ClaudeCallError(
+                f"la Decisions API respondió algo no pedido: {name!r}"
+            )
+        if name in by_name:
+            raise ClaudeCallError(f"la Decisions API respondió dos veces {name!r}")
+        by_name[name] = answer
+
+    def get(name: str):
+        if name not in by_name:
+            raise ClaudeCallError(f"la Decisions API no respondió {name!r}")
+        return by_name[name]
+
+    def yes(name: str) -> bool:
+        probability = _get(get(name), "probability")
+        return _number(probability, f"{name}.probability", 0, 1) >= 0.5
+
+    plates = []
+    for i, ref in enumerate(has_reference, start=1):
+        fill = get(f"fill_{i}")
+        plates.append(
+            {
+                "index": i,
+                "fill_ratio": _fill_ratio(fill, f"fill_{i}"),
+                # el rango lo valida _parse (pydantic)
+                "confidence": _number(
+                    _get(fill, "confidence"),
+                    f"fill_{i}.confidence",
+                    -math.inf,
+                    math.inf,
+                ),
+                "visible": yes(f"visible_{i}"),
+                "same_plate": yes(f"same_plate_{i}") if ref else True,
+            }
+        )
+    return {"plates": plates, "people_present": yes("people_present")}
+
+
+def _call_openai(
+    request: PlatesRequest, model: str, timeout_s: float
+) -> tuple[dict, dict]:
+    """Decisions API de OpenAI (`POST /v1/decisions`) con `OPENAI_API_KEY`.
+
+    El prompt va primero como texto (la API no tiene system prompt) y sin el pedido
+    de JSON: acá se responden preguntas tipadas."""
+    try:
+        import openai
+    except ImportError as e:
+        raise ClaudeCallError(
+            'falta el paquete openai: pip install "openai>=3.26.0"'
+        ) from e
+
+    parts = [OPENAI_FORMAT.text(prompt.INSTRUCTIONS), *request.content]
+    # las preguntas same_plate_i solo van para los platos con referencia
+    questions = prompt.decision_questions(request.has_reference)
+    client = openai.OpenAI(timeout=timeout_s, max_retries=0)
+    if not hasattr(client, "decisions"):
+        raise ClaudeCallError(
+            'el paquete openai es viejo para la Decisions API: pip install "openai>=3.26.0"'
+        )
+    try:
+        resp = client.decisions.create(
+            model=model,
+            input=[{"role": "user", "content": parts}],
+            questions=questions,
+        )
+    except openai.OpenAIError as e:
+        raise ClaudeCallError(f"Decisions API de OpenAI: {e}") from e
+    usage = getattr(resp, "usage", None)
+    answers = getattr(resp, "answers", None) or []
+    return _answers_to_report(answers, questions, request.has_reference), {
+        "input_tokens": getattr(usage, "input_tokens", None),
+    }
+
+
+_BACKENDS = {"cli": _call_cli, "anthropic": _call_anthropic, "openai": _call_openai}
 
 
 def _parse(data: dict, n_plates: int) -> PlatesReport:
@@ -261,17 +472,25 @@ def estimate_plates(
         raise ValueError(
             f"CLAUDE_PROVIDER desconocido: {provider!r}. Opciones: {sorted(_BACKENDS)}"
         )
-    model = model or os.environ.get("CLAUDE_MODEL") or DEFAULT_MODELS[provider]
+    model = model or os.environ.get(MODEL_ENV[provider]) or DEFAULT_MODELS[provider]
     if timeout_s is None:
         timeout_s = float(
-            os.environ.get("CLAUDE_TIMEOUT_S") or DEFAULT_TIMEOUTS[provider]
+            os.environ.get(TIMEOUT_ENV[provider]) or DEFAULT_TIMEOUTS[provider]
         )
-    content = build_content(table_jpeg, plate_jpegs, table_id, references)
+    # Una sola vez y fuera del loop: las imágenes no se recodifican en cada intento, y un
+    # `references` de otro largo es un bug del que llama (ValueError), no un fallo de Claude.
+    # `references` se normaliza acá y lo usan igual las imágenes y las preguntas.
+    references = references or [None] * len(plate_jpegs)
+    content = build_content(
+        table_jpeg, plate_jpegs, table_id, references, _FORMATS[provider]
+    )
+    request = PlatesRequest(content, [r is not None for r in references])
+    backend = _BACKENDS[provider]
 
     for attempt in range(1, ATTEMPTS + 1):
         start = time.monotonic()
         try:
-            data, usage = _BACKENDS[provider](content, model, timeout_s)
+            data, usage = backend(request, model, timeout_s)
             report = _parse(data, len(plate_jpegs))
         except (ClaudeCallError, ValidationError, ValueError) as e:
             logger.warning(

@@ -116,7 +116,7 @@ vision/
     resumen.py               # tabla de lo que pasó, si sobra tiempo (Jessica)
   tests/
   data/ models/ out/         # ignorados por git
-  requirements.txt           # opencv-python, pydantic, httpx (anthropic solo si CLAUDE_PROVIDER=anthropic)
+  requirements.txt           # opencv-python, pydantic, httpx (anthropic u openai solo si CLAUDE_PROVIDER lo pide)
   requirements-yolo.txt      # ultralytics
 ```
 
