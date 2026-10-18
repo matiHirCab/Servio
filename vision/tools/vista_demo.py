@@ -156,10 +156,10 @@ def draw_overlay(
         _label(
             view,
             zone.name,  # solo "Mesa 1": el estado se ve por el color
-            (x0 + 8, y0 + round(34 * scale)),
+            (x0 + 6, y0 + round(22 * scale)),
             color,
-            0.9 * scale,
-            2,
+            0.55 * scale,  # chico: no tapa la mesa
+            1,
         )
     if header:
         _label(view, header, (12, round(36 * scale)), (255, 255, 255), 0.8 * scale, 2)
