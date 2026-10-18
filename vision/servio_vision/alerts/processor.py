@@ -16,7 +16,7 @@ import json
 import logging
 import threading
 from collections.abc import Sequence
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -26,7 +26,12 @@ from servio_vision.alerts.engine import evaluate, table_name
 from servio_vision.alerts.feedback import FeedbackDesk, Question
 from servio_vision.alerts.models import Alert, TableObservation
 from servio_vision.alerts.notify import Notifier, resolved_text
-from servio_vision.alerts.state import TableState, empty_table, update_table
+from servio_vision.alerts.state import (
+    TableState,
+    empty_table,
+    table_status,
+    update_table,
+)
 from servio_vision.db import Database
 from servio_vision.restaurant import Restaurant
 
@@ -95,6 +100,9 @@ class AlertProcessor:
         # message_id → avisos de ese mensaje (en orden) y cuáles ya se cerraron.
         self._messages: dict[int, list[Alert]] = {}
         self._resolved_ids: set[str] = set()
+        # aviso de mesa terminada cerrado porque retiraron los platos → la línea
+        # que reemplaza al "ya resuelto" (quién y cuánto tardó)
+        self._close_notes: dict[str, str] = {}
 
     def _record_plates(self, table_id: str, table: TableState, ts: datetime) -> None:
         """Cada plato nuevo de la mesa, a la base (con el plato del pedido que es)."""
@@ -205,6 +213,7 @@ class AlertProcessor:
 
         # Primero se marcan todos los cerrados, así un mensaje se edita una sola vez.
         message_ids: list[int] = []
+        reasons = {a.id: self._close_reason(a, table, obs.ts) for a in result.resolved}
         for alert in result.resolved:
             del self.open_alerts[alert.id]
             message_id = alert.telegram_message_id
@@ -216,9 +225,12 @@ class AlertProcessor:
         for alert in result.resolved:
             # Sin mensaje (Telegram falló al abrir) no hubo nada que editar: text None.
             text = edited.get(alert.telegram_message_id)
-            log(_alert_event("alert_resolved", obs.ts, alert, text))
+            event = _alert_event("alert_resolved", obs.ts, alert, text)
+            if reasons[alert.id]:
+                event["close_reason"] = reasons[alert.id]
+            log(event)
             if self.db is not None:
-                self.db.alert_resolved(alert.id, obs.ts)
+                self.db.alert_resolved(alert.id, obs.ts, reasons[alert.id])
 
         return events
 
@@ -278,16 +290,41 @@ class AlertProcessor:
         name = table_name(table_id)
         return message.replace(name, f"{waiter} · {name}", 1)
 
+    def _close_reason(
+        self, alert: Alert, table: TableState, now: datetime
+    ) -> str | None:
+        """Por qué se cerró un aviso de mesa terminada: "retirados" (la mesa quedó
+        libre) o "servido" (llegó algo nuevo). Con retirados, deja la línea que va en
+        el mensaje: quién retiró y cuánto después de que terminó la mesa."""
+        if alert.type != "mesa_terminada":
+            return None
+        if table_status(p.state for p in table.active_plates()) != "libre":
+            return "servido"
+        waiter = self.restaurant.waiter(alert.table_id) if self.restaurant else None
+        who = f"{waiter} retiró" if waiter else "Retiraron"
+        took = _duration(now - alert.created_at)
+        self._close_notes[alert.id] = (
+            f"✅ {who} los platos {took} después de que terminó la mesa."
+        )
+        return "retirados"
+
     def _edit(self, message_id: int) -> str:
         """Reescribe un mensaje con sus avisos cerrados marcados; devuelve el texto."""
         alerts = self._messages[message_id]
         done = all(a.id in self._resolved_ids for a in alerts)
         resolved_ids = set(self._resolved_ids)
+        notes = [
+            self._close_notes.pop(a.id) for a in alerts if a.id in self._close_notes
+        ]
 
         def build(answers: str) -> str:
             # las respuestas del mozo quedan en el mensaje (antes del "ya resuelto")
+            text = "\n".join(a.message for a in alerts) + answers
+            if done and notes:
+                # mesa terminada y platos retirados: quién y cuánto tardó
+                return text + "\n\n" + "\n".join(notes)
             if done:
-                return resolved_text("\n".join(a.message for a in alerts) + answers)
+                return resolved_text(text)
             return _partial_text(alerts, resolved_ids) + answers
 
         if done:
@@ -299,6 +336,15 @@ class AlertProcessor:
         text = build("")
         self.notifier.edit(message_id, text)  # si falla, ya se logueó
         return text
+
+
+def _duration(elapsed: timedelta) -> str:
+    """`timedelta` → "1 min 20 s" / "45 s"."""
+    seconds = max(0, round(elapsed.total_seconds()))
+    minutes, seconds = divmod(seconds, 60)
+    if not minutes:
+        return f"{seconds} s"
+    return f"{minutes} min {seconds} s" if seconds else f"{minutes} min"
 
 
 def _partial_text(alerts: Sequence[Alert], resolved_ids: set[str]) -> str:

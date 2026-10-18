@@ -273,3 +273,37 @@ def test_metrics_command_sends_the_image(tmp_path):
     problems = p.notifier.sent[-1][0]  # los problemas por plato, en otro mensaje
     assert "Risotto de hongos · vuelve lleno el" in problems
     assert "Estaba frío:" in problems and "Está todo bien" not in problems
+
+
+def test_picking_up_the_plates_says_who_and_how_long(tmp_path):
+    from servio_vision.alerts.config import AlertConfig
+    from servio_vision.alerts.processor import AlertProcessor
+    from servio_vision.db import Database
+    from tests.test_alert_engine import obs
+
+    db = Database(tmp_path / "servio.db")
+    p = AlertProcessor(
+        AlertConfig(interval=30, t1=60, t2=600, reminder=600),
+        FakeTelegram(),
+        tmp_path / "eventos.jsonl",
+        Restaurant.load(),
+        db,
+    )
+    vacios = (("T1-p1", "vacio", "centro"), ("T1-p2", "vacio", "izquierda"))
+    try:
+        for s in (0, 30):
+            p.process(obs(s, *vacios))
+        assert p.notifier.sent[-1][0] == "🍽️ Juan · Mesa 1: terminó."
+        for s in (60, 90, 120, 150):  # retiraron los platos
+            p.process(obs(s))
+        [(row)] = db.query(
+            "SELECT motivo_cierre FROM avisos WHERE tipo = 'mesa_terminada'"
+        )
+    finally:
+        p.close()
+    text = p.notifier.edits[-1][1]
+    assert text.startswith("🍽️ Juan · Mesa 1: terminó.\n\n✅ Juan retiró los platos ")
+    assert (
+        text.endswith(" después de que terminó la mesa.") and "ya resuelto" not in text
+    )
+    assert row["motivo_cierre"] == "retirados"

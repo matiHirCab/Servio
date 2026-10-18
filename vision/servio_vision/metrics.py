@@ -39,9 +39,21 @@ SQL_ATTEND = """
 SELECT m.nombre AS mozo,
        AVG((julianday(a.resuelto_at) - julianday(a.abierto_at)) * 24 * 60) AS minutos
   FROM avisos a JOIN mozos m ON m.id = a.mozo_id
- WHERE a.tipo = 'mesa_terminada' AND a.resuelto_at IS NOT NULL
+ WHERE a.tipo = 'mesa_terminada' AND a.motivo_cierre = 'retirados'
  GROUP BY m.id
  ORDER BY minutos DESC
+"""
+# El último retiro de platos en vivo (cámara): para mostrarlo en la demo.
+SQL_LAST_PICKUP = """
+SELECT m.nombre AS mozo, me.nombre AS mesa,
+       (julianday(a.resuelto_at) - julianday(a.abierto_at)) * 24 * 3600 AS segundos
+  FROM avisos a
+  JOIN mesas me ON me.id = a.mesa_id
+  LEFT JOIN mozos m ON m.id = a.mozo_id
+ WHERE a.tipo = 'mesa_terminada' AND a.motivo_cierre = 'retirados'
+   AND a.origen = 'camara'
+ ORDER BY a.resuelto_at DESC
+ LIMIT 1
 """
 SQL_ANSWER = """
 SELECT m.nombre AS mozo, AVG(r.segundos) AS segundos
@@ -89,6 +101,10 @@ def compute(db: Database) -> dict:
             for r in db.query(SQL_DISHES)
         ],
         "attend": [(r["mozo"], r["minutos"]) for r in db.query(SQL_ATTEND)],
+        "last_pickup": next(
+            ((r["mozo"], r["mesa"], r["segundos"]) for r in db.query(SQL_LAST_PICKUP)),
+            None,
+        ),
         "answer": [(r["mozo"], r["segundos"]) for r in db.query(SQL_ANSWER)],
         "days": totals["dias"],
         "alerts": totals["respuestas"],
@@ -101,7 +117,7 @@ def print_report(m: dict) -> None:
     print("\nPlatos que vuelven llenos (% de las veces que se sirvieron)")
     for dish, rate, reason in m["dishes"]:
         print(f"  {dish:34} {rate * 100:5.1f} %   motivo más común: {reason}")
-    print("\nMinutos hasta atender una mesa que terminó")
+    print("\nMinutos hasta retirar los platos de una mesa que terminó")
     for waiter, v in m["attend"]:
         print(f"  {waiter:10} {v:5.1f} min")
     print("\nSegundos en responder el aviso")
@@ -203,7 +219,7 @@ def render(m: dict, path: Path) -> None:
         60,
         y,
         half,
-        "Minutos hasta atender una mesa que terminó",
+        "Minutos hasta retirar los platos (mesa terminada)",
         m["attend"],
         lambda v: f"{v:.1f} min",
         fonts,
@@ -250,12 +266,19 @@ def summary(m: dict) -> str:
         lines += [
             f"• {dish}: {rate * 100:.0f} % ({reason})" for dish, rate, reason in worst
         ]
-    if m["attend"]:
-        waiter, minutes = m["attend"][0]
+    if m["last_pickup"]:
+        waiter, table, seconds = m["last_pickup"]
+        minutes, secs = divmod(round(seconds), 60)
+        took = f"{minutes} min {secs} s" if minutes else f"{secs} s"
         lines.append("")
         lines.append(
-            f"⏱️ El que más tarda en atender una mesa que terminó: {waiter} ({minutes:.1f} min)"
+            f"✅ Hoy: {waiter or 'el mozo'} retiró los platos de la {table} {took} "
+            "después de que terminó la mesa"
         )
+    if m["attend"]:
+        lines.append("")
+        lines.append("⏱️ Retiro de platos después de que terminó la mesa (promedio):")
+        lines += [f"• {waiter}: {minutes:.1f} min" for waiter, minutes in m["attend"]]
     if m["live_answers"]:
         lines.append(f"📝 Incluye {m['live_answers']} respuestas reales de hoy")
     return "\n".join(lines)[:1024]

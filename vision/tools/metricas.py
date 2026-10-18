@@ -53,7 +53,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.sql:
         for title, sql in (
             ("Platos que vuelven llenos", SQL_DISHES),
-            ("Minutos hasta atender", SQL_ATTEND),
+            ("Minutos hasta retirar los platos", SQL_ATTEND),
             ("Segundos en responder", SQL_ANSWER),
         ):
             print(f"-- {title}{sql}")

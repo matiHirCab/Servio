@@ -61,7 +61,8 @@ CREATE TABLE IF NOT EXISTS avisos (
     plato_servido_id INTEGER REFERENCES platos_servidos(id),
     abierto_at TEXT NOT NULL,
     resuelto_at TEXT,
-    origen TEXT NOT NULL
+    origen TEXT NOT NULL,
+    motivo_cierre TEXT
 );
 CREATE TABLE IF NOT EXISTS respuestas (
     id INTEGER PRIMARY KEY,
@@ -88,6 +89,20 @@ class Database:
         self._lock = threading.Lock()
         with self._lock:
             self._conn.executescript(SCHEMA)
+            self._migrate()
+
+    def _migrate(self) -> None:
+        """Bases creadas antes de `motivo_cierre`: se agrega la columna. En el
+        historial simulado, toda mesa terminada se cerró retirando los platos."""
+        columns = {r["name"] for r in self._conn.execute("PRAGMA table_info(avisos)")}
+        if "motivo_cierre" in columns:
+            return
+        with self._conn:
+            self._conn.execute("ALTER TABLE avisos ADD COLUMN motivo_cierre TEXT")
+            self._conn.execute(
+                "UPDATE avisos SET motivo_cierre = 'retirados'"
+                " WHERE origen = 'historial' AND tipo = 'mesa_terminada'"
+            )
 
     def close(self) -> None:
         with self._lock:
@@ -161,9 +176,13 @@ class Database:
             (alert_id, kind, table_id, self.waiter_id(table_id), served_id, _iso(at)),
         )
 
-    def alert_resolved(self, alert_id: str, at: datetime) -> None:
+    def alert_resolved(
+        self, alert_id: str, at: datetime, reason: str | None = None
+    ) -> None:
+        """`reason`, para mesa terminada: "retirados" o "servido" (llegó algo nuevo)."""
         self._write(
-            "UPDATE avisos SET resuelto_at = ? WHERE id = ?", (_iso(at), alert_id)
+            "UPDATE avisos SET resuelto_at = ?, motivo_cierre = ? WHERE id = ?",
+            (_iso(at), reason, alert_id),
         )
 
     def feedback(self, event: dict) -> None:
@@ -241,8 +260,9 @@ class Database:
                 elif r["tipo"] == "mesa_terminada":
                     c.execute(
                         "INSERT INTO avisos (id, tipo, mesa_id, mozo_id, abierto_at,"
-                        " resuelto_at, origen) VALUES (?, 'mesa_terminada', ?, ?, ?, ?,"
-                        " 'historial')",
+                        " resuelto_at, origen, motivo_cierre)"
+                        " VALUES (?, 'mesa_terminada', ?, ?, ?, ?, 'historial',"
+                        " 'retirados')",
                         (
                             f"h{n}",
                             r["mesa"],
