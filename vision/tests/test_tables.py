@@ -1,6 +1,7 @@
 """Tests del seguimiento de mesas (detector falso: no necesita YOLO)."""
 
 import numpy as np
+import pytest
 
 from servio_vision.tables import TableTracker, iou
 
@@ -111,3 +112,31 @@ def test_new_tables_are_numbered_by_rows():
     assert named["Mesa 2"][0] > 250 and named["Mesa 2"][1] < 100
     assert named["Mesa 3"][0] < 100 and named["Mesa 3"][1] > 150
     assert named["Mesa 4"][0] > 250 and named["Mesa 4"][1] > 150
+
+
+def test_table_with_someone_glued_does_not_grow():
+    # el detector a veces mete las piernas de alguien en la mesa: la caja grande
+    # que contiene a la mesa se ignora y la mesa no se cuenta dos veces
+    tracker = TableTracker(
+        FakeDetector(
+            [((100, 100, 300, 300), 0.5)],
+            [((10, 20, 300, 300), 0.6)],
+        )
+    )
+    first = box_of(tracker.update(FRAME))
+    zones = tracker.update(FRAME)
+    assert box_of(zones) == first and len(zones.tables) == 1
+
+
+def test_lost_plate_memory_follows_the_table():
+    from servio_vision.tracking import IdCounter
+    from servio_vision.zones import remap_bbox
+
+    ids = IdCounter()
+    ids.assign("T1", [(0.5, 0.5, 0.2, 0.2)], [])
+    ids.assign("T1", [], [])  # YOLO no lo ve: queda recordado
+    old, new = (100, 100, 300, 300), (0, 0, 400, 400)
+    ids.remap("T1", lambda b: remap_bbox(b, old, new))
+    [(pid, bbox)] = ids.missing("T1")
+    assert pid == "p1"
+    assert bbox == pytest.approx((0.5, 0.5, 0.1, 0.1))  # mismo lugar del frame

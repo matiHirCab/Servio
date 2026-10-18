@@ -18,10 +18,10 @@ Una cámara en alto mira el salón. Servio:
    |---|---|---|
    | `lleno` | ≥ 75 % | Sí, si sigue así mucho rato |
    | `comiendo` | 30–75 % | No |
-   | `por_terminar` | 5–30 % | Sí |
+   | `por_terminar` | 5–30 % | No (solo el color de la mesa) |
    | `vacio` | < 5 % | Sí |
 
-3. Le manda un **mensaje al mozo por Telegram** cuando tiene que ir a una mesa. El mozo no responde: es solo un aviso.
+3. Le manda un **mensaje al mozo por Telegram** cuando tiene que ir a una mesa. Si un plato sigue lleno, el mozo responde con un botón ("Muy dulces", "Comanda equivocada"…) o escribe; la respuesta queda en la base para las métricas.
 
 ## Usuario
 
@@ -31,8 +31,8 @@ Una cámara en alto mira el salón. Servio:
 
 | Aviso | Cuándo | Para qué |
 |---|---|---|
-| **Mesa por terminar** | La mayoría de los platos de la mesa está en `por_terminar` o `vacio` | Ir a ofrecer postre, café o la cuenta |
-| **Plato vacío** | Un plato está `vacio` hace un rato | Ir a retirar |
+| **Mesa terminó** | Todos los platos de la mesa están `vacio` | Ir a ofrecer postre, café o la cuenta |
+| **Plato vacío** | Un plato está `vacio` hace un rato y el resto de la mesa sigue comiendo | Ir a retirar |
 | **Lleno mucho rato** | Un plato sigue `lleno` mucho tiempo con gente en la mesa | Preguntar si está todo bien (no le gustó) |
 
 Umbrales y antispam en [05-reglas-alertas.md](05-reglas-alertas.md).
@@ -41,7 +41,7 @@ Umbrales y antispam en [05-reglas-alertas.md](05-reglas-alertas.md).
 
 **Sí:**
 - Un video con varias mesas vistas desde arriba (grabado o en vivo desde un celular).
-- Zonas de mesa marcadas a mano una vez.
+- Mesas detectadas solas (YOLO de COCO), numeradas por filas; zonas a mano solo si se pasa `--zones`.
 - YOLO para encontrar platos + Claude para estimar cuánta comida queda + suavizado en el tiempo.
 - Los tres avisos por Telegram, con recordatorio si la situación sigue y "✅ ya resuelto" cuando se resuelve.
 

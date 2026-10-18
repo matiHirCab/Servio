@@ -32,6 +32,9 @@ SMOOTHING = 0.5  # peso de la lectura nueva en el recuadro (el resto, la anterio
 MOVED_IOU = 0.6  # por debajo, la mesa se movió: se salta a la posición nueva
 MATCH_IOU = 0.2  # superposición mínima para que sea la misma mesa
 NEW_TABLE_MAX_IOU = 0.05  # una detección que pisa una mesa conocida no es otra mesa
+# Una detección que contiene a la mesa conocida y es mucho más grande es la mesa
+# con algo pegado (las piernas de alguien, una silla): se ignora.
+SWALLOW_GROWTH = 1.5
 
 
 class BoxDetector(Protocol):
@@ -91,6 +94,9 @@ class TableTracker:
                 best = (
                     near if _distance(table.box, near[0]) < _size(table.box) else None
                 )
+            if best is not None and _swallows(best[0], table.box):
+                unmatched.remove(best)  # es esta mesa, pero no se usa su recuadro
+                best = None
             if best is not None:
                 moved = iou(table.box, best[0]) < MOVED_IOU
                 table.box = best[0] if moved else _blend(table.box, best[0])
@@ -154,6 +160,17 @@ def _distance(a: Box, b: Box) -> float:
 
 def _size(box: Box) -> float:
     return max(box[2] - box[0], box[3] - box[1])
+
+
+def _area(box: Box) -> float:
+    return max(0.0, box[2] - box[0]) * max(0.0, box[3] - box[1])
+
+
+def _swallows(new: Box, old: Box) -> bool:
+    """`new` tapa casi toda la mesa `old` y es mucho más grande."""
+    ix = max(0.0, min(new[2], old[2]) - max(new[0], old[0]))
+    iy = max(0.0, min(new[3], old[3]) - max(new[1], old[1]))
+    return ix * iy >= 0.9 * _area(old) and _area(new) > SWALLOW_GROWTH * _area(old)
 
 
 def _blend(old: Box, new: Box) -> Box:

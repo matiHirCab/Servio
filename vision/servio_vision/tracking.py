@@ -88,6 +88,13 @@ class IdCounter:
             if r < now
         ]
 
+    def remap(self, table_id: str, remap) -> None:
+        """La mesa se movió: las cajas recordadas pasan al recorte nuevo (si no, un
+        plato perdido volvería con la caja del recorte viejo, corrida)."""
+        where = self._where.get(table_id, {})
+        for pid, (bbox, r) in where.items():
+            where[pid] = (remap(bbox), r)
+
     def keep(self, table_id: str, pid: str) -> None:
         """Otro (Claude) confirmó que un plato perdido sigue ahí: se lo recuerda
         `MAX_MISSING` lecturas más, sin dejar de ser un perdido."""

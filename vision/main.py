@@ -104,6 +104,9 @@ class Pipeline:
                 for i in self.previous[zone.table_id]
             ]
             self.smoothers[zone.table_id].remap_boxes(remap)
+            ids = getattr(self.classifier, "ids", None)  # memoria de ids (YOLO)
+            if ids is not None:
+                ids.remap(zone.table_id, remap)
 
     def _identify_dishes(
         self, frame: np.ndarray, table_id: str, items: list[Item]
