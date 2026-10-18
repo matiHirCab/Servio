@@ -41,12 +41,31 @@ Los tests nunca escriben en el `out/eventos.jsonl` real: cada uno usa una carpet
 ## Vista de la demo (pantalla dividida)
 
 - **Izquierda:** `tools/vista_demo.py`, con los mismos flags que `main.py`. Muestra el video con cada mesa coloreada por estado y la caja de cada plato.
-- **Derecha:** el celular con el grupo de Telegram, espejado con [`scrcpy`](https://github.com/Genymobile/scrcpy) (Android).
+- **Derecha:** el grupo de Telegram: Telegram Desktop / web.telegram.org, o el celular espejado con [`scrcpy`](https://github.com/Genymobile/scrcpy).
 
 ```bash
-python tools/vista_demo.py --source data/videos/demo.mp4 --classifier hybrid --demo --interval 15
-python tools/vista_demo.py --source data/videos/demo.mp4 --classifier fake --record out/vista.mp4   # grabar (plan B)
+# en vivo con la cámara del celular (DroidCam): siempre en tiempo real
+python tools/vista_demo.py --source http://<IP>:4747/video --zones config/zones.json --classifier hybrid --demo --interval 5
+# simulación con el video de 3 min de la demo, como si fuera la cámara
+python tools/vista_demo.py --source "<video>.mp4" --zones config/zones_demo.json --classifier hybrid --demo --interval 5 --realtime
+# grabar la vista sin ventana (plan B)
+python tools/vista_demo.py --source "<video>.mp4" --zones config/zones_demo.json --classifier hybrid --demo --interval 5 --realtime --no-window --record out/vista.mp4
 ```
+
+**`.env` para la demo** (además del token y el grupo de Telegram):
+
+```
+CLAUDE_PROVIDER=anthropic   # API de Anthropic: ~5 s por lectura (con claude -p, ~11 s)
+ANTHROPIC_API_KEY=...
+DEMO_MODE=true
+ALERT_T2=60                 # plato lleno a los 60 s (2 × interval lo dispararía en cada plato recién servido)
+ALERT_REMINDER=180          # recordatorios cada 3 min, para no llenar el grupo
+FINISHED_AFTER=20           # 20 s en "por terminar" → "vacío"
+```
+
+- **`--realtime`:** con un video, la vista se comporta como la cámara: el video nunca espera a la IA y, si está ocupada, esa lectura se saltea. Con la cámara es siempre así. Sin `--realtime`, el video espera cada lectura (todas las lecturas, pero se ve a los tirones).
+- **Sobre cada plato** se muestra solo el estado; arriba, "Analizando..." mientras la IA procesa.
+- **`--yolo-conf`:** umbral del detector (por defecto 0,25). Para videos de baja calidad (cámaras de seguridad) YOLOE da confianzas de ~0,08: probar con 0,07.
 
 - **Teclas:** `q` sale, espacio pausa. Con `--no-window --record` graba sin abrir la ventana.
 - **`--speed`:** a diferencia de `main.py`, sin `--speed` la vista reproduce en tiempo real (es para mirar). Después de una pausa o de esperar al modelo, el video retoma su ritmo sin adelantarse.
