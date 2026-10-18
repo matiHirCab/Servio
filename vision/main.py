@@ -130,6 +130,9 @@ def observation_handler(config: AlertConfig, no_telegram: bool) -> ObservationHa
 
 
 def classifier_kwargs(args: argparse.Namespace) -> dict:
+    if args.classifier in ("yolo", "hybrid"):
+        # umbral del detector: con videos de baja calidad YOLOE da confianzas bajas
+        return {} if args.yolo_conf is None else {"conf": args.yolo_conf}
     if args.classifier != "fake":
         return {}
     kwargs: dict = {"mode": args.fake_mode}
@@ -175,6 +178,11 @@ def build_parser(
     parser.add_argument("--limit", type=int, help="cortar tras N lecturas")
     parser.add_argument("--fake-mode", default="script", choices=["script", "replay"])
     parser.add_argument("--fixture", type=Path, help="jsonl para --fake-mode replay")
+    parser.add_argument(
+        "--yolo-conf",
+        type=float,
+        help="umbral de confianza del detector (yolo/hybrid; por defecto 0.25)",
+    )
     return parser
 
 

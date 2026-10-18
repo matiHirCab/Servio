@@ -68,6 +68,12 @@ PLATE_COLORS = {
     "por_terminar": (0, 200, 255),
     "vacio": (60, 60, 230),
 }
+PLATE_LABELS = {
+    "lleno": "lleno",
+    "comiendo": "comiendo",
+    "por_terminar": "por terminar",
+    "vacio": "vacio",  # sin tilde: la fuente de OpenCV no tiene acentos
+}
 TABLE_LABELS = {
     "libre": "libre",
     "servida": "servida",
@@ -137,9 +143,8 @@ def draw_overlay(
             p2 = (round(x0 + (bx + bw) * w), round(y0 + (by + bh) * h))
             plate_color = PLATE_COLORS[item.state]
             cv2.rectangle(view, p1, p2, plate_color, max(2, round(3 * scale)))
-            text = f"{item.id} {item.state.replace('_', ' ')}"
-            if item.fill_ratio is not None:
-                text += f" {round(item.fill_ratio * 100)}%"
+            # para el jurado, solo el estado (sin id, % ni confianza)
+            text = PLATE_LABELS[item.state]
             _label(view, text, (p1[0], max(p1[1] - 8, 20)), plate_color, 0.6 * scale, 2)
 
         minutes = (
@@ -306,10 +311,8 @@ def run(args) -> int:
             state.update(pipeline, pending_ts)
 
     def render(frame, ts, video_s) -> np.ndarray:
-        header = (
-            f"Servio - lectura {state.readings} - cada {args.interval:g} s"
-            f" - video {int(video_s // 60):02d}:{int(video_s % 60):02d}"
-        )
+        # "Analizando..." solo mientras la IA procesa una lectura
+        header = "Servio" + ("   * Analizando..." if pending is not None else "")
         return draw_overlay(frame, pipeline.zones, state, ts, header)
 
     if not args.no_window:
