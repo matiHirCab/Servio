@@ -232,10 +232,10 @@ class AlertProcessor:
         minutes = (
             max(1, round((now - plate.first_seen).total_seconds() / 60)) if plate else 1
         )
-        who = f" · {waiter}" if waiter else ""
+        who = f"{waiter} · " if waiter else ""
         what = dish.name if dish else "un plato"
         message = (
-            f"❓ {table_name(alert.table_id)}{who}: {what} sigue lleno hace "
+            f"❓ {who}{table_name(alert.table_id)}: {what} sigue lleno hace "
             f"{minutes} min. ¿Está todo bien? Pasá a preguntar y contanos qué pasó."
         )
         alert = alert.model_copy(update={"message": message})
@@ -252,12 +252,12 @@ class AlertProcessor:
         return alert, question
 
     def _mention_waiter(self, message: str, table_id: str) -> str:
-        """`Mesa 1 terminó…` → `Mesa 1 · Juan terminó…`."""
+        """`🍽️ Mesa 1: terminó.` → `🍽️ Juan · Mesa 1: terminó.`"""
         waiter = self.restaurant.waiter(table_id) if self.restaurant else None
         if not waiter:
             return message
         name = table_name(table_id)
-        return message.replace(name, f"{name} · {waiter}", 1)
+        return message.replace(name, f"{waiter} · {name}", 1)
 
     def _edit(self, message_id: int) -> str:
         """Reescribe un mensaje con sus avisos cerrados marcados; devuelve el texto."""

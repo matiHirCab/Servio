@@ -77,7 +77,7 @@ FINISHED_AFTER=20           # 20 s en "por terminar" → "vacío"
 Con la comanda del restaurante, Servio sabe **qué plato es cada uno** y **qué mozo atiende cada mesa**. Para la demo esos datos son simulados (`fixtures/restaurante/carta.json` y `salon.json`): es lo que daría el sistema del restaurante si estuviéramos conectados.
 
 - **Qué plato es:** cuando aparece un plato en cámara, Claude mira su recorte y elige cuál de los platos del pedido de esa mesa es (una llamada chica por plato; sin `ANTHROPIC_API_KEY`, se usa el orden del pedido). Un "plato" que no corresponde a nada del pedido (una caja, una taza) no se tiene en cuenta.
-- **Los avisos** nombran la mesa y el mozo ("Mesa 1 · Juan"). El de plato lleno nombra el plato y trae **botones** con las respuestas típicas de ese plato, más "✏️ Otra respuesta" (el bot pide que escriban y toma lo que respondan).
+- **Los avisos** empiezan con el emoji, el mozo y la mesa ("🍽️ Juan · Mesa 1: terminó."). El de plato lleno nombra el plato y trae **botones** con las respuestas típicas de ese plato, más "✏️ Otra respuesta" (el bot pide que escriban y toma lo que respondan).
 - **Las respuestas** se escuchan en un hilo aparte (long polling: sin servidor ni webhook), se agregan al mensaje ("📝 Ana: Muy dulces") y quedan en el log (`alert_feedback`).
 
 ## Base de datos (SQLite)

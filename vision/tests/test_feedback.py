@@ -47,7 +47,7 @@ def question():
         alert_type="plato_lleno_mucho",
         dish="Donas glaseadas",
         waiter="Juan",
-        text="❓ Mesa 1 · Juan: Donas glaseadas sigue lleno hace 1 min.",
+        text="❓ Juan · Mesa 1: Donas glaseadas sigue lleno hace 1 min.",
         answers=("Está todo bien", "No le gustaron"),
         asked_at=datetime.now(UTC),
     )
@@ -221,3 +221,22 @@ def test_second_tap_does_not_count_twice():
         d.handle({"callback_query": {"id": cid, "data": data, "from": {}}})
     assert len(logged) == 1
     assert d.notifier.answers[-1] == "Ya respondieron este aviso"
+
+
+def test_message_format_is_emoji_waiter_table_message(tmp_path):
+    from servio_vision.alerts.config import AlertConfig
+    from servio_vision.alerts.notify import ConsoleNotifier
+    from servio_vision.alerts.processor import AlertProcessor
+
+    p = AlertProcessor(
+        AlertConfig(interval=5, t1=10, t2=10, reminder=10),
+        ConsoleNotifier(),
+        tmp_path / "eventos.jsonl",
+        Restaurant.load(),
+    )
+    try:
+        assert p._mention_waiter("🍽️ Mesa 1: terminó.", "T1") == (
+            "🍽️ Juan · Mesa 1: terminó."
+        )
+    finally:
+        p.close()

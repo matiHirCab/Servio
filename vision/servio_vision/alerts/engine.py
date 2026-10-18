@@ -154,7 +154,7 @@ def _minutes(elapsed: timedelta) -> int:
 def _open_message(alert_type: AlertType, table_id: str, elapsed: timedelta) -> str:
     name = table_name(table_id)
     if alert_type == "mesa_terminada":
-        return f"🍽️ {name} terminó."
+        return f"🍽️ {name}: terminó."
     if alert_type == "plato_vacio":
         return f"🧹 {name}: hay platos vacíos para retirar."
     return f"❓ {name}: un plato sigue lleno hace {_minutes(elapsed)} min. ¿Está todo bien?"
@@ -164,7 +164,7 @@ def _reminder_message(alert_type: AlertType, table_id: str, elapsed: timedelta) 
     name = table_name(table_id)
     minutes = _minutes(elapsed)
     if alert_type == "mesa_terminada":
-        return f"🍽️ {name} terminó hace {minutes} min."
+        return f"🍽️ {name}: terminó hace {minutes} min."
     if alert_type == "plato_vacio":
         return f"🧹 {name}: los platos vacíos siguen sin retirar hace {minutes} min."
     return f"❓ {name}: el plato sigue lleno hace {minutes} min. ¿Está todo bien?"
