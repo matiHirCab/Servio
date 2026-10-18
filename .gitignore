@@ -4,9 +4,12 @@ node_modules/
 .venv/
 __pycache__/
 *.pt
+mobileclip*.ts
 videos/
 datasets/
 .next/
 vision/data/
 vision/models/
 vision/out/
+# pesos de MobileCLIP que baja YOLOE
+mobileclip_blt.ts

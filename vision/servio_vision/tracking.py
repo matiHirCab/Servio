@@ -3,6 +3,7 @@
 import math
 import re
 
+from servio_vision.detector import _iou
 from servio_vision.schemas import Item
 
 # Una caja nueva es el mismo plato si su centro está a menos de esto × el lado de la caja.
@@ -15,6 +16,13 @@ MAX_MISSING = 3
 def _center(bbox) -> tuple[float, float]:
     x, y, w, h = bbox
     return x + w / 2, y + h / 2
+
+
+def bbox_iou(a, b) -> float:
+    """IoU de dos cajas [x, y, w, h]."""
+    return _iou(
+        (a[0], a[1], a[0] + a[2], a[1] + a[3]), (b[0], b[1], b[0] + b[2], b[1] + b[3])
+    )
 
 
 def _next_number(previous_items: list[Item]) -> int:
@@ -43,7 +51,14 @@ class IdCounter:
         self, table_id: str, bboxes: list, previous_items: list[Item]
     ) -> list[str]:
         """Ids para las cajas de esta lectura, y actualiza la memoria."""
-        previous = [(i.id, i.bbox) for i in previous_items if i.bbox is not None]
+        # los que YOLO no vio en la última `assign` van con los recordados, aunque
+        # el que llama todavía los tenga en `previous_items`
+        lost = {pid for pid, _ in self.missing(table_id)}
+        previous = [
+            (i.id, i.bbox)
+            for i in previous_items
+            if i.bbox is not None and i.id not in lost
+        ]
         present = {pid for pid, _ in previous}
         remembered = [
             (pid, bbox)
@@ -62,6 +77,23 @@ class IdCounter:
         for pid in [p for p, (_, r) in where.items() if now - r > MAX_MISSING]:
             del where[pid]
         return ids
+
+    def missing(self, table_id: str) -> list[tuple[str, tuple]]:
+        """(id, última caja) de los platos que YOLO no vio en la última `assign` de
+        esa mesa pero todavía se recuerdan (hasta `MAX_MISSING` lecturas)."""
+        now = self._reading.get(table_id, 0)
+        return [
+            (pid, bbox)
+            for pid, (bbox, r) in self._where.get(table_id, {}).items()
+            if r < now
+        ]
+
+    def keep(self, table_id: str, pid: str) -> None:
+        """Otro (Claude) confirmó que un plato perdido sigue ahí: se lo recuerda
+        `MAX_MISSING` lecturas más, sin dejar de ser un perdido."""
+        where = self._where.get(table_id, {})
+        if pid in where:
+            where[pid] = (where[pid][0], self._reading[table_id] - 1)
 
 
 def _match(bboxes: list, tiers: list[list[tuple]], first_new: int) -> list[str]:
