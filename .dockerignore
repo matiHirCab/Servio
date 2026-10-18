@@ -1,6 +1,8 @@
 # Al build solo le hace falta vision/; datos, pesos y secretos quedan afuera.
 *
 !vision/
+# .venv (GB), cachés de pytest/ruff y .env
+vision/.*
 vision/**/__pycache__/
 vision/data/
 vision/models/
@@ -9,4 +11,3 @@ vision/config/
 vision/tests/
 vision/*.pt
 vision/mobileclip*.ts
-vision/.env
