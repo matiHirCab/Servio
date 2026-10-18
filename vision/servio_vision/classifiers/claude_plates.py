@@ -44,6 +44,7 @@ class PlateEstimate(BaseModel):
     fill_ratio: float = Field(ge=0, le=1)
     confidence: float = Field(ge=0, le=1)
     visible: bool = True
+    same_plate: bool = True  # False: la referencia es de otra comida (id cambiado)
 
 
 class PlatesReport(BaseModel):
@@ -63,14 +64,27 @@ def _image_block(jpeg: bytes) -> dict:
     }
 
 
-def build_content(table_jpeg: bytes, plate_jpegs: list[bytes], table_id: str) -> list:
-    """Bloques del mensaje (texto + imágenes), iguales para los dos proveedores."""
+def build_content(
+    table_jpeg: bytes,
+    plate_jpegs: list[bytes],
+    table_id: str,
+    references: list[bytes | None] | None = None,
+) -> list:
+    """Bloques del mensaje (texto + imágenes), iguales para los dos proveedores.
+
+    `references[i]`, si está, es el plato i recién servido y va antes del recorte actual."""
     content: list[dict] = [
         {"type": "text", "text": prompt.table_caption(table_id)},
         _image_block(table_jpeg),
     ]
-    for i, jpeg in enumerate(plate_jpegs, start=1):
-        content.append({"type": "text", "text": prompt.plate_caption(i)})
+    references = references or [None] * len(plate_jpegs)
+    for i, (jpeg, ref) in enumerate(zip(plate_jpegs, references), start=1):
+        if ref is None:
+            content.append({"type": "text", "text": prompt.plate_caption(i)})
+        else:
+            content.append({"type": "text", "text": prompt.reference_caption(i)})
+            content.append(_image_block(ref))
+            content.append({"type": "text", "text": prompt.current_caption(i)})
         content.append(_image_block(jpeg))
     content.append({"type": "text", "text": prompt.closing_text(len(plate_jpegs))})
     return content
@@ -231,9 +245,11 @@ def estimate_plates(
     provider: str | None = None,
     model: str | None = None,
     timeout_s: float | None = None,
+    references: list[bytes | None] | None = None,
 ) -> PlatesReport | None:
-    """Estima `fill_ratio`, `confidence` y `visible` de cada plato.
+    """Estima `fill_ratio`, `confidence`, `visible` y `same_plate` de cada plato.
 
+    `references`: por plato, su recorte recién servido (o `None`), ver `build_content`.
     Devuelve `None` si Claude falla dos veces (el `hybrid` usa entonces lo de YOLO).
     """
     if not plate_jpegs:
@@ -248,7 +264,7 @@ def estimate_plates(
         timeout_s = float(
             os.environ.get("CLAUDE_TIMEOUT_S") or DEFAULT_TIMEOUTS[provider]
         )
-    content = build_content(table_jpeg, plate_jpegs, table_id)
+    content = build_content(table_jpeg, plate_jpegs, table_id, references)
 
     for attempt in range(1, ATTEMPTS + 1):
         start = time.monotonic()

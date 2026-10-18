@@ -63,6 +63,16 @@ class IdCounter:
             del where[pid]
         return ids
 
+    def missing(self, table_id: str) -> list[tuple[str, tuple]]:
+        """(id, última caja) de los platos que YOLO no vio en la última `assign` de
+        esa mesa pero todavía se recuerdan (hasta `MAX_MISSING` lecturas)."""
+        now = self._reading.get(table_id, 0)
+        return [
+            (pid, bbox)
+            for pid, (bbox, r) in self._where.get(table_id, {}).items()
+            if r < now
+        ]
+
 
 def _match(bboxes: list, tiers: list[list[tuple]], first_new: int) -> list[str]:
     """Empareja cada caja con un (id, bbox) cercano, tier por tier: las cajas que no

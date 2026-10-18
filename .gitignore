@@ -11,3 +11,5 @@ datasets/
 vision/data/
 vision/models/
 vision/out/
+# pesos de MobileCLIP que baja YOLOE
+mobileclip_blt.ts
