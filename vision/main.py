@@ -31,6 +31,9 @@ from servio_vision.alerts.config import DEFAULT_INTERVAL, AlertConfig, load_conf
 from servio_vision.alerts.models import TableObservation
 from servio_vision.capture import open_source
 from servio_vision.classifier import Classifier, available_classifiers, get_classifier
+from servio_vision.dish_match import DishMatcher
+from servio_vision.restaurant import DEFAULT_DIR as RESTAURANT_DIR
+from servio_vision.restaurant import Restaurant
 from servio_vision.schemas import Item, TableReport
 from servio_vision.smoothing import TableSmoother
 from servio_vision.tables import TableDetector, TableTracker
@@ -60,6 +63,8 @@ class Pipeline:
         on_observation: ObservationHandler,
         finished_after: float | None = None,
         tables: TableTracker | None = None,
+        restaurant: Restaurant | None = None,
+        dish_matcher: DishMatcher | None = None,
     ) -> None:
         """`zones` fijas (de un archivo) o `tables`, que detecta las mesas en cada lectura."""
         if (zones is None) == (tables is None):
@@ -67,6 +72,8 @@ class Pipeline:
         self.classifier = classifier
         self.zones = zones or Zones(frame_size=(1, 1), tables=[])
         self.tables = tables
+        self.restaurant = restaurant
+        self.dish_matcher = dish_matcher
         self.on_observation = on_observation
         self.finished_after = finished_after
         self.smoothers: dict[str, TableSmoother] = {}
@@ -97,6 +104,50 @@ class Pipeline:
                 for i in self.previous[zone.table_id]
             ]
             self.smoothers[zone.table_id].remap_boxes(remap)
+
+    def _identify_dishes(
+        self, frame: np.ndarray, table_id: str, items: list[Item]
+    ) -> None:
+        """Platos nuevos de la mesa: cuál del pedido es cada uno (una vez por plato)."""
+        if self.restaurant is None or self.dish_matcher is None:
+            return
+        zone = next((z for z in self.zones.tables if z.table_id == table_id), None)
+        if zone is None:
+            return
+        for item in sorted(items, key=lambda i: i.id):
+            track_id = f"{table_id}-{item.id}"
+            if item.bbox is None or self.restaurant.is_assigned(table_id, track_id):
+                continue
+            options = self.restaurant.unassigned(table_id)
+            if not options:
+                return
+            x0, y0, x1, y1 = table_rect(frame, zone, self.zones)
+            bx, by, bw, bh = item.bbox
+            w, h = x1 - x0, y1 - y0
+            crop = frame[
+                int(y0 + by * h) : int(y0 + (by + bh) * h),
+                int(x0 + bx * w) : int(x0 + (bx + bw) * w),
+            ]
+            if crop.size == 0:
+                continue
+            dish = self.dish_matcher.match(to_jpeg(crop), options)
+            if dish is not None:
+                self.restaurant.assign(table_id, track_id, dish)
+
+    def _only_ordered(self, table_id: str, items: list[Item]) -> list[Item]:
+        """Con la comanda, un "plato" que no es ninguno de los pedidos de la mesa no
+        es un plato (una caja, una taza…): no cuenta para los avisos ni se dibuja."""
+        if self.restaurant is None or not self.restaurant.has_order(table_id):
+            return items
+        kept = []
+        for item in items:
+            track_id = f"{table_id}-{item.id}"
+            if self.restaurant.is_assigned(table_id, track_id) or self.restaurant.dish(
+                table_id, track_id
+            ):
+                kept.append(item)
+        self.previous[table_id] = kept
+        return kept
 
     def _add_tables(self, zones: Zones) -> None:
         for t in zones.tables:
@@ -131,6 +182,8 @@ class Pipeline:
             try:
                 items = self.smoothers[table_id].update(report.items, ts)
                 self.previous[table_id] = items
+                self._identify_dishes(frame, table_id, items)
+                items = self._only_ordered(table_id, items)
                 observation = self._observation(table_id, ts, report, items)
             except Exception:
                 logger.exception("%s %s: no se pudo armar la observación", ts, table_id)
@@ -176,11 +229,31 @@ class Pipeline:
         )
 
 
-def observation_handler(config: AlertConfig, no_telegram: bool) -> ObservationHandler:
+def observation_handler(
+    config: AlertConfig, no_telegram: bool, restaurant: Restaurant | None = None
+) -> ObservationHandler:
     """`alerts.process`, ya configurado con los umbrales resueltos (`--interval`,
-    `--demo`) y con Telegram o consola según `--no-telegram`."""
-    alerts.configure(config, telegram=not no_telegram)
+    `--demo`), con Telegram o consola según `--no-telegram` y, si hay, con los datos
+    del restaurante (plato y mozo en los avisos, y respuestas de los mozos)."""
+    alerts.configure(config, telegram=not no_telegram, restaurant=restaurant)
     return alerts.process
+
+
+def load_restaurant(directory: Path | None) -> Restaurant | None:
+    """Datos del restaurante (carta, pedidos, mozos); None si no hay."""
+    directory = directory or RESTAURANT_DIR
+    if not (directory / "salon.json").exists():
+        logger.info(
+            "Sin datos del restaurante en %s: avisos sin plato ni mozo", directory
+        )
+        return None
+    restaurant = Restaurant.load(directory)
+    logger.info(
+        "Datos del restaurante: %d mesas, %d platos",
+        len(restaurant.tables),
+        len(restaurant.dishes),
+    )
+    return restaurant
 
 
 def classifier_kwargs(args: argparse.Namespace) -> dict:
@@ -257,6 +330,11 @@ def build_parser(
         help="segundos en por_terminar para pasar a vacio (por defecto 6 min; demo 6 lecturas)",
     )
     parser.add_argument(
+        "--restaurante",
+        type=Path,
+        help="carpeta con carta.json y salon.json (por defecto fixtures/restaurante)",
+    )
+    parser.add_argument(
         "--yolo-conf",
         type=float,
         help="umbral de confianza del detector (yolo/hybrid; por defecto 0.25)",
@@ -324,14 +402,17 @@ def build_pipeline(args: argparse.Namespace) -> Pipeline | None:
     )
 
     classifier = get_classifier(args.classifier, **classifier_kwargs(args))
+    restaurant = load_restaurant(args.restaurante)
     finished_after = finished_after_seconds(args, demo_enabled(args.demo))
     logger.info("Plato por terminar → vacío a los %gs", finished_after)
     return Pipeline(
         classifier,
         zones,
-        observation_handler(config, args.no_telegram),
+        observation_handler(config, args.no_telegram, restaurant),
         finished_after=finished_after,
         tables=tables,
+        restaurant=restaurant,
+        dish_matcher=DishMatcher() if restaurant is not None else None,
     )
 
 

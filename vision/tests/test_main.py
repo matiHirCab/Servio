@@ -168,7 +168,7 @@ def test_config_reaches_alerts(monkeypatch):
     monkeypatch.setattr(
         loop.alerts,
         "configure",
-        lambda config, telegram: calls.append((config.t1, telegram)),
+        lambda config, telegram, restaurant=None: calls.append((config.t1, telegram)),
         raising=False,
     )
     config = loop.load_config(30, demo=True, env={})
@@ -191,7 +191,9 @@ def test_env_file_thresholds_apply(tmp_path, monkeypatch):
     )
     configured = []
     monkeypatch.setattr(
-        loop.alerts, "configure", lambda config, telegram: configured.append(config)
+        loop.alerts,
+        "configure",
+        lambda config, telegram, restaurant=None: configured.append(config),
     )
     monkeypatch.setattr(loop.alerts, "process", lambda o: [], raising=False)
     assert loop.build_pipeline(args) is not None

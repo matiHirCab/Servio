@@ -72,6 +72,23 @@ FINISHED_AFTER=20           # 20 s en "por terminar" → "vacío"
 - **Grabar en vivo:** con la cámara, la grabación puede quedar más rápida que la realidad si el loop va más lento que los fps de la cámara. Para el plan B, grabar sobre el video.
 - **Colores de mesa:** gris libre · azul servida · verde comiendo · amarillo por terminar · rojo terminada. Los platos usan los mismos colores según su estado.
 
+## Datos del restaurante y respuestas de los mozos
+
+Con la comanda del restaurante, Servio sabe **qué plato es cada uno** y **qué mozo atiende cada mesa**. Para la demo esos datos son simulados (`fixtures/restaurante/carta.json` y `salon.json`): es lo que daría el sistema del restaurante si estuviéramos conectados.
+
+- **Qué plato es:** cuando aparece un plato en cámara, Claude mira su recorte y elige cuál de los platos del pedido de esa mesa es (una llamada chica por plato; sin `ANTHROPIC_API_KEY`, se usa el orden del pedido). Un "plato" que no corresponde a nada del pedido (una caja, una taza) no se tiene en cuenta.
+- **Los avisos** nombran la mesa y el mozo ("Mesa 1 · Juan"). El de plato lleno nombra el plato y trae **botones** con las respuestas típicas de ese plato, más "✏️ Otra respuesta" (el bot pide que escriban y toma lo que respondan).
+- **Las respuestas** se escuchan en un hilo aparte (long polling: sin servidor ni webhook), se agregan al mensaje ("📝 Ana: Muy dulces") y quedan en el log (`alert_feedback`).
+
+## Métricas de platos y mozos
+
+```bash
+python tools/generar_historial.py              # historial simulado de 30 días (fixtures/restaurante/historial.jsonl)
+python tools/metricas.py --image out/metricas.png
+```
+
+Platos que vuelven llenos (% y motivo más común según los mozos), minutos hasta atender una mesa que terminó y segundos en responder el aviso, por mozo. Suma las respuestas reales de la última corrida (`out/eventos.jsonl`).
+
 ## Tabla de lo que pasó (cierre de la demo)
 
 `tools/resumen.py` lee `out/eventos.jsonl` y arma una tabla por mesa: comidas y su duración media, avisos de cada tipo, recordatorios y cuánto tardaron los avisos en resolverse, con los totales al final. Con `--image`, la tabla sale también como imagen para la última slide.

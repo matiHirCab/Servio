@@ -151,7 +151,7 @@ def draw_overlay(
             cv2.rectangle(view, p1, p2, plate_color, max(2, round(3 * scale)))
             # para el jurado, solo el estado (sin id, % ni confianza)
             text = PLATE_LABELS[item.state]
-            _label(view, text, (p1[0], max(p1[1] - 8, 20)), plate_color, 0.6 * scale, 2)
+            _label(view, text, (p1[0], max(p1[1] - 8, 20)), plate_color, 0.8 * scale, 2)
 
         _label(
             view,
@@ -225,6 +225,25 @@ def _read_all(cap: cv2.VideoCapture) -> Iterator[np.ndarray]:
             yield frame
     finally:
         cap.release()
+
+
+def _screen_height() -> int:
+    try:
+        import ctypes
+
+        return int(ctypes.windll.user32.GetSystemMetrics(1))  # alto de la pantalla
+    except Exception:  # noqa: BLE001 — fuera de Windows, un alto razonable
+        return 1000
+
+
+def _fit_window(image: np.ndarray) -> None:
+    """La ventana ocupa el alto de la pantalla, pegada a la izquierda: la otra mitad
+    queda para Telegram."""
+    height, width = image.shape[:2]
+    target_h = int(_screen_height() * 0.88)
+    target_w = int(width * target_h / height)
+    cv2.resizeWindow(WINDOW, target_w, target_h)
+    cv2.moveWindow(WINDOW, 0, 0)
 
 
 def _wait(due: float | None, no_window: bool) -> str | None:
@@ -306,6 +325,7 @@ def run(args) -> int:
     ref_clock, ref_s = time.monotonic(), 0.0
     last = None  # (frame, ts, video_s) del último frame mostrado
     interrupted = False
+    window_fitted = False
     failed = False
 
     def finish_pending() -> None:
@@ -349,6 +369,9 @@ def run(args) -> int:
             recorder.write(image)
             if not args.no_window:
                 cv2.imshow(WINDOW, image)
+                if not window_fitted:
+                    _fit_window(image)
+                    window_fitted = True
             due = None if source.live else ref_clock + (video_s - ref_s) / speed
             if args.no_window and realtime and due is not None:
                 # sin ventana pero en tiempo real: igual se respeta el reloj
