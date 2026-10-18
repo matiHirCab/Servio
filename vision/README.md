@@ -17,6 +17,18 @@ python main.py --source data/videos/demo.mp4 --classifier fake --no-telegram
 - Cada corrida deja `out/eventos.jsonl`; se puede reproducir (plan B de la demo) con `python tools/replay.py --file out/eventos.jsonl --speed 10` (`--no-telegram` para imprimir). Como el log se agrega, el replay lo corta en corridas (`run_started`) y reproduce la última con los umbrales con que se hizo (`--run N` para otra, `--all` para todas). También acepta un fixture: `--file ../fixtures/observations/mesa_completa.jsonl`, con umbrales de producción (`--demo` para los de demo). Escribe su propio log en `out/replay.jsonl` (se pisa en cada replay).
 - **Prueba punta a punta de los avisos (MAT-7):** `python main.py --source <video> --classifier fake --demo --speed 10 --limit 20` manda al grupo los tres tipos de aviso de cada mesa en ~1 min. El fake no mira la imagen, así que sirve cualquier video con sus zonas, pero tiene que durar al menos 10 min (`--limit 20` × 30 s); si es más corto, el loop corta antes y faltan avisos. Pensado para 2 mesas: cada mesa siguiente arranca su ciclo 3 lecturas más tarde, así que con más mesas subí `--limit` (+3 por mesa, y el video en proporción). Con Telegram usá siempre `--speed`: sin él el video corre a tope y se pasa el límite de ~20 mensajes por minuto del grupo. Cada mesa suma ~10 mensajes y ediciones por ciclo, así que con 4 mesas o más bajá a `--speed 5` o menos. El mismo recorrido, sin Telegram ni video, está en `tests/test_integration_alerts.py`.
 
+## Cámara del celular
+
+Con [DroidCam](https://www.dev47apps.com/) (Android y iPhone) el celular sirve de cámara por Wi-Fi, sin instalar nada en la PC:
+
+1. Celular y PC en la misma red. Lo más seguro en un evento es la zona Wi-Fi del celular, porque muchas redes públicas no dejan que los dispositivos se vean entre sí.
+2. Abrir DroidCam y anotar la `WiFi IP` (puerto 4747). Probar `http://<IP>:4747/video` en el navegador y **cerrar la pestaña**: la versión gratis acepta una sola conexión, así que tampoco se puede correr `main.py` y `vista_demo.py` a la vez.
+3. `python main.py --source http://<IP>:4747/video --classifier hybrid --demo --interval 10`
+
+- Dejá la app en primer plano, el celular enchufado y sin ahorro de batería para DroidCam.
+- La cámara se lee en un hilo aparte (si no, DroidCam corta la conexión mientras Claude clasifica) y, si se corta, se reconecta sola: se da por vencida si pasan 60 s sin un frame bueno. Una lectura por red que se cuelga (celular sin Wi-Fi) corta a los 5 s.
+- Para una sola mesa alcanza con un `config/zones.json` que ocupe todo el cuadro; las zonas se escalan si cambia la resolución.
+
 ## Tests
 
 ```bash
@@ -69,7 +81,7 @@ python -m servio_vision.classifiers.claude_plates mesa.jpg plato1.jpg plato2.jpg
 - Sin `YOLO_WEIGHTS` usa YOLOE preentrenado con los prompts `plate` y `bowl` (`imgsz=1280`, lo que funcionó en las pruebas: 11/11 platos en el video de IA). Encuentra los platos pero no su estado, así que sin Claude la lectura se descarta.
 - Con `YOLO_WEIGHTS` (el `yolov8n` entrenado con `food` / `finished_food`), si Claude falla usa el estado de YOLO con confianza más baja. Es también lo que usa `--classifier yolo`.
 - Si YOLO deja de encontrar un plato que ya conocía, el `hybrid` igual le manda a Claude el recorte de su última caja, hasta 3 lecturas seguidas. Si Claude lo ve, sigue con su id y su lectura; si tampoco lo ve, muestra la última lectura y después deja de mostrarlo.
-- Probar sobre un video (un frame por segundo, el frame entero como una mesa):
+- Probar sobre un video (un frame cada 0,5 s, el frame entero como una mesa):
 
 ```bash
 pip install -r requirements.txt -r requirements-yolo.txt

@@ -4,7 +4,8 @@ estima cuánta comida queda en cada uno.
 1. YOLO detecta los platos en el recorte de la mesa y se emparejan los ids.
 2. Un plato que YOLO dejó de ver se sigue mandando a Claude con su última caja mientras
    `IdCounter` lo recuerda (`MAX_MISSING` lecturas): si Claude lo ve, sigue con su id
-   y su lectura.
+   y su lectura, y se lo recuerda de nuevo. Si su caja se pisa con una que YOLO sí vio,
+   es el mismo plato con otro id y no se manda.
 3. Cada plato se recorta con 10 % de margen.
 4. Una llamada a Claude por mesa (`claude_plates.estimate_plates`) con la mesa y los platos;
    cada plato que ya tiene referencia (su recorte recién servido) la lleva al lado.
@@ -34,7 +35,7 @@ from servio_vision.classifiers.yolo import (
 )
 from servio_vision.detector import PlateDetector
 from servio_vision.schemas import EMPTY_MAX, FULL_MIN, Item, TableReport
-from servio_vision.tracking import IdCounter, position_label
+from servio_vision.tracking import IdCounter, bbox_iou, position_label
 
 logger = logging.getLogger(__name__)
 
@@ -50,6 +51,12 @@ FALLBACK_CONFIDENCE = 0.5  # la confianza de YOLO se multiplica por esto si Clau
 # un plato vacío: por eso una lectura de un plato perdido que dice vacío o que baja más
 # que esto de golpe no se toma como vista.
 LOST_MAX_DROP = 0.3
+# Un plato perdido cuya caja se pisa más que esto con una que YOLO vio en esta lectura
+# es ese mismo plato con otro id: mandarlo daría dos platos donde hay uno.
+LOST_MAX_IOU = 0.3
+# Lecturas seguidas que se sigue recordando un plato perdido que Claude ve. Con un tope:
+# si Claude se equivoca con el hueco, el plato fantasma no queda para siempre.
+LOST_KEEP_MAX = 10
 # Referencia: el recorte de un plato recién servido, que va a Claude junto al actual para
 # que mida contra lo que se sirvió. Se toma solo en las primeras lecturas visibles del plato
 # y si Claude lo ve lleno: un id nuevo a mitad de comida (p. ej., tras perder el plato) no
@@ -78,15 +85,14 @@ def _crop(img: Image.Image, bbox) -> Image.Image:
     )
 
 
-def _looks_taken(fill_ratio: float, last: Item | None) -> bool:
-    """Lectura de un plato que YOLO perdió que parece el hueco donde estaba."""
+def _looks_taken(fill_ratio: float, last_fill: float | None) -> bool:
+    """Lectura de un plato que YOLO perdió que parece el hueco donde estaba.
+
+    `last_fill` es la última lectura visible de Claude, no la suavizada: contra la
+    suavizada, un plato que se está comiendo parece caer de golpe."""
     if fill_ratio < EMPTY_MAX:
         return True
-    return (
-        last is not None
-        and last.fill_ratio is not None
-        and last.fill_ratio - fill_ratio > LOST_MAX_DROP
-    )
+    return last_fill is not None and last_fill - fill_ratio > LOST_MAX_DROP
 
 
 @dataclass
@@ -124,7 +130,8 @@ class HybridClassifier:
         self.ids = IdCounter()
         self.people_present: dict[str, bool] = {}  # último que dijo Claude, por mesa
         self.hidden: dict[tuple[str, str], int] = {}  # lecturas seguidas sin verlo
-        self.lost: dict[str, set[str]] = {}  # por mesa, perdidos en la última lectura
+        self.last_fill: dict[tuple[str, str], float] = {}  # última lectura visible
+        self.lost_readings: dict[tuple[str, str], int] = {}  # seguidas sin YOLO
         self.references: dict[tuple[str, str], bytes] = {}  # ver REFERENCE_READINGS
         self.readings: dict[tuple[str, str], int] = {}  # lecturas visibles por plato
         self.rises: dict[tuple[str, str], int] = {}  # lecturas seguidas que suben
@@ -147,18 +154,17 @@ class HybridClassifier:
         puede prepararse antes de que Claude conteste esta (con `seen_items` de la
         anterior como `previous_items`)."""
         img = decode(image)
-        # los perdidos traen su caja vieja: emparejan desde la memoria de IdCounter,
-        # con menos prioridad que los que YOLO vio en la lectura anterior
-        stale = self.lost.get(table_id, set())
-        previous = [i for i in previous_items if i.id not in stale]
-        plates = find_plates(self.detector, img, previous, self.ids, table_id)
-        lost = [FoundPlate(pid, bbox, None) for pid, bbox in self.ids.missing(table_id)]
-        self.lost[table_id] = {p.id for p in lost}
+        plates = find_plates(self.detector, img, previous_items, self.ids, table_id)
+        lost = [
+            FoundPlate(pid, bbox, None)
+            for pid, bbox in self.ids.missing(table_id)
+            if all(bbox_iou(bbox, p.bbox) <= LOST_MAX_IOU for p in plates)
+        ]
         everything = plates + lost
         return Prepared(
             table_id=table_id,
             plates=everything,
-            lost=self.lost[table_id],
+            lost={p.id for p in lost},
             table_jpeg=_jpeg(img, TABLE_SIDE) if everything else b"",
             plate_jpegs=[_jpeg(_crop(img, p.bbox), CROP_SIDE) for p in everything],
             references=[self.references.get((table_id, p.id)) for p in everything],
@@ -200,17 +206,26 @@ class HybridClassifier:
         self.people_present[table_id] = report.people_present
         last = {i.id: i for i in previous_items if i.state is not None}
         items = []
-        for p, est, crop in zip(prepared.plates, report.plates, prepared.plate_jpegs):
+        for p, est, crop, ref in zip(
+            prepared.plates, report.plates, prepared.plate_jpegs, prepared.references
+        ):
             key = (table_id, p.id)
             visible = est.visible
-            if visible and p.id in prepared.lost:
-                visible = not _looks_taken(est.fill_ratio, last.get(p.id))
-            if visible and self._rose(key, est.fill_ratio, last.get(p.id)):
+            if p.id in prepared.lost:
+                n = self.lost_readings[key] = self.lost_readings.get(key, 0) + 1
+                if visible:
+                    visible = not _looks_taken(est.fill_ratio, self.last_fill.get(key))
+                if visible and n < LOST_KEEP_MAX:
+                    self.ids.keep(table_id, p.id)
+            else:
+                self.lost_readings.pop(key, None)
+            if visible and self._rose(key, est.fill_ratio):
                 visible = False
             self.hidden[key] = 0 if visible else self.hidden.get(key, 0) + 1
             if visible and p.id not in prepared.lost:
-                self._update_reference(key, est, crop)
+                self._update_reference(key, est, crop, sent=ref is not None)
             if visible:
+                self.last_fill[key] = est.fill_ratio
                 reading = {"fill_ratio": est.fill_ratio, "confidence": est.confidence}
             elif p.id in last and self.hidden[key] < HIDDEN_READINGS:
                 # tapado hace poco y ya lo vimos: muestra su última lectura, pero
@@ -237,8 +252,12 @@ class HybridClassifier:
             )
         return TableReport(items=items, people_present=report.people_present)
 
-    def _update_reference(self, key, est: claude_plates.PlateEstimate, crop: bytes):
-        if not est.same_plate and self.references.pop(key, None) is not None:
+    def _update_reference(
+        self, key, est: claude_plates.PlateEstimate, crop: bytes, sent: bool
+    ):
+        # `same_plate` solo dice algo si esta lectura llevó la referencia: con lecturas
+        # en paralelo, la referencia puede haberse guardado después de preparar esta
+        if sent and not est.same_plate and self.references.pop(key, None) is not None:
             logger.info(
                 "Mesa %s %s: la referencia es de otra comida, se descarta", *key
             )
@@ -252,13 +271,11 @@ class HybridClassifier:
         ):
             self.references[key] = crop
 
-    def _rose(self, key: tuple[str, str], fill_ratio: float, last: Item | None) -> bool:
-        """True si la lectura sube de golpe y todavía no hay que creerle."""
-        if (
-            last is None
-            or last.fill_ratio is None
-            or fill_ratio - last.fill_ratio <= RISE_MAX
-        ):
+    def _rose(self, key: tuple[str, str], fill_ratio: float) -> bool:
+        """True si la lectura sube de golpe respecto de la última vista y todavía no
+        hay que creerle."""
+        last = self.last_fill.get(key)
+        if last is None or fill_ratio - last <= RISE_MAX:
             self.rises.pop(key, None)
             return False
         self.rises[key] = self.rises.get(key, 0) + 1

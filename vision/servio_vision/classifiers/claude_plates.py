@@ -1,7 +1,8 @@
 """Claude por plato (TOM-3): estima cuánta comida queda en cada plato de una mesa.
 
 Recibe el recorte de la mesa y los recortes de cada plato (JPEG) y devuelve, por
-plato, `fill_ratio`, `confidence` y `visible`, más `people_present`.
+plato, `fill_ratio`, `confidence`, `visible` y `same_plate`, más `people_present`.
+Cada plato puede llevar su referencia (el recorte recién servido) antes del actual.
 
 Proveedor según `CLAUDE_PROVIDER`:
 - `cli` (por defecto): el Claude Code instalado y logueado (`claude -p`), con la
@@ -78,7 +79,8 @@ def build_content(
         _image_block(table_jpeg),
     ]
     references = references or [None] * len(plate_jpegs)
-    for i, (jpeg, ref) in enumerate(zip(plate_jpegs, references), start=1):
+    # strict: un plato sin su lugar en `references` no se manda en silencio
+    for i, (jpeg, ref) in enumerate(zip(plate_jpegs, references, strict=True), start=1):
         if ref is None:
             content.append({"type": "text", "text": prompt.plate_caption(i)})
         else:

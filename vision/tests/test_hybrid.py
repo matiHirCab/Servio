@@ -237,6 +237,7 @@ def test_hybrid_stops_asking_about_a_lost_plate(claude):
     claude.answer = _answer(True)
     items = clf.classify(_jpeg(), "T1", []).items
     clf.detector = FakeDetector([])
+    claude.answer = _answer(False)
     for _ in range(MAX_MISSING):
         items = clf.classify(_jpeg(), "T1", items).items
     calls = len(claude.calls)
@@ -403,3 +404,64 @@ def test_hybrid_small_rise_is_taken(claude):
     claude.answer = _one_plate(0.55)
     item = clf.classify(_jpeg(), "T1", items).items[0]
     assert (item.fill_ratio, item.visible) == (0.55, True)
+
+
+def test_hybrid_lost_plate_under_a_new_box_is_not_sent(claude):
+    """YOLO vuelve a ver el plato pero con un id nuevo (se corrió más de MAX_SHIFT):
+    el perdido se pisa con la caja nueva y no se manda, así no hay dos platos."""
+    clf = HybridClassifier(detector=FakeDetector([PLATES[1]]))
+    claude.answer = _answer(True)
+    first = clf.classify(_jpeg(), "T1", [])
+    clf.detector = FakeDetector([Detection((20, 61, 100, 141), 0.9, "plate")])
+    second = clf.classify(_jpeg(), "T1", first.items)
+    assert [i.id for i in second.items] == ["p2"]
+    assert len(claude.calls[1]) == 1
+
+
+def test_hybrid_lost_plate_drop_is_measured_from_claude_not_the_smoothed(claude):
+    """En main.py `previous_items` son los suavizados (todavía 0.9): un plato que se
+    está comiendo (0.55 en la lectura anterior de Claude) no se toma como retirado."""
+    clf = HybridClassifier(detector=FakeDetector(PLATES))
+    claude.answer = _answer(True, True, fill=0.9)
+    smoothed = clf.classify(_jpeg(), "T1", []).items
+    claude.answer = _answer(True, True, fill=0.55)
+    clf.classify(_jpeg(), "T1", smoothed)
+    clf.detector = FakeDetector([PLATES[0]])  # YOLO pierde p2
+    third = clf.classify(_jpeg(), "T1", smoothed)
+    p2 = next(i for i in third.items if i.id == "p2")
+    assert (p2.fill_ratio, p2.visible) == (0.55, True)
+
+
+def test_hybrid_lost_plate_that_claude_keeps_seeing_keeps_its_id(claude):
+    clf = HybridClassifier(detector=FakeDetector(PLATES))
+    claude.answer = _answer(True, True)
+    items = clf.classify(_jpeg(), "T1", []).items
+    clf.detector = FakeDetector([PLATES[0]])
+    for _ in range(MAX_MISSING + 2):
+        items = clf.classify(_jpeg(), "T1", items).items
+        assert sorted(i.id for i in items) == ["p1", "p2"]
+    clf.detector = FakeDetector(PLATES)
+    items = clf.classify(_jpeg(), "T1", items).items
+    assert sorted(i.id for i in items) == ["p1", "p2"]
+
+
+def test_hybrid_lost_plate_is_not_kept_forever(claude):
+    clf = HybridClassifier(detector=FakeDetector(PLATES))
+    claude.answer = _answer(True, True)
+    items = clf.classify(_jpeg(), "T1", []).items
+    clf.detector = FakeDetector([PLATES[0]])
+    for _ in range(hybrid.LOST_KEEP_MAX + MAX_MISSING + 1):
+        items = clf.classify(_jpeg(), "T1", items).items
+    assert [i.id for i in items] == ["p1"]
+
+
+def test_hybrid_reference_saved_after_prepare_is_not_dropped(claude):
+    """Lecturas en paralelo: la referencia se guarda después de preparar la siguiente,
+    que no la llevó. Su `same_plate` no dice nada de esa referencia."""
+    clf = HybridClassifier(detector=FakeDetector([PLATES[0]]))
+    a = clf.prepare(_jpeg(), "T1", [])
+    b = clf.prepare(_jpeg(), "T1", a.seen_items)
+    clf.finish(a, _one(0.95), [])
+    clf.finish(b, _one(0.9, same_plate=False), [])
+    c = clf.prepare(_jpeg(), "T1", b.seen_items)
+    assert c.references[0] is not None

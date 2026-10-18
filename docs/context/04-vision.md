@@ -20,24 +20,21 @@ Por cada llamada a `classify(recorte_mesa, table_id, items_anteriores)`:
 4. Arma el `TableReport` con `id`, `bbox`, `position` (derivada de la caja), `fill_ratio` y el estado.
 5. Si Claude falla o tarda más de 10 s: estado según la clase de YOLO, con confianza más baja.
 
-### Prompt de Claude (base, iterar con el video)
+### Prompt de Claude (iterar con el video)
 
-```
-Sos el sistema de visión de un restaurante. La primera imagen es una vista desde arriba de la mesa {table_id}.
-Las siguientes son recortes de cada plato de esa mesa, numerados desde 1 en el mismo orden.
-Para cada plato estimá:
-- fill_ratio: cuánta comida queda, de 0 (vacío o solo restos) a 1 (recién servido, intacto).
-- confidence: de 0 a 1.
-- visible: false solo si no se ve la comida del plato (una persona o un brazo tapa más de la mitad).
-  Cubiertos, servilletas o una mano en el borde no cuentan: estimá igual con lo que se ve.
-Indicá también si hay personas sentadas en la mesa (people_present).
-Respondé SOLO con la herramienta report_plates.
-```
+El texto vigente está en `vision/servio_vision/prompt.py` (`SYSTEM_PROMPT`). En resumen, por plato:
 
-Herramienta `report_plates`:
+- `fill_ratio`: fracción de la porción servida que queda, de 0 (vacío o restos) a 1 (intacto). Con referencia, la referencia vale 1 y se cuentan las piezas.
+- `confidence`: de 0 a 1.
+- `visible`: false **solo** si una mano, un brazo o un cubierto agarrado está encima de la comida o agarrando comida. Cubiertos apoyados (también cruzados encima del plato), servilletas o una mano en el borde no cuentan: se estima con lo que se ve. Un plato con los cubiertos apoyados y sin comida a la vista está vacío.
+- `same_plate`: con referencia, false si la referencia muestra otra comida; sin referencia, true.
+
+Y por mesa, `people_present`.
+
+Respuesta `report_plates` (esquema `REPORT_PLATES_SCHEMA`, todos los campos obligatorios):
 
 ```json
-{ "plates": [ { "index": 1, "fill_ratio": 0.5, "confidence": 0.8, "visible": true } ],
+{ "plates": [ { "index": 1, "fill_ratio": 0.5, "confidence": 0.8, "visible": true, "same_plate": true } ],
   "people_present": true }
 ```
 
