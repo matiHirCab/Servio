@@ -1,0 +1,28 @@
+# Servio en un servidor chico. Desde la raíz del repo:
+#
+#   docker compose up -d --build
+#   docker compose logs -f servio
+#
+# Antes: .env con las claves (ver .env.example) y vision/config/zones.json con las mesas.
+services:
+  servio:
+    build: .
+    image: servio
+    # main.py termina si la cámara no vuelve en 60 s: Docker lo levanta de nuevo.
+    restart: unless-stopped
+    environment:
+      # Las rutas del .env son relativas a la raíz del repo; adentro se corre desde vision/.
+      YOLO_WEIGHTS: /app/vision/models/best.pt
+    command:
+      - --source
+      - ${SERVIO_SOURCE:?Definí SERVIO_SOURCE en .env (ej. rtsp://usuario:clave@192.168.0.50/stream)}
+      - --classifier
+      - ${SERVIO_CLASSIFIER:-hybrid}
+    volumes:
+      - ./.env:/app/.env:ro
+      - ./vision/config:/app/vision/config:ro
+      - ./vision/models:/app/vision/models:ro
+      - ./vision/out:/app/vision/out
+    # Cámara USB conectada al servidor (con --source 0): descomentar.
+    # devices:
+    #   - /dev/video0:/dev/video0
