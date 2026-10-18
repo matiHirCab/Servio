@@ -33,9 +33,19 @@ from servio_vision.capture import open_source
 from servio_vision.classifier import Classifier, available_classifiers, get_classifier
 from servio_vision.schemas import Item, TableReport
 from servio_vision.smoothing import TableSmoother
-from servio_vision.zones import DEFAULT_ZONES, Zones, crop_table, load_zones, to_jpeg
+from servio_vision.tables import TableDetector, TableTracker
+from servio_vision.zones import (
+    Zones,
+    crop_table,
+    load_zones,
+    remap_bbox,
+    table_rect,
+    to_jpeg,
+)
 
 logger = logging.getLogger("servio")
+
+MAX_TABLE_WORKERS = 8  # mesas que se clasifican a la vez
 
 ObservationHandler = Callable[[TableObservation], object]
 
@@ -46,21 +56,62 @@ class Pipeline:
     def __init__(
         self,
         classifier: Classifier,
-        zones: Zones,
+        zones: Zones | None,
         on_observation: ObservationHandler,
         finished_after: float | None = None,
+        tables: TableTracker | None = None,
     ) -> None:
+        """`zones` fijas (de un archivo) o `tables`, que detecta las mesas en cada lectura."""
+        if (zones is None) == (tables is None):
+            raise ValueError("Pipeline necesita zones o tables, no las dos")
         self.classifier = classifier
-        self.zones = zones
+        self.zones = zones or Zones(frame_size=(1, 1), tables=[])
+        self.tables = tables
         self.on_observation = on_observation
-        self.smoothers = {
-            t.table_id: TableSmoother(finished_after) for t in zones.tables
-        }
-        self.previous: dict[str, list[Item]] = {t.table_id: [] for t in zones.tables}
-        self._pool = ThreadPoolExecutor(max_workers=max(1, len(zones.tables)))
+        self.finished_after = finished_after
+        self.smoothers: dict[str, TableSmoother] = {}
+        self._rects: dict[str, tuple[int, int, int, int]] = {}  # recorte de cada mesa
+        self.previous: dict[str, list[Item]] = {}
+        self._add_tables(self.zones)
+        self._pool = ThreadPoolExecutor(max_workers=MAX_TABLE_WORKERS)
+
+    def _follow_moved_tables(self, frame: np.ndarray) -> None:
+        """Si el recorte de una mesa cambió, las cajas de sus platos (relativas al
+        recorte) se pasan al recorte nuevo: así el clasificador y el suavizado siguen
+        reconociendo los mismos platos aunque la mesa se haya movido."""
+        for zone in self.zones.tables:
+            try:
+                rect = table_rect(frame, zone, self.zones)
+            except ValueError:
+                continue
+            old = self._rects.get(zone.table_id)
+            self._rects[zone.table_id] = rect
+            if old is None or old == rect:
+                continue
+
+            def remap(bbox, old=old, new=rect):
+                return remap_bbox(bbox, old, new)
+
+            self.previous[zone.table_id] = [
+                i.model_copy(update={"bbox": remap(i.bbox)}) if i.bbox else i
+                for i in self.previous[zone.table_id]
+            ]
+            self.smoothers[zone.table_id].remap_boxes(remap)
+
+    def _add_tables(self, zones: Zones) -> None:
+        for t in zones.tables:
+            self.smoothers.setdefault(t.table_id, TableSmoother(self.finished_after))
+            self.previous.setdefault(t.table_id, [])
 
     def process_frame(self, frame: np.ndarray, ts: datetime) -> list[TableObservation]:
         """Procesa un frame. Un error en una mesa descarta esa mesa, no corta el loop."""
+        if self.tables is not None:
+            try:
+                self.zones = self.tables.update(frame)
+                self._add_tables(self.zones)
+                self._follow_moved_tables(frame)
+            except Exception:
+                logger.exception("%s: no se pudieron detectar las mesas", ts)
         futures = {}
         for zone in self.zones.tables:
             try:
@@ -179,7 +230,11 @@ def build_parser(
     parser = argparse.ArgumentParser(description=description)
     parser.add_argument("--source", required=True, help="video, carpeta, 0 o URL")
     parser.add_argument("--classifier", default="fake", choices=available_classifiers())
-    parser.add_argument("--zones", type=Path, default=DEFAULT_ZONES)
+    parser.add_argument(
+        "--zones",
+        type=Path,
+        help="zonas de mesas a mano (zones.json); sin esto, las mesas se detectan solas",
+    )
     parser.add_argument(
         "--interval",
         type=interval_seconds,
@@ -230,14 +285,26 @@ def build_pipeline(args: argparse.Namespace) -> Pipeline | None:
     # antes de calcular los umbrales: si no, ALERT_T1/T2/REMINDER y DEMO_MODE del
     # .env no se aplican (alerts.configure lo cargaba recién después)
     load_dotenv(ENV_FILE)  # no pisa variables ya puestas
-    if not args.zones.exists():
+    zones: Zones | None = None
+    tables: TableTracker | None = None
+    if args.zones is None:
+        try:
+            tables = TableTracker(TableDetector())
+        except ImportError:
+            logger.error(
+                "Para detectar las mesas solas hace falta ultralytics "
+                "(pip install -r requirements-yolo.txt), o pasá --zones config/zones.json."
+            )
+            return None
+    elif not args.zones.exists():
         logger.error(
-            "No existe %s. Generalo con la detección de mesas o con "
-            "tools/draw_zones.py --source <video>.",
+            "No existe %s. Sacá --zones para que las mesas se detecten solas, o "
+            "generalo con tools/draw_zones.py --source <video>.",
             args.zones,
         )
         return None
-    zones = load_zones(args.zones)
+    else:
+        zones = load_zones(args.zones)
     try:
         config = load_config(round(args.interval), demo_enabled(args.demo))
     except ValueError as e:
@@ -247,7 +314,9 @@ def build_pipeline(args: argparse.Namespace) -> Pipeline | None:
         return None
     logger.info(
         "Mesas: %s · cada %ss · umbrales T1=%ss T2=%ss R=%ss",
-        ", ".join(t.table_id for t in zones.tables),
+        "detección automática"
+        if zones is None
+        else ", ".join(t.table_id for t in zones.tables),
         args.interval,
         config.t1,
         config.t2,
@@ -262,6 +331,7 @@ def build_pipeline(args: argparse.Namespace) -> Pipeline | None:
         zones,
         observation_handler(config, args.no_telegram),
         finished_after=finished_after,
+        tables=tables,
     )
 
 

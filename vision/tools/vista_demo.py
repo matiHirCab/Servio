@@ -77,13 +77,6 @@ PLATE_LABELS = {
     "por_terminar": "por terminar",
     "vacio": "vacio",  # sin tilde: la fuente de OpenCV no tiene acentos
 }
-TABLE_LABELS = {
-    "libre": "libre",
-    "servida": "servida",
-    "comiendo": "comiendo",
-    "por_terminar": "por terminar",
-    "terminada": "terminada",
-}
 FONT = cv2.FONT_HERSHEY_SIMPLEX
 
 
@@ -98,11 +91,17 @@ class DemoState:
     """Lo que se dibuja: la última lectura de cada mesa y desde cuándo está así."""
 
     def __init__(self, zones: Zones) -> None:
+        self.zones = (
+            zones  # mesas de la última lectura (con detección automática, cambian)
+        )
         self.tables = {t.table_id: TableView() for t in zones.tables}
         self.readings = 0
 
     def update(self, pipeline: Pipeline, ts: datetime) -> None:
         self.readings += 1
+        self.zones = getattr(pipeline, "zones", self.zones)
+        for t in self.zones.tables:
+            self.tables.setdefault(t.table_id, TableView())
         for table_id, view in self.tables.items():
             items = list(pipeline.previous.get(table_id, []))
             status = table_status(i.state for i in items if i.state)
@@ -130,7 +129,7 @@ def draw_overlay(
     width = view.shape[1]
     scale = max(0.9, width / 1920)  # videos chicos (celular vertical): texto legible
     for zone in zones.tables:
-        table = state.tables[zone.table_id]
+        table = state.tables.get(zone.table_id, TableView())
         color = TABLE_COLORS[table.status]
         polygon = scaled_polygon(zone, zones, view)
         cv2.polylines(view, [polygon], True, color, max(2, round(4 * scale)))
@@ -154,13 +153,9 @@ def draw_overlay(
             text = PLATE_LABELS[item.state]
             _label(view, text, (p1[0], max(p1[1] - 8, 20)), plate_color, 0.6 * scale, 2)
 
-        minutes = (
-            0 if table.since is None else int((now - table.since).total_seconds() // 60)
-        )
-        status_text = TABLE_LABELS[table.status]
         _label(
             view,
-            f"{zone.name}: {status_text} - {minutes} min",
+            zone.name,  # solo "Mesa 1": el estado se ve por el color
             (x0 + 8, y0 + round(34 * scale)),
             color,
             0.9 * scale,
@@ -321,7 +316,7 @@ def run(args) -> int:
             state.update(pipeline, pending_ts)
 
     def render(frame, ts, video_s) -> np.ndarray:
-        return draw_overlay(frame, pipeline.zones, state, ts)
+        return draw_overlay(frame, state.zones, state, ts)
 
     if not args.no_window:
         cv2.namedWindow(WINDOW, cv2.WINDOW_NORMAL)

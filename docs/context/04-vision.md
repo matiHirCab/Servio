@@ -77,7 +77,7 @@ Una sola cadencia: **se mira cada 30 s** (`--interval 30`, configurable). En cad
 frame (cada 30 s) → recorte por mesa → classify() → suavizado → observación → alerts
 ```
 
-1. **Zonas**: polígono por mesa en `config/zones.json`, dibujado con `tools/draw_zones.py`.
+1. **Mesas**: por defecto se **detectan solas** en cada lectura (`servio_vision/tables.py`): un YOLO de COCO (clase "dining table") encuentra la mesa y `TableTracker` le da un nombre estable ("Mesa 1") aunque se mueva; si se movió, las cajas de los platos se pasan al recorte nuevo. Si en una lectura no se ve, queda donde estaba; si nunca se vio ninguna, se usa el cuadro entero. Con `--zones config/zones.json` se usan zonas fijas (dibujadas con `tools/draw_zones.py`).
 2. **Recorte**: el rectángulo de la mesa desde el frame original, JPEG calidad 85.
 3. **Clasificador**: `--classifier fake|yolo|hybrid|claude`.
 4. **Suavizado** (abajo).

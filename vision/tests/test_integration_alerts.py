@@ -27,10 +27,13 @@ FRAME = np.zeros((100, 200, 3), np.uint8)
 T0 = datetime(2026, 10, 17, 20, 0, tzinfo=UTC)
 INTERVAL = 30
 READINGS = 20  # 10 min de video: cada mesa abre y cierra los tres avisos
-ALERT_TYPES = {"mesa_por_terminar", "plato_vacio", "plato_lleno_mucho"}
+# En el fake los platos de una mesa avanzan juntos: se vacían a la vez, así que
+# sale mesa_terminada y no plato_vacio (que es para un plato vacío mientras el
+# resto sigue comiendo).
+ALERT_TYPES = {"mesa_terminada", "plato_lleno_mucho"}
 
 
-def test_fake_loop_with_demo_thresholds_opens_and_closes_the_three_alerts(
+def test_fake_loop_with_demo_thresholds_opens_and_closes_its_alerts(
     tmp_path, monkeypatch, caplog
 ):
     monkeypatch.setattr(alerts, "_processor", None)

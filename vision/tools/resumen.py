@@ -40,7 +40,7 @@ VISION_DIR = Path(__file__).resolve().parents[1]
 DEFAULT_LOG = VISION_DIR / "out" / "eventos.jsonl"
 
 ALERT_TYPES = {
-    "mesa_por_terminar": "Por terminar",
+    "mesa_terminada": "Mesa terminó",
     "plato_vacio": "Platos vacíos",
     "plato_lleno_mucho": "Plato lleno",
 }

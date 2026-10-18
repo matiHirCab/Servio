@@ -91,6 +91,14 @@ class TableSmoother:
 
         return [track.accepted for track in self._tracks.values()]
 
+    def remap_boxes(self, remap) -> None:
+        """Pasa las cajas de los platos al recorte nuevo de la mesa (si se movió)."""
+        for track in self._tracks.values():
+            if track.accepted.bbox is not None:
+                track.accepted = track.accepted.model_copy(
+                    update={"bbox": remap(track.accepted.bbox)}
+                )
+
     def _finish_by_time(self, track: _Track, ts: datetime | None) -> None:
         """`por_terminar` durante `finished_after` segundos → `vacio`."""
         if (

@@ -69,6 +69,9 @@ def test_log_starts_with_run_config(tmp_path):
 
 
 VACIO = ("T1-p1", "vacio", "centro")
+# otro plato que se sigue comiendo: con él, un plato vacío es plato_vacio (sin él, la
+# mesa entera terminó y avisa mesa_terminada)
+COMIENDO = ("T1-p9", "comiendo", "izquierda")
 LLENO = ("T1-p2", "lleno", "abajo-derecha")
 
 
@@ -98,7 +101,7 @@ def test_fixture_log_matches_expected(tmp_path, name):
 
 def test_observation_line_round_trips(tmp_path):
     p = processor(tmp_path)
-    o = obs(0, VACIO)
+    o = obs(0, VACIO, COMIENDO)
     p.process(o)
     (line,) = log_lines(p)
     assert line.pop("event") == "observation"
@@ -110,39 +113,38 @@ def test_alerts_of_one_table_go_in_one_message(tmp_path):
     for s in (0, 30, 60):
         p.process(obs(s, VACIO, LLENO))
     notifier = p.notifier
-    # A los 0 s la mesa queda por_terminar (1 de 2 vacío); a los 60 s, los otros dos.
-    assert notifier.sent[0] == "🍽️ Mesa 1 está terminando."
-    assert notifier.sent[1] == (
+    # "por terminar" ya no avisa: a los 60 s se abren los dos, en un solo mensaje.
+    grouped = (
         "🧹 Mesa 1: hay platos vacíos para retirar.\n"
         "❓ Mesa 1: un plato sigue lleno hace 1 min. ¿Está todo bien?"
     )
+    assert notifier.sent == [grouped]
     ids = {a.type: a.telegram_message_id for a in p.open_alerts.values()}
-    assert ids == {"mesa_por_terminar": 1, "plato_vacio": 2, "plato_lleno_mucho": 2}
+    assert ids == {"plato_vacio": 1, "plato_lleno_mucho": 1}
 
 
 def test_closing_part_of_a_group_marks_only_that_line(tmp_path):
     p = processor(tmp_path, DEMO)
     for s in (0, 30, 60):
         p.process(obs(s, VACIO, LLENO))
-    # Retiran el plato vacío: se cierran plato_vacio y mesa_por_terminar.
+    # Retiran el plato vacío: se cierra plato_vacio, solo esa línea.
     p.process(obs(90, LLENO))
     edits = dict(p.notifier.edits)
-    assert edits[1] == "🍽️ Mesa 1 está terminando.\n\n✅ ya resuelto"
-    assert edits[2] == (
+    assert edits[1] == (
         "🧹 Mesa 1: hay platos vacíos para retirar. ✅\n"
         "❓ Mesa 1: un plato sigue lleno hace 1 min. ¿Está todo bien?"
     )
     # Se van sin comer: dos lecturas sin gente cierran el otro y el mensaje entero.
     p.process(obs(120, LLENO, people=False))
     p.process(obs(150, LLENO, people=False))
-    assert p.notifier.edits[-1] == (2, resolved_text(edits[2].replace(" ✅", "")))
+    assert p.notifier.edits[-1] == (1, resolved_text(edits[1].replace(" ✅", "")))
     assert p.open_alerts == {}
 
 
 def test_reminder_sends_new_message_and_keeps_original_id(tmp_path):
     p = processor(tmp_path)
     for s in range(0, 241, 30):
-        p.process(obs(s, VACIO))
+        p.process(obs(s, VACIO, COMIENDO))
     assert p.notifier.sent == [
         "🧹 Mesa 1: hay platos vacíos para retirar.",
         "🧹 Mesa 1: los platos vacíos siguen sin retirar hace 4 min.",
@@ -157,7 +159,7 @@ def test_reminder_sends_new_message_and_keeps_original_id(tmp_path):
 def test_telegram_down_keeps_alert_open_and_skips_edit(tmp_path):
     p = processor(tmp_path, fail=True)
     for s in (0, 30, 60):
-        p.process(obs(s, VACIO))
+        p.process(obs(s, VACIO, COMIENDO))
     (alert,) = p.open_alerts.values()
     assert alert.telegram_message_id is None
     p.process(obs(90))
@@ -170,9 +172,9 @@ def test_telegram_down_keeps_alert_open_and_skips_edit(tmp_path):
 
 def test_rejected_observation_is_still_logged(tmp_path):
     p = processor(tmp_path)
-    p.process(obs(30, VACIO))
+    p.process(obs(30, VACIO, COMIENDO))
     with pytest.raises(ValueError):
-        p.process(obs(0, VACIO))  # ts hacia atrás
+        p.process(obs(0, VACIO, COMIENDO))  # ts hacia atrás
     assert [line["ts"] for line in log_lines(p)] == [
         "2026-10-17T20:00:30Z",
         "2026-10-17T20:00:00Z",
@@ -182,7 +184,7 @@ def test_rejected_observation_is_still_logged(tmp_path):
 def test_alert_log_line(tmp_path):
     p = processor(tmp_path)
     for s in (0, 30, 60):
-        p.process(obs(s, VACIO))
+        p.process(obs(s, VACIO, COMIENDO))
     line = log_lines(p)[-1]
     assert line == {
         "event": "alert_opened",
@@ -203,6 +205,6 @@ def test_module_configure_and_process(tmp_path, capsys):
     log = tmp_path / "out" / "eventos.jsonl"
     alerts.configure(DEMO, telegram=False, log_path=log)
     for s in (0, 30, 60):
-        alerts.process(obs(s, VACIO))
+        alerts.process(obs(s, VACIO, COMIENDO))
     assert "[telegram #" in capsys.readouterr().out
     assert len(log.read_text("utf-8").splitlines()) == 5  # run + 3 obs + plato_vacio

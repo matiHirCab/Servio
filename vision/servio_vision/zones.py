@@ -84,6 +84,26 @@ def table_rect(
     return x0, y0, x1, y1
 
 
+def remap_bbox(
+    bbox: tuple[float, float, float, float],
+    old: tuple[int, int, int, int],
+    new: tuple[int, int, int, int],
+) -> tuple[float, float, float, float]:
+    """Caja [x, y, w, h] normalizada en el recorte `old` → la misma caja en `new`.
+
+    `old`/`new` son (x0, y0, x1, y1) en píxeles del frame (`table_rect`).
+    """
+    bx, by, bw, bh = bbox
+    ow, oh = old[2] - old[0], old[3] - old[1]
+    nw, nh = new[2] - new[0], new[3] - new[1]
+    x = (old[0] + bx * ow - new[0]) / nw
+    y = (old[1] + by * oh - new[1]) / nh
+    w, h = bw * ow / nw, bh * oh / nh
+    x = min(max(x, 0.0), 1.0)
+    y = min(max(y, 0.0), 1.0)
+    return (x, y, min(w, 1.0 - x), min(h, 1.0 - y))
+
+
 def crop_table(frame: np.ndarray, zone: TableZone, zones: Zones) -> np.ndarray:
     """Rectángulo que encierra la mesa, recortado al borde del frame."""
     x0, y0, x1, y1 = table_rect(frame, zone, zones)

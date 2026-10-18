@@ -21,7 +21,7 @@ from pydantic import (
 
 from servio_vision.schemas import PlateState, state_from_fill_ratio
 
-AlertType = Literal["mesa_por_terminar", "plato_vacio", "plato_lleno_mucho"]
+AlertType = Literal["mesa_terminada", "plato_vacio", "plato_lleno_mucho"]
 AlertStatus = Literal["abierta", "resuelta"]
 
 

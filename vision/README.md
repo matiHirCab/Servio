@@ -27,7 +27,7 @@ Con [DroidCam](https://www.dev47apps.com/) (Android y iPhone) el celular sirve d
 
 - Dejá la app en primer plano, el celular enchufado y sin ahorro de batería para DroidCam.
 - La cámara se lee en un hilo aparte (si no, DroidCam corta la conexión mientras Claude clasifica) y, si se corta, se reconecta sola: se da por vencida si pasan 60 s sin un frame bueno. Una lectura por red que se cuelga (celular sin Wi-Fi) corta a los 5 s.
-- Para una sola mesa alcanza con un `config/zones.json` que ocupe todo el cuadro; las zonas se escalan si cambia la resolución.
+- **Mesas:** se detectan solas en cada lectura (YOLO de COCO, clase "dining table"; necesita `requirements-yolo.txt`) y se llaman "Mesa 1", "Mesa 2"… Si se mueven, el recuadro las sigue. Para zonas fijas, `--zones config/zones.json` (con `tools/draw_zones.py`).
 
 ## Tests
 
@@ -45,11 +45,11 @@ Los tests nunca escriben en el `out/eventos.jsonl` real: cada uno usa una carpet
 
 ```bash
 # en vivo con la cámara del celular (DroidCam): siempre en tiempo real
-python tools/vista_demo.py --source http://<IP>:4747/video --zones config/zones.json --classifier hybrid --demo --interval 5
+python tools/vista_demo.py --source http://<IP>:4747/video --classifier hybrid --demo --interval 5
 # simulación con el video de 3 min de la demo, como si fuera la cámara
-python tools/vista_demo.py --source "<video>.mp4" --zones config/zones_demo.json --classifier hybrid --demo --interval 5 --realtime
+python tools/vista_demo.py --source "<video>.mp4" --classifier hybrid --demo --interval 5 --realtime
 # grabar la vista sin ventana (plan B)
-python tools/vista_demo.py --source "<video>.mp4" --zones config/zones_demo.json --classifier hybrid --demo --interval 5 --realtime --no-window --record out/vista.mp4
+python tools/vista_demo.py --source "<video>.mp4" --classifier hybrid --demo --interval 5 --realtime --no-window --record out/vista.mp4
 ```
 
 **`.env` para la demo** (además del token y el grupo de Telegram):

@@ -7,7 +7,7 @@ Todo lo que cruza entre las partes de cada persona está definido acá. Si lo ca
 ```python
 ItemKind   = Literal["plate"]                                        # solo platos de comida
 PlateState = Literal["lleno", "comiendo", "por_terminar", "vacio"]
-AlertType  = Literal["mesa_por_terminar", "plato_vacio", "plato_lleno_mucho"]
+AlertType  = Literal["mesa_terminada", "plato_vacio", "plato_lleno_mucho"]
 AlertStatus = Literal["abierta", "resuelta"]
 ```
 
@@ -16,7 +16,7 @@ Estado según la comida que queda (`fill_ratio`, de 0 a 1), en `servio_vision/sc
 
 ## Zonas de mesas — `vision/config/zones.json`
 
-Coordenadas en píxeles del frame original. Se dibujan una vez con `vision/tools/draw_zones.py`.
+Coordenadas en píxeles del frame original. Opcional: sin `--zones`, las mesas se detectan solas en cada lectura y se arman zonas con este mismo formato (`servio_vision/tables.py`). Con `--zones`, se dibujan una vez con `vision/tools/draw_zones.py`.
 
 ```json
 {

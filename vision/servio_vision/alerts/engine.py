@@ -23,7 +23,7 @@ from servio_vision.alerts.state import TableState, table_status
 ABSENT_READINGS_TO_CLOSE = 2
 
 ALERT_TYPES: tuple[AlertType, ...] = (
-    "mesa_por_terminar",
+    "mesa_terminada",
     "plato_vacio",
     "plato_lleno_mucho",
 )
@@ -92,15 +92,20 @@ def _condition_since(
 ) -> datetime | None:
     """Desde cuándo se cumple la condición del aviso, o None si no se cumple."""
     plates = table.active_plates()
-    if alert_type == "mesa_por_terminar":
-        if table_status(p.state for p in plates) != "por_terminar":
+    status = table_status(p.state for p in plates)
+    if alert_type == "mesa_terminada":
+        # Todos los platos vacíos. Solo se cierra si retiran los platos (libre) o
+        # sirven algo nuevo: pasar de por_terminar a terminada no "resuelve" nada.
+        if status != "terminada":
             return None
-        # Desde que el primer plato llegó a por_terminar/vacio (solo para el mensaje).
-        return min(
-            p.state_since for p in plates if p.state in ("por_terminar", "vacio")
-        )
+        return max(p.state_since for p in plates)  # cuando se vació el último
 
     if alert_type == "plato_vacio":
+        # Un plato vacío mientras el resto de la mesa sigue comiendo: retirarlo sin
+        # esperar. Si la mesa entera terminó, avisa mesa_terminada. Ya abierto, sigue
+        # hasta que retiran ese plato (no se "resuelve" porque terminaron los demás).
+        if status == "terminada" and not already_open:
+            return None
         times = [
             p.state_since
             for p in plates
@@ -148,8 +153,8 @@ def _minutes(elapsed: timedelta) -> int:
 
 def _open_message(alert_type: AlertType, table_id: str, elapsed: timedelta) -> str:
     name = table_name(table_id)
-    if alert_type == "mesa_por_terminar":
-        return f"🍽️ {name} está terminando."
+    if alert_type == "mesa_terminada":
+        return f"🍽️ {name} terminó: retirá los platos y ofrecé postre, café o la cuenta."
     if alert_type == "plato_vacio":
         return f"🧹 {name}: hay platos vacíos para retirar."
     return f"❓ {name}: un plato sigue lleno hace {_minutes(elapsed)} min. ¿Está todo bien?"
@@ -158,8 +163,8 @@ def _open_message(alert_type: AlertType, table_id: str, elapsed: timedelta) -> s
 def _reminder_message(alert_type: AlertType, table_id: str, elapsed: timedelta) -> str:
     name = table_name(table_id)
     minutes = _minutes(elapsed)
-    if alert_type == "mesa_por_terminar":
-        return f"🍽️ {name} sigue terminando hace {minutes} min."
+    if alert_type == "mesa_terminada":
+        return f"🍽️ {name} terminó hace {minutes} min y los platos siguen en la mesa."
     if alert_type == "plato_vacio":
         return f"🧹 {name}: los platos vacíos siguen sin retirar hace {minutes} min."
     return f"❓ {name}: el plato sigue lleno hace {minutes} min. ¿Está todo bien?"

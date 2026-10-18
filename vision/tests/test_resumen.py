@@ -57,7 +57,7 @@ EVENTS = [
     obs(11, "T1", 0),  # retiran: comida de 10 min
     alert("alert_resolved", 11, "T1", "a2", "plato_vacio"),
     obs(2, "T2", 1),  # T2 sigue comiendo al final del log
-    alert("alert_opened", 6, "T2", "a3", "mesa_por_terminar"),
+    alert("alert_opened", 6, "T2", "a3", "mesa_terminada"),
 ]
 
 
@@ -69,7 +69,7 @@ def test_summary_per_table():
     assert t1.reminders == 1
     assert t1.resolve_times == [120.0, 120.0]
     assert t2.meals == [] and t2.meals_in_progress == 1
-    assert t2.alerts == {"mesa_por_terminar": 1}
+    assert t2.alerts == {"mesa_terminada": 1}
     assert t2.resolve_times == []  # sigue abierto
 
 
