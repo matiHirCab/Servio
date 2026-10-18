@@ -15,6 +15,7 @@ from servio_vision.alerts.config import DEFAULT_INTERVAL, AlertConfig, load_conf
 from servio_vision.alerts.models import TableObservation
 from servio_vision.alerts.notify import get_notifier
 from servio_vision.alerts.processor import AlertProcessor
+from servio_vision.db import Database
 from servio_vision.restaurant import Restaurant
 
 VISION_DIR = Path(__file__).resolve().parents[2]
@@ -34,8 +35,11 @@ def configure(
     if _processor is not None:
         _processor.close()
     load_dotenv(VISION_DIR.parent / ".env")  # no pisa variables ya puestas
+    log_path = log_path or DEFAULT_LOG
+    # con datos del restaurante, todo queda también en la base (junto al log)
+    db = Database(log_path.parent / "servio.db") if restaurant is not None else None
     _processor = AlertProcessor(
-        config, get_notifier(telegram), log_path or DEFAULT_LOG, restaurant
+        config, get_notifier(telegram), log_path, restaurant, db
     )
     return _processor
 

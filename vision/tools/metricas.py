@@ -1,24 +1,28 @@
 """Métricas del negocio: platos con problemas y mozos, para el cierre del pitch.
 
-Lee el historial (`fixtures/restaurante/historial.jsonl`, simulado con
-`tools/generar_historial.py`) y le suma las respuestas reales de los mozos que haya
-en el log de la corrida (`out/eventos.jsonl`, eventos `alert_feedback`). Muestra:
+Todo sale de la base relacional (`vision/out/servio.db`, ver `servio_vision/db.py`)
+con consultas SQL: lo que pasó en vivo (avisos, respuestas de los mozos) más el
+historial simulado (`fixtures/restaurante/historial.jsonl`, que se importa la
+primera vez). Muestra:
 - platos que vuelven llenos: % de las veces que se sirvieron, con el motivo más
   común que respondieron los mozos;
 - mozos: minutos hasta atender una mesa que terminó, y segundos en responder el aviso.
 
-    python tools/metricas.py [--image out/metricas.png]
+    python tools/metricas.py [--image out/metricas.png] [--sql]
 """
 
 import argparse
-import json
 import sys
-from collections import Counter, defaultdict
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from servio_vision.db import Database
+from servio_vision.restaurant import Restaurant
 
 VISION_DIR = Path(__file__).resolve().parents[1]
 HISTORY = VISION_DIR.parent / "fixtures" / "restaurante" / "historial.jsonl"
-LIVE_LOG = VISION_DIR / "out" / "eventos.jsonl"
+DB = VISION_DIR / "out" / "servio.db"
 
 # Tema oscuro (paleta de referencia de la guía de visualización): una serie por
 # gráfico → un solo color; el texto nunca va con el color de la barra.
@@ -29,73 +33,62 @@ MUTED = (90, 90, 86)
 BAR = (57, 135, 229)
 
 
-def read_jsonl(path: Path) -> list[dict]:
-    if not path.exists():
-        return []
-    rows = []
-    for line in path.read_text(encoding="utf-8").splitlines():
-        try:
-            rows.append(json.loads(line))
-        except ValueError:
-            continue
-    return rows
+# Las consultas, a la vista: es lo que se puede mostrar en el pitch (--sql).
+SQL_DISHES = """
+SELECT p.nombre AS plato,
+       COUNT(DISTINCT a.id) * 1.0 / COUNT(DISTINCT ps.id) AS vuelve_lleno,
+       (SELECT r.texto
+          FROM respuestas r
+          JOIN avisos a2 ON a2.id = r.aviso_id
+          JOIN platos_servidos ps2 ON ps2.id = a2.plato_servido_id
+         WHERE ps2.plato_id = p.id
+         GROUP BY r.texto ORDER BY COUNT(*) DESC LIMIT 1) AS motivo
+  FROM platos p
+  JOIN platos_servidos ps ON ps.plato_id = p.id
+  LEFT JOIN avisos a ON a.plato_servido_id = ps.id AND a.tipo = 'plato_lleno_mucho'
+ GROUP BY p.id
+ ORDER BY vuelve_lleno DESC
+"""
+SQL_ATTEND = """
+SELECT m.nombre AS mozo,
+       AVG((julianday(a.resuelto_at) - julianday(a.abierto_at)) * 24 * 60) AS minutos
+  FROM avisos a JOIN mozos m ON m.id = a.mozo_id
+ WHERE a.tipo = 'mesa_terminada' AND a.resuelto_at IS NOT NULL
+ GROUP BY m.id
+ ORDER BY minutos DESC
+"""
+SQL_ANSWER = """
+SELECT m.nombre AS mozo, AVG(r.segundos) AS segundos
+  FROM respuestas r JOIN mozos m ON m.id = r.mozo_id
+ GROUP BY m.id
+ ORDER BY segundos DESC
+"""
+SQL_TOTALS = """
+SELECT (SELECT COUNT(DISTINCT substr(abierto_at, 1, 10)) FROM avisos
+         WHERE origen = 'historial') AS dias,
+       (SELECT COUNT(*) FROM respuestas) AS respuestas,
+       (SELECT COUNT(*) FROM respuestas r JOIN avisos a ON a.id = r.aviso_id
+         WHERE a.origen = 'camara') AS en_vivo
+"""
 
 
-def compute(history: list[dict], live: list[dict]) -> dict:
-    served: Counter = Counter()
-    returned: Counter = Counter()
-    reasons: dict[str, Counter] = defaultdict(Counter)
-    attend: dict[str, list[float]] = defaultdict(list)
-    answer: dict[str, list[float]] = defaultdict(list)
-    for r in history:
-        if r["tipo"] == "servido":
-            served[r["plato"]] += 1
-        elif r["tipo"] == "plato_lleno":
-            returned[r["plato"]] += 1
-            reasons[r["plato"]][r["respuesta"]] += 1
-            answer[r["mozo"]].append(r["segundos_respuesta"])
-        elif r["tipo"] == "mesa_terminada":
-            attend[r["mozo"]].append(r["minutos_hasta_atender"])
-    live_answers = 0
-    for e in live:
-        if e.get("event") == "alert_feedback" and e.get("dish"):
-            live_answers += 1
-            reasons[e["dish"]][e["answer"]] += 1
-            if e.get("waiter"):
-                answer[e["waiter"]].append(e["seconds_to_answer"])
-    dishes = sorted(
-        (
-            (
-                dish,
-                returned[dish] / n,
-                reasons[dish].most_common(1)[0][0] if reasons[dish] else "-",
-            )
-            for dish, n in served.items()
-            if n
-        ),
-        key=lambda d: d[1],
-        reverse=True,
-    )
-    mean = lambda v: sum(v) / len(v)
-    waiters_attend = sorted(
-        ((w, mean(v)) for w, v in attend.items()), key=lambda x: -x[1]
-    )
-    waiters_answer = sorted(
-        ((w, mean(v)) for w, v in answer.items()), key=lambda x: -x[1]
-    )
-    days = len({r["fecha"] for r in history})
+def compute(db: Database) -> dict:
+    totals = db.query(SQL_TOTALS)[0]
     return {
-        "dishes": dishes,
-        "attend": waiters_attend,
-        "answer": waiters_answer,
-        "days": days,
-        "alerts": sum(returned.values()) + live_answers,
-        "live_answers": live_answers,
+        "dishes": [
+            (r["plato"], r["vuelve_lleno"], r["motivo"] or "-")
+            for r in db.query(SQL_DISHES)
+        ],
+        "attend": [(r["mozo"], r["minutos"]) for r in db.query(SQL_ATTEND)],
+        "answer": [(r["mozo"], r["segundos"]) for r in db.query(SQL_ANSWER)],
+        "days": totals["dias"],
+        "alerts": totals["respuestas"],
+        "live_answers": totals["en_vivo"],
     }
 
 
 def print_report(m: dict) -> None:
-    print(f"Servio · últimos {m['days']} días · {m['alerts']} avisos de plato lleno")
+    print(f"Servio · últimos {m['days']} días · {m['alerts']} respuestas de mozos")
     print("\nPlatos que vuelven llenos (% de las veces que se sirvieron)")
     for dish, rate, reason in m["dishes"]:
         print(f"  {dish:34} {rate * 100:5.1f} %   motivo más común: {reason}")
@@ -106,7 +99,7 @@ def print_report(m: dict) -> None:
     for waiter, v in m["answer"]:
         print(f"  {waiter:10} {v:5.0f} s")
     if m["live_answers"]:
-        print(f"\n(incluye {m['live_answers']} respuestas reales de la última corrida)")
+        print(f"\n(incluye {m['live_answers']} respuestas reales de las demos)")
 
 
 def _fonts(size: int, bold_size: int):
@@ -166,7 +159,9 @@ def render(m: dict, path: Path) -> None:
     fonts = _fonts(26, 32)
     big = _fonts(28, 46)[1]
     draw.text((60, 50), "Servio: lo que aprendimos del salón", font=big, fill=TEXT)
-    sub = f"Últimos {m['days']} días · {m['alerts']} avisos de plato lleno con respuesta del mozo"
+    sub = (
+        f"Últimos {m['days']} días · {m['alerts']} respuestas de los mozos a los avisos"
+    )
     draw.text((60, 115), sub, font=fonts[0], fill=TEXT_2)
 
     y = _bars(
@@ -210,18 +205,33 @@ def render(m: dict, path: Path) -> None:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Métricas de platos y mozos.")
+    parser.add_argument("--db", type=Path, default=DB)
     parser.add_argument("--historial", type=Path, default=HISTORY)
-    parser.add_argument("--corrida", type=Path, default=LIVE_LOG)
     parser.add_argument("--image", type=Path, help="guardar también como imagen")
+    parser.add_argument("--sql", action="store_true", help="mostrar las consultas")
     args = parser.parse_args(argv)
     for stream in (sys.stdout, sys.stderr):
         if hasattr(stream, "reconfigure"):
             stream.reconfigure(encoding="utf-8", errors="replace")
-    history = read_jsonl(args.historial)
-    if not history:
-        print(f"No hay historial en {args.historial}: corré tools/generar_historial.py")
+    db = Database(args.db)
+    restaurant = Restaurant.load()
+    db.load_restaurant(restaurant)
+    if args.historial.exists():
+        imported = db.import_history(args.historial, restaurant)
+        if imported:
+            print(f"(historial importado a la base: {imported} avisos)\n")
+    if args.sql:
+        for title, sql in (
+            ("Platos que vuelven llenos", SQL_DISHES),
+            ("Minutos hasta atender", SQL_ATTEND),
+            ("Segundos en responder", SQL_ANSWER),
+        ):
+            print(f"-- {title}{sql}")
+    m = compute(db)
+    db.close()
+    if not m["dishes"]:
+        print("La base no tiene datos: corré tools/generar_historial.py o una demo.")
         return 2
-    m = compute(history, read_jsonl(args.corrida))
     print_report(m)
     if args.image:
         render(m, args.image)

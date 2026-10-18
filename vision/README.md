@@ -80,6 +80,10 @@ Con la comanda del restaurante, Servio sabe **qué plato es cada uno** y **qué 
 - **Los avisos** nombran la mesa y el mozo ("Mesa 1 · Juan"). El de plato lleno nombra el plato y trae **botones** con las respuestas típicas de ese plato, más "✏️ Otra respuesta" (el bot pide que escriban y toma lo que respondan).
 - **Las respuestas** se escuchan en un hilo aparte (long polling: sin servidor ni webhook), se agregan al mensaje ("📝 Ana: Muy dulces") y quedan en el log (`alert_feedback`).
 
+## Base de datos (SQLite)
+
+Con datos del restaurante, todo queda también en una base relacional: `vision/out/servio.db` (SQLite, un archivo, sin servidor; en producción sería Postgres con el mismo esquema, ver `servio_vision/db.py`). Tablas: `mozos`, `mesas`, `platos`, `respuestas_tipicas`, `platos_servidos`, `avisos` y `respuestas`. En vivo se guardan los platos que aparecen (con el plato del pedido que son), los avisos que se abren y cierran, y las respuestas de los mozos (de botón o escritas). Se puede abrir con cualquier cliente de SQLite.
+
 ## Métricas de platos y mozos
 
 ```bash
@@ -87,7 +91,7 @@ python tools/generar_historial.py              # historial simulado de 30 días 
 python tools/metricas.py --image out/metricas.png
 ```
 
-Platos que vuelven llenos (% y motivo más común según los mozos), minutos hasta atender una mesa que terminó y segundos en responder el aviso, por mozo. Suma las respuestas reales de la última corrida (`out/eventos.jsonl`).
+Platos que vuelven llenos (% y motivo más común según los mozos), minutos hasta atender una mesa que terminó y segundos en responder el aviso, por mozo. Salen de consultas SQL a la base (`--sql` las muestra), que junta el historial simulado (se importa la primera vez) con lo que pasó en las demos.
 
 ## Tabla de lo que pasó (cierre de la demo)
 

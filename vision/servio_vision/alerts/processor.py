@@ -26,6 +26,7 @@ from servio_vision.alerts.feedback import FeedbackDesk, Question
 from servio_vision.alerts.models import Alert, TableObservation
 from servio_vision.alerts.notify import Notifier, resolved_text
 from servio_vision.alerts.state import TableState, empty_table, update_table
+from servio_vision.db import Database
 from servio_vision.restaurant import Restaurant
 
 logger = logging.getLogger(__name__)
@@ -60,6 +61,7 @@ class AlertProcessor:
         notifier: Notifier,
         log_path: Path,
         restaurant: Restaurant | None = None,
+        db: Database | None = None,
     ) -> None:
         self.config = config
         self.notifier = notifier
@@ -67,9 +69,15 @@ class AlertProcessor:
         # Con los datos del restaurante, los avisos nombran el plato y el mozo, y el de
         # plato lleno pregunta qué pasó (botones en Telegram, ver feedback.py).
         self.restaurant = restaurant
+        # base relacional (db.py): platos servidos, avisos y respuestas
+        self.db = db
+        self._served_rows: dict[str, int] = {}  # track_id → platos_servidos.id
+        self._alert_plate: dict[str, str] = {}  # aviso → track_id del plato
+        if db is not None and restaurant is not None:
+            db.load_restaurant(restaurant)
         self.feedback: FeedbackDesk | None = None
         if restaurant is not None:
-            self.feedback = FeedbackDesk(notifier, self.log.write)
+            self.feedback = FeedbackDesk(notifier, self._on_feedback)
             self.feedback.start()
         # Marca dónde empieza la corrida (el log se agrega) y con qué umbrales: replay.py
         # corta el archivo acá y reproduce con la misma config.
@@ -85,6 +93,34 @@ class AlertProcessor:
         # message_id → avisos de ese mensaje (en orden) y cuáles ya se cerraron.
         self._messages: dict[int, list[Alert]] = {}
         self._resolved_ids: set[str] = set()
+
+    def _record_plates(self, table_id: str, table: TableState, ts: datetime) -> None:
+        """Cada plato nuevo de la mesa, a la base (con el plato del pedido que es)."""
+        if self.db is None or self.restaurant is None:
+            return
+        for plate in table.active_plates():
+            if plate.track_id in self._served_rows:
+                continue
+            dish = self.restaurant.dish(table_id, plate.track_id)
+            self._served_rows[plate.track_id] = self.db.served(
+                table_id, dish.dish_id if dish else None, plate.track_id, ts
+            )
+
+    def _record_opened(self, alert: Alert, ts: datetime) -> None:
+        if self.db is None:
+            return
+        track_id = self._alert_plate.get(alert.id)
+        served_id = self._served_rows.get(track_id) if track_id else None
+        self.db.alert_opened(alert.id, alert.type, alert.table_id, served_id, ts)
+
+    def _on_feedback(self, event: dict[str, Any]) -> None:
+        """Respuesta de un mozo: al log y a la base."""
+        self.log.write(event)
+        if self.db is not None:
+            try:
+                self.db.feedback(event)
+            except Exception:
+                logger.exception("No se pudo guardar la respuesta en la base")
 
     def process(self, obs: TableObservation) -> list[dict[str, Any]]:
         """Procesa una observación de mesa; devuelve los eventos que escribió al log.
@@ -107,6 +143,7 @@ class AlertProcessor:
             self.restaurant.see_plates(
                 obs.table_id, [p.track_id for p in table.active_plates()]
             )
+        self._record_plates(obs.table_id, table, obs.ts)
 
         result = evaluate(table, obs.ts, self.config, self.open_alerts.values())
         opened_all = [self._with_context(a, table, obs.ts) for a in result.opened]
@@ -124,6 +161,7 @@ class AlertProcessor:
             for alert in opened:
                 self.open_alerts[alert.id] = alert
                 log(_alert_event("alert_opened", obs.ts, alert, text))
+                self._record_opened(alert, obs.ts)
 
         for alert, question in opened_all:
             if question is None:
@@ -135,6 +173,7 @@ class AlertProcessor:
                 self._messages[message_id] = [alert]
             self.open_alerts[alert.id] = alert
             log(_alert_event("alert_opened", obs.ts, alert, alert.message))
+            self._record_opened(alert, obs.ts)
 
         if result.reminded:
             text = "\n".join(
@@ -159,6 +198,8 @@ class AlertProcessor:
             # Sin mensaje (Telegram falló al abrir) no hubo nada que editar: text None.
             text = edited.get(alert.telegram_message_id)
             log(_alert_event("alert_resolved", obs.ts, alert, text))
+            if self.db is not None:
+                self.db.alert_resolved(alert.id, obs.ts)
 
         return events
 
@@ -166,6 +207,8 @@ class AlertProcessor:
         if self.feedback is not None:
             self.feedback.stop()
         self.log.close()
+        if self.db is not None:
+            self.db.close()
 
     def _with_context(
         self, alert: Alert, table: TableState, now: datetime
@@ -183,6 +226,8 @@ class AlertProcessor:
             key=lambda p: p.first_seen,
         )
         plate = full[0] if full else None
+        if plate is not None:
+            self._alert_plate[alert.id] = plate.track_id
         dish = self.restaurant.dish(alert.table_id, plate.track_id) if plate else None
         minutes = (
             max(1, round((now - plate.first_seen).total_seconds() / 60)) if plate else 1
