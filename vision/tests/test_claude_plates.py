@@ -11,7 +11,9 @@ from servio_vision.classifiers import claude_plates
 from servio_vision.classifiers.claude_plates import ClaudeCallError, estimate_plates
 
 JPEG = b"\xff\xd8fake"
-REQUEST = claude_plates.PlatesRequest(JPEG, [JPEG], "T1")
+REQUEST = claude_plates.PlatesRequest(
+    claude_plates.build_content(JPEG, [JPEG], "T1"), [False]
+)
 
 
 def _answer(n, people=True):
@@ -29,8 +31,9 @@ def backend(monkeypatch):
     answers = []
 
     def fake(request, model, timeout_s):
-        content = claude_plates.build_content(request)
-        calls.append({"content": content, "model": model, "timeout_s": timeout_s})
+        calls.append(
+            {"content": request.content, "model": model, "timeout_s": timeout_s}
+        )
         answer = answers.pop(0)
         if isinstance(answer, Exception):
             raise answer
@@ -74,6 +77,15 @@ def test_retries_once_then_succeeds(backend):
     answers += [ClaudeCallError("timeout"), _answer(2)]
     assert estimate_plates(JPEG, [JPEG] * 2, "T1") is not None
     assert len(calls) == 2
+    # el contenido se arma una sola vez, no en cada intento
+    assert calls[0]["content"] is calls[1]["content"]
+
+
+def test_references_of_another_length_is_a_bug_not_a_retry(backend):
+    calls, _ = backend
+    with pytest.raises(ValueError):
+        estimate_plates(JPEG, [JPEG] * 2, "T1", references=[None])
+    assert calls == []
 
 
 def test_returns_none_after_two_failures(backend):
@@ -143,7 +155,7 @@ def test_cli_reads_structured_output(monkeypatch):
         assert "--json-schema" in args
         content = json.loads(kwargs["input"])["message"]["content"]
         assert content[0]["text"] == claude_plates.prompt.SYSTEM_PROMPT
-        assert content[1:] == claude_plates.build_content(REQUEST)
+        assert content[1:] == REQUEST.content
         return subprocess.CompletedProcess(args, 0, stdout=stdout, stderr="")
 
     monkeypatch.setattr(claude_plates, "_find_cli", lambda: "claude")
@@ -287,13 +299,13 @@ def openai_api(monkeypatch):
 def test_openai_maps_answers_to_report(openai_api):
     openai_api.responses.append(_decisions(2, refs={2}, fill_score=1.0, same=0.2))
     report = estimate_plates(b"mesa", [b"p1", b"p2"], "T1", references=[None, b"ref2"])
-    assert [p.fill_ratio for p in report.plates] == [0.25, 0.25]
+    assert [p.fill_ratio for p in report.plates] == [0.15, 0.15]  # "restos"
     assert [p.confidence for p in report.plates] == [0.7, 0.7]
     assert [p.same_plate for p in report.plates] == [True, False]
     assert report.people_present is True
     request = openai_api.requests[0]
     assert request["model"] == "gpt-6-luna"
-    assert openai_api.client_kwargs["timeout"] == 10.0
+    assert openai_api.client_kwargs["timeout"] == 20.0
     names = [q["name"] for q in request["questions"]]
     assert names == ["fill_1", "visible_1", "fill_2", "visible_2", "same_plate_2", "people_present"]
 
@@ -391,3 +403,18 @@ def test_openai_model_env(openai_api, monkeypatch):
 def test_openai_missing_package_falls_back(openai_api, monkeypatch):
     monkeypatch.setitem(sys.modules, "openai", None)  # import openai → ImportError
     assert estimate_plates(JPEG, [JPEG], "T1") is None
+
+
+def test_fill_levels_land_in_their_state():
+    from servio_vision.schemas import state_from_fill_ratio
+
+    prompt = claude_plates.prompt
+    assert len(prompt.FILL_RATIOS) == len(prompt.FILL_LEVELS)
+    states = [state_from_fill_ratio(r) for r in prompt.FILL_RATIOS]
+    assert states == ["vacio", "por_terminar", "comiendo", "comiendo", "lleno"]
+
+
+def test_openai_fractional_score_is_interpolated(openai_api):
+    openai_api.responses.append(_decisions(1, fill_score=2.5))
+    report = estimate_plates(JPEG, [JPEG], "T1")
+    assert report.plates[0].fill_ratio == pytest.approx(0.55)  # entre mitad y parte

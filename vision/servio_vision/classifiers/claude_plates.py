@@ -12,7 +12,7 @@ Proveedor según `CLAUDE_PROVIDER`:
   En vez de un JSON libre hace preguntas tipadas por plato (ver `prompt.decision_questions`).
 
 Variables opcionales: `CLAUDE_MODEL` (por defecto `haiku` / `claude-haiku-5-5`), `OPENAI_MODEL`
-(por defecto `gpt-6-luna`; separado para que un modelo de Claude no termine en OpenAI), `CLAUDE_TIMEOUT_S` (por defecto 15 s con `cli`, 10 s con `anthropic` y `openai`), `CLAUDE_CLI`
+(por defecto `gpt-6-luna`; separado para que un modelo de Claude no termine en OpenAI), `CLAUDE_TIMEOUT_S` (por defecto 15 s con `cli`, 10 s con `anthropic` y 20 s con `openai`), `CLAUDE_CLI`
 (ruta a `claude.exe` si no está en el PATH).
 
 Prueba rápida: `python -m servio_vision.classifiers.claude_plates mesa.jpg plato1.jpg plato2.jpg`
@@ -27,6 +27,7 @@ import subprocess
 import sys
 import tempfile
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -39,7 +40,8 @@ logger = logging.getLogger(__name__)
 DEFAULT_MODELS = {"cli": "haiku", "anthropic": "claude-haiku-5-5", "openai": "gpt-6-luna"}
 MODEL_ENV = {"cli": "CLAUDE_MODEL", "anthropic": "CLAUDE_MODEL", "openai": "OPENAI_MODEL"}
 # `claude -p` tarda ~6-8 s con 8 platos (arranque del CLI incluido).
-DEFAULT_TIMEOUTS = {"cli": 15.0, "anthropic": 10.0, "openai": 10.0}
+# openai: unas 25 preguntas tipadas y ~17 imágenes en una mesa de 8 platos con referencias.
+DEFAULT_TIMEOUTS = {"cli": 15.0, "anthropic": 10.0, "openai": 20.0}
 RETRY_WAIT_S = 2.0
 ATTEMPTS = 2  # un intento + un reintento
 
@@ -63,53 +65,66 @@ class ClaudeCallError(RuntimeError):
 
 @dataclass(frozen=True)
 class PlatesRequest:
-    """Lo que se le pregunta a Claude por una mesa. `references[i]`, si está, es el
-    plato i recién servido y va antes del recorte actual."""
+    """Lo que se manda por una mesa: el contenido ya armado y, por plato, si lleva
+    referencia (la Decisions API pregunta same_plate solo para esos)."""
 
-    table_jpeg: bytes
-    plate_jpegs: list[bytes]
-    table_id: str
-    references: list[bytes | None] | None = None
-
-    @property
-    def has_reference(self) -> list[bool]:
-        return [r is not None for r in self.references or [None] * len(self.plate_jpegs)]
+    content: list
+    has_reference: list[bool]
 
 
-def _image_block(jpeg: bytes, openai: bool = False) -> dict:
-    data = base64.standard_b64encode(jpeg).decode()
-    if openai:
-        return {"type": "input_image", "image_url": f"data:image/jpeg;base64,{data}"}
-    return {
+@dataclass(frozen=True)
+class _Format:
+    """Cómo arma los bloques cada API."""
+
+    text: Callable[[str], dict]
+    image: Callable[[str], dict]  # recibe la imagen en base64
+    closing: bool  # agrega el cierre que pide el JSON
+
+
+ANTHROPIC_FORMAT = _Format(
+    text=lambda text: {"type": "text", "text": text},
+    image=lambda data: {
         "type": "image",
         "source": {"type": "base64", "media_type": "image/jpeg", "data": data},
-    }
+    },
+    closing=True,
+)
+# La Decisions API responde preguntas tipadas: sin el cierre que pide JSON.
+OPENAI_FORMAT = _Format(
+    text=lambda text: {"type": "input_text", "text": text},
+    image=lambda data: {"type": "input_image", "image_url": f"data:image/jpeg;base64,{data}"},
+    closing=False,
+)
+_FORMATS = {"cli": ANTHROPIC_FORMAT, "anthropic": ANTHROPIC_FORMAT, "openai": OPENAI_FORMAT}
 
 
-def _text_block(text: str, openai: bool = False) -> dict:
-    return {"type": "input_text" if openai else "text", "text": text}
+def build_content(
+    table_jpeg: bytes,
+    plate_jpegs: list[bytes],
+    table_id: str,
+    references: list[bytes | None] | None = None,
+    fmt: _Format = ANTHROPIC_FORMAT,
+) -> list:
+    """Bloques del mensaje (texto + imágenes) en el formato `fmt`.
 
+    `references[i]`, si está, es el plato i recién servido y va antes del recorte actual."""
 
-def build_content(request: PlatesRequest, *, openai: bool = False) -> list:
-    """Bloques del mensaje (texto + imágenes) en el formato de Anthropic o, con
-    `openai=True`, en el de la Decisions API (sin el cierre que pide JSON)."""
-    content: list[dict] = [
-        _text_block(prompt.table_caption(request.table_id), openai),
-        _image_block(request.table_jpeg, openai),
-    ]
-    plate_jpegs = request.plate_jpegs
-    references = request.references or [None] * len(plate_jpegs)
+    def image(jpeg: bytes) -> dict:
+        return fmt.image(base64.standard_b64encode(jpeg).decode())
+
+    content: list[dict] = [fmt.text(prompt.table_caption(table_id)), image(table_jpeg)]
+    references = references or [None] * len(plate_jpegs)
     # strict: un plato sin su lugar en `references` no se manda en silencio
     for i, (jpeg, ref) in enumerate(zip(plate_jpegs, references, strict=True), start=1):
         if ref is None:
-            content.append(_text_block(prompt.plate_caption(i), openai))
+            content.append(fmt.text(prompt.plate_caption(i)))
         else:
-            content.append(_text_block(prompt.reference_caption(i), openai))
-            content.append(_image_block(ref, openai))
-            content.append(_text_block(prompt.current_caption(i), openai))
-        content.append(_image_block(jpeg, openai))
-    if not openai:
-        content.append(_text_block(prompt.closing_text(len(plate_jpegs))))
+            content.append(fmt.text(prompt.reference_caption(i)))
+            content.append(image(ref))
+            content.append(fmt.text(prompt.current_caption(i)))
+        content.append(image(jpeg))
+    if fmt.closing:
+        content.append(fmt.text(prompt.closing_text(len(plate_jpegs))))
     return content
 
 
@@ -145,10 +160,10 @@ def _call_cli(request: PlatesRequest, model: str, timeout_s: float) -> tuple[dic
     un `.cmd`, los argumentos de varias líneas o con comillas llegan rotos.
     """
     exe = _find_cli()
-    instructions = _text_block(prompt.SYSTEM_PROMPT)
+    instructions = ANTHROPIC_FORMAT.text(prompt.SYSTEM_PROMPT)
     message = {
         "type": "user",
-        "message": {"role": "user", "content": [instructions, *build_content(request)]},
+        "message": {"role": "user", "content": [instructions, *request.content]},
     }
     args = [
         exe,
@@ -229,7 +244,7 @@ def _call_anthropic(
             model=model,
             max_tokens=2048,
             system=prompt.SYSTEM_PROMPT,
-            messages=[{"role": "user", "content": build_content(request)}],
+            messages=[{"role": "user", "content": request.content}],
             output_config={
                 "format": {
                     "type": "json_schema",
@@ -253,12 +268,24 @@ def _call_anthropic(
     }
 
 
-def _answers_to_report(answers: list, has_reference: list[bool]) -> dict:
+def _fill_ratio(score: float) -> float:
+    """Score de la Decisions API → fill_ratio, interpolando en `prompt.FILL_RATIOS`.
+
+    No sabemos si la API devuelve el índice del nivel o un promedio entre niveles
+    (p. ej. 2.5): interpolar sirve para los dos."""
+    low = min(int(score), len(prompt.FILL_RATIOS) - 2)
+    frac = score - low
+    return prompt.FILL_RATIOS[low] * (1 - frac) + prompt.FILL_RATIOS[low + 1] * frac
+
+
+def _answers_to_report(
+    answers: list, questions: list[dict], has_reference: list[bool]
+) -> dict:
     """Respuestas tipadas → el mismo dict que devuelven los otros proveedores.
 
     Cualquier respuesta con forma rara es `ClaudeCallError`, así se reintenta y, si
     vuelve a fallar, la mesa usa lo de YOLO en vez de cortar el pipeline."""
-    expected = {q["name"] for q in prompt.decision_questions(has_reference)}
+    expected = {q["name"] for q in questions}
     by_name = {}
     for answer in answers:
         name = getattr(answer, "name", None)
@@ -278,8 +305,8 @@ def _answers_to_report(answers: list, has_reference: list[bool]) -> dict:
             raise ClaudeCallError(f"{name}.{field} no es un número: {value!r}")
         return float(value)
 
-    # score es el índice del nivel en FILL_LEVELS (0 = vacío); fuera de rango es
-    # otra escala y no se recorta: mejor caer a YOLO que avisar mal.
+    # score va de 0 (vacío) al último nivel de FILL_LEVELS; fuera de rango es otra
+    # escala y no se recorta: mejor caer a YOLO que avisar mal.
     top = len(prompt.FILL_LEVELS) - 1
     plates = []
     for i, ref in enumerate(has_reference, start=1):
@@ -289,7 +316,7 @@ def _answers_to_report(answers: list, has_reference: list[bool]) -> dict:
         plates.append(
             {
                 "index": i,
-                "fill_ratio": score / top,
+                "fill_ratio": _fill_ratio(score),
                 "confidence": number(f"fill_{i}", "confidence"),
                 "visible": number(f"visible_{i}", "probability") >= 0.5,
                 "same_plate": number(f"same_plate_{i}", "probability") >= 0.5
@@ -315,19 +342,21 @@ def _call_openai(request: PlatesRequest, model: str, timeout_s: float) -> tuple[
             'falta el paquete openai: pip install "openai>=3.26.0"'
         ) from e
 
-    parts = [_text_block(prompt.INSTRUCTIONS, True), *build_content(request, openai=True)]
+    parts = [OPENAI_FORMAT.text(prompt.INSTRUCTIONS), *request.content]
+    # las preguntas same_plate_i solo van para los platos con referencia
+    questions = prompt.decision_questions(request.has_reference)
     client = openai.OpenAI(timeout=timeout_s, max_retries=0)
     try:
         resp = client.decisions.create(
             model=model,
             input=[{"role": "user", "content": parts}],
-            # las preguntas same_plate_i solo van para los platos con referencia
-            questions=prompt.decision_questions(request.has_reference),
+            questions=questions,
         )
     except openai.OpenAIError as e:
         raise ClaudeCallError(f"Decisions API de OpenAI: {e}") from e
     usage = getattr(resp, "usage", None)
-    return _answers_to_report(getattr(resp, "answers", None) or [], request.has_reference), {
+    answers = getattr(resp, "answers", None) or []
+    return _answers_to_report(answers, questions, request.has_reference), {
         "input_tokens": getattr(usage, "input_tokens", None),
     }
 
@@ -356,7 +385,7 @@ def estimate_plates(
 ) -> PlatesReport | None:
     """Estima `fill_ratio`, `confidence`, `visible` y `same_plate` de cada plato.
 
-    `references`: por plato, su recorte recién servido (o `None`), ver `PlatesRequest`.
+    `references`: por plato, su recorte recién servido (o `None`), ver `build_content`.
     Devuelve `None` si Claude falla dos veces (el `hybrid` usa entonces lo de YOLO).
     """
     if not plate_jpegs:
@@ -371,7 +400,13 @@ def estimate_plates(
         timeout_s = float(
             os.environ.get("CLAUDE_TIMEOUT_S") or DEFAULT_TIMEOUTS[provider]
         )
-    request = PlatesRequest(table_jpeg, plate_jpegs, table_id, references)
+    # Una sola vez y fuera del loop: las imágenes no se recodifican en cada intento, y un
+    # `references` de otro largo es un bug del que llama (ValueError), no un fallo de Claude.
+    content = build_content(
+        table_jpeg, plate_jpegs, table_id, references, _FORMATS[provider]
+    )
+    has_reference = [r is not None for r in references or [None] * len(plate_jpegs)]
+    request = PlatesRequest(content, has_reference)
     backend = _BACKENDS[provider]
 
     for attempt in range(1, ATTEMPTS + 1):
