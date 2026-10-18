@@ -230,7 +230,9 @@ class HybridClassifier:
 
     def _update_reference(self, key, est: claude_plates.PlateEstimate, crop: bytes):
         if not est.same_plate and self.references.pop(key, None) is not None:
-            logger.info("Mesa %s %s: la referencia es de otra comida, se descarta", *key)
+            logger.info(
+                "Mesa %s %s: la referencia es de otra comida, se descarta", *key
+            )
             # no toma otra: lo de ahora puede ser un plato medio comido que se ve lleno
             self.readings[key] = REFERENCE_READINGS
         n = self.readings[key] = self.readings.get(key, 0) + 1

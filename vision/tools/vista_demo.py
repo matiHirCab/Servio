@@ -38,7 +38,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from main import Pipeline, build_parser, build_pipeline, setup_logging
 from servio_vision.alerts.state import table_status
-from servio_vision.capture import IMAGE_SUFFIXES, STREAM_PREFIXES
+from servio_vision.capture import IMAGE_SUFFIXES, STREAM_PREFIXES, CameraReader
 from servio_vision.schemas import Item
 from servio_vision.zones import Zones, scaled_polygon, table_rect
 
@@ -167,12 +167,13 @@ def open_view_source(source: str, interval: float) -> ViewSource:
     durante `interval` segundos. Tira `OSError`/`FileNotFoundError` si no abre.
     """
     if source.isdigit() or source.startswith(STREAM_PREFIXES):
-        cap = cv2.VideoCapture(int(source) if source.isdigit() else source)
-        if not cap.isOpened():
-            raise OSError(f"No se pudo abrir la cámara: {source}")
+        # el mismo lector que main.py: descarta los frames negros del arranque
+        # y se reconecta si el celular se corta
+        reader = CameraReader(int(source) if source.isdigit() else source)
+        reader.start()
         t0 = time.monotonic()
-        frames = ((frame, time.monotonic() - t0) for frame in _read_all(cap))
-        return ViewSource(frames, live=True, fps=cap.get(cv2.CAP_PROP_FPS) or 30.0)
+        frames = ((frame, time.monotonic() - t0) for frame in reader.frames())
+        return ViewSource(frames, live=True, fps=reader.fps)
     path = Path(source)
     if path.is_dir():
         files = sorted(p for p in path.iterdir() if p.suffix.lower() in IMAGE_SUFFIXES)
