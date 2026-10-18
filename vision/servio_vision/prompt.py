@@ -98,7 +98,8 @@ def decision_questions(has_reference: list[bool]) -> list[dict]:
                     f"Plato {i}: ¿qué fracción de la porción servida queda? "
                     "Elegí el nivel que mejor describe cuánto queda, con los criterios de "
                     "fill_ratio de las instrucciones (referencia, contar piezas, señales "
-                    "de que se comió)."
+                    "de que se comió). Si la referencia muestra otra comida que la de "
+                    "ahora, ignorala y estimá sin ella."
                 ),
                 "levels": FILL_LEVELS,
             }

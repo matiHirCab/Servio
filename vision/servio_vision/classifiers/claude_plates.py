@@ -14,7 +14,7 @@ Proveedor según `CLAUDE_PROVIDER`:
 Variables opcionales: `CLAUDE_MODEL` (por defecto `haiku` / `claude-haiku-5-5`), `CLAUDE_TIMEOUT_S`
 (por defecto 15 s con `cli`, 10 s con `anthropic`), `CLAUDE_CLI` (ruta a `claude.exe` si no está en
 el PATH). Con `openai`: `OPENAI_MODEL` (por defecto `gpt-6-luna`) y `OPENAI_TIMEOUT_S` (por defecto
-20 s); van aparte para que un valor pensado para Claude no termine en OpenAI.
+14 s); van aparte para que un valor pensado para Claude no termine en OpenAI.
 
 Prueba rápida: `python -m servio_vision.classifiers.claude_plates mesa.jpg plato1.jpg plato2.jpg`
 """
@@ -51,7 +51,9 @@ MODEL_ENV = {
 }
 # `claude -p` tarda ~6-8 s con 8 platos (arranque del CLI incluido).
 # openai: unas 25 preguntas tipadas y ~17 imágenes en una mesa de 8 platos con referencias.
-DEFAULT_TIMEOUTS = {"cli": 15.0, "anthropic": 10.0, "openai": 20.0}
+# Con el reintento, el peor caso es 2 × timeout + RETRY_WAIT_S: 14 s deja 30 s, el
+# --interval por defecto, para no atrasar la lectura siguiente.
+DEFAULT_TIMEOUTS = {"cli": 15.0, "anthropic": 10.0, "openai": 14.0}
 TIMEOUT_ENV = {
     "cli": "CLAUDE_TIMEOUT_S",
     "anthropic": "CLAUDE_TIMEOUT_S",
@@ -294,14 +296,12 @@ def _call_anthropic(
     }
 
 
-def _fill_ratio(score: float) -> float:
-    """Score de la Decisions API → fill_ratio, interpolando en `prompt.FILL_RATIOS`.
-
-    El score es el promedio de los índices de nivel ponderado por probabilidad (puede
-    dar 2.5). Es el respaldo de `_fill_from_probabilities`."""
-    low = min(int(score), len(prompt.FILL_RATIOS) - 2)
-    frac = score - low
-    return prompt.FILL_RATIOS[low] * (1 - frac) + prompt.FILL_RATIOS[low + 1] * frac
+FILL_RATIO_BY_LABEL = {
+    level["label"]: ratio
+    for level, ratio in zip(prompt.FILL_LEVELS, prompt.FILL_RATIOS)
+}
+# Las probabilities de un score tienen que sumar ~1; si no, la lista vino incompleta.
+PROBABILITIES_SUM_TOLERANCE = 0.05
 
 
 def _get(obj, field: str):
@@ -309,28 +309,45 @@ def _get(obj, field: str):
     return obj.get(field) if isinstance(obj, dict) else getattr(obj, field, None)
 
 
-def _fill_from_probabilities(answer) -> float | None:
-    """Valor esperado del fill_ratio con las `probabilities` de cada nivel.
+def _number(value, what: str, low: float, high: float) -> float:
+    """Valida un número de la respuesta: finito y dentro de [low, high]."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ClaudeCallError(f"{what} no es un número: {value!r}")
+    if not math.isfinite(value) or not low <= value <= high:
+        raise ClaudeCallError(f"{what} fuera de {low}..{high}: {value!r}")
+    return float(value)
 
-    Es más exacto que interpolar el score porque `FILL_RATIOS` no está equiespaciado
-    (50% vacío y 50% intacto da 0.5, no 0.45). `None` si faltan o no se entienden."""
-    ratios = {
-        level["label"]: r for level, r in zip(prompt.FILL_LEVELS, prompt.FILL_RATIOS)
-    }
-    total = expected = 0.0
-    for entry in _get(answer, "probabilities") or []:
-        label, p = _get(entry, "label"), _get(entry, "probability")
-        if (
-            label not in ratios
-            or isinstance(p, bool)
-            or not isinstance(p, (int, float))
-        ):
-            return None
-        if not math.isfinite(p) or p < 0:
-            return None
-        total += p
-        expected += p * ratios[label]
-    return expected / total if total > 0 else None
+
+def _fill_ratio(answer, name: str) -> float:
+    """Respuesta de score → fill_ratio.
+
+    Con `probabilities` (una por nivel) es el valor esperado sobre `FILL_RATIOS`, que no
+    está equiespaciado: 50% vacío y 50% intacto da 0.5. Si no vienen, o vienen
+    incompletas, se interpola `score` (promedio de los índices de nivel ponderado por
+    probabilidad, desde 0). Una entrada mal formada es `ClaudeCallError`, como el resto."""
+    top = len(prompt.FILL_LEVELS) - 1
+    # fuera de 0..top es otra escala y no se recorta: mejor caer a YOLO que avisar mal
+    score = _number(_get(answer, "score"), f"{name}.score", 0, top)
+    probabilities = _get(answer, "probabilities")
+    if probabilities is not None:
+        if not isinstance(probabilities, (list, tuple)):
+            raise ClaudeCallError(
+                f"{name}.probabilities no es una lista: {probabilities!r}"
+            )
+        total = expected = 0.0
+        for entry in probabilities:
+            label = _get(entry, "label")
+            if label not in FILL_RATIO_BY_LABEL:
+                raise ClaudeCallError(f"{name}: nivel desconocido {label!r}")
+            p = _number(_get(entry, "probability"), f"{name}.{label}", 0, 1)
+            total += p
+            expected += p * FILL_RATIO_BY_LABEL[label]
+        if abs(total - 1) <= PROBABILITIES_SUM_TOLERANCE:
+            return expected / total
+        logger.warning("%s: las probabilities suman %.2f, uso el score", name, total)
+    low = min(int(score), top - 1)
+    frac = score - low
+    return prompt.FILL_RATIOS[low] * (1 - frac) + prompt.FILL_RATIOS[low + 1] * frac
 
 
 def _answers_to_report(
@@ -343,8 +360,8 @@ def _answers_to_report(
     expected = {q["name"] for q in questions}
     by_name = {}
     for answer in answers:
-        name = getattr(answer, "name", None)
-        if getattr(answer, "type", None) == "refusal":
+        name = _get(answer, "name")
+        if _get(answer, "type") == "refusal":
             raise ClaudeCallError(f"la Decisions API rechazó {name!r}")
         if name not in expected:
             raise ClaudeCallError(
@@ -354,42 +371,34 @@ def _answers_to_report(
             raise ClaudeCallError(f"la Decisions API respondió dos veces {name!r}")
         by_name[name] = answer
 
-    def number(name: str, field: str) -> float:
+    def get(name: str):
         if name not in by_name:
             raise ClaudeCallError(f"la Decisions API no respondió {name!r}")
-        value = getattr(by_name[name], field, None)
-        if isinstance(value, bool) or not isinstance(value, (int, float)):
-            raise ClaudeCallError(f"{name}.{field} no es un número: {value!r}")
-        if not math.isfinite(value):
-            raise ClaudeCallError(f"{name}.{field} no es finito: {value!r}")
-        if field == "probability" and not 0 <= value <= 1:
-            raise ClaudeCallError(f"{name}.probability fuera de 0..1: {value}")
-        return float(value)
+        return by_name[name]
 
-    # score va de 0 (vacío) al último nivel de FILL_LEVELS; fuera de rango es otra
-    # escala y no se recorta: mejor caer a YOLO que avisar mal.
-    top = len(prompt.FILL_LEVELS) - 1
+    def yes(name: str) -> bool:
+        probability = _get(get(name), "probability")
+        return _number(probability, f"{name}.probability", 0, 1) >= 0.5
+
     plates = []
     for i, ref in enumerate(has_reference, start=1):
-        score = number(f"fill_{i}", "score")
-        if not 0 <= score <= top:
-            raise ClaudeCallError(f"fill_{i}.score fuera de 0..{top}: {score}")
-        fill_ratio = _fill_from_probabilities(by_name[f"fill_{i}"])
+        fill = get(f"fill_{i}")
         plates.append(
             {
                 "index": i,
-                "fill_ratio": _fill_ratio(score) if fill_ratio is None else fill_ratio,
-                "confidence": number(f"fill_{i}", "confidence"),
-                "visible": number(f"visible_{i}", "probability") >= 0.5,
-                "same_plate": number(f"same_plate_{i}", "probability") >= 0.5
-                if ref
-                else True,
+                "fill_ratio": _fill_ratio(fill, f"fill_{i}"),
+                # el rango lo valida _parse (pydantic)
+                "confidence": _number(
+                    _get(fill, "confidence"),
+                    f"fill_{i}.confidence",
+                    -math.inf,
+                    math.inf,
+                ),
+                "visible": yes(f"visible_{i}"),
+                "same_plate": yes(f"same_plate_{i}") if ref else True,
             }
         )
-    return {
-        "plates": plates,
-        "people_present": number("people_present", "probability") >= 0.5,
-    }
+    return {"plates": plates, "people_present": yes("people_present")}
 
 
 def _call_openai(
@@ -470,11 +479,12 @@ def estimate_plates(
         )
     # Una sola vez y fuera del loop: las imágenes no se recodifican en cada intento, y un
     # `references` de otro largo es un bug del que llama (ValueError), no un fallo de Claude.
+    # `references` se normaliza acá y lo usan igual las imágenes y las preguntas.
+    references = references or [None] * len(plate_jpegs)
     content = build_content(
         table_jpeg, plate_jpegs, table_id, references, _FORMATS[provider]
     )
-    has_reference = [r is not None for r in references or [None] * len(plate_jpegs)]
-    request = PlatesRequest(content, has_reference)
+    request = PlatesRequest(content, [r is not None for r in references])
     backend = _BACKENDS[provider]
 
     for attempt in range(1, ATTEMPTS + 1):

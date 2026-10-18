@@ -311,7 +311,7 @@ def test_openai_maps_answers_to_report(openai_api):
     assert report.people_present is True
     request = openai_api.requests[0]
     assert request["model"] == "gpt-6-luna"
-    assert openai_api.client_kwargs["timeout"] == 20.0
+    assert openai_api.client_kwargs["timeout"] == 14.0
     names = [q["name"] for q in request["questions"]]
     assert names == [
         "fill_1",
@@ -445,10 +445,37 @@ def test_openai_fill_ratio_is_the_expected_value(openai_api):
     assert report.plates[0].fill_ratio == pytest.approx(0.5)
 
 
-def test_openai_unknown_level_label_falls_back_to_score(openai_api):
-    probs = _level_probs(otro=1.0)
-    openai_api.responses.append(_decisions(1, fill_score=4.0, probabilities=probs))
+def test_openai_unknown_level_label_is_rejected(openai_api):
+    bad = _decisions(1, probabilities=_level_probs(otro=1.0))
+    openai_api.responses += [bad, bad]
+    assert estimate_plates(JPEG, [JPEG], "T1") is None
+
+
+@pytest.mark.parametrize("probabilities", [0.7, _level_probs(intacto=float("nan"))])
+def test_openai_malformed_probabilities_are_rejected(openai_api, probabilities):
+    bad = _decisions(1, probabilities=probabilities)
+    openai_api.responses += [bad, bad]
+    assert estimate_plates(JPEG, [JPEG], "T1") is None
+
+
+def test_openai_partial_probabilities_fall_back_to_score(openai_api):
+    # solo llegó un nivel (suma 0.3): no se reescala a 1, se interpola el score
+    probs = _level_probs(intacto=0.3)
+    openai_api.responses.append(_decisions(1, fill_score=1.0, probabilities=probs))
+    assert estimate_plates(JPEG, [JPEG], "T1").plates[0].fill_ratio == 0.15
+
+
+def test_openai_answers_as_dicts(openai_api):
+    answers = [vars(a) for a in _decisions(1, fill_score=4.0)]
+    openai_api.responses.append(answers)
     assert estimate_plates(JPEG, [JPEG], "T1").plates[0].fill_ratio == 1.0
+
+
+def test_openai_fill_question_ignores_a_different_reference(openai_api):
+    openai_api.responses.append(_decisions(1, refs={1}))
+    estimate_plates(JPEG, [JPEG], "T1", references=[b"ref"])
+    fill = openai_api.requests[0]["questions"][0]
+    assert "ignorala" in fill["instructions"]
 
 
 def test_openai_old_sdk_without_decisions_falls_back(openai_api, monkeypatch):
@@ -471,7 +498,7 @@ def test_openai_has_its_own_timeout(openai_api, monkeypatch):
     monkeypatch.setenv("CLAUDE_TIMEOUT_S", "10")
     openai_api.responses.append(_decisions(1))
     estimate_plates(JPEG, [JPEG], "T1")
-    assert openai_api.client_kwargs["timeout"] == 20.0
+    assert openai_api.client_kwargs["timeout"] == 14.0
     monkeypatch.setenv("OPENAI_TIMEOUT_S", "30")
     openai_api.responses.append(_decisions(1))
     estimate_plates(JPEG, [JPEG], "T1")
