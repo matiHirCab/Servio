@@ -3,7 +3,7 @@
 Base en docs/context/04-vision.md («Prompt de Claude»). Iterar acá con el video.
 """
 
-SYSTEM_PROMPT = """\
+INSTRUCTIONS = """\
 Sos el sistema de visión de un restaurante. La primera imagen es una vista desde arriba de una mesa.
 Las siguientes son recortes de cada plato de esa mesa, numerados desde 1 en el mismo orden.
 Algunos platos traen antes una referencia: ese mismo plato recién servido, intacto.
@@ -25,8 +25,11 @@ Para cada plato estimá:
   lo que se ve. Un plato con los cubiertos apoyados y sin comida a la vista está vacío (0).
 - same_plate: si el plato trae referencia, false cuando la referencia muestra otra comida
   que la de ahora (entonces ignorá la referencia y estimá sin ella). Sin referencia, true.
-Indicá también si hay personas sentadas en la mesa (people_present).
-Respondé solo con el JSON pedido, un elemento por plato."""
+Indicá también si hay personas sentadas en la mesa (people_present)."""
+
+# cli y anthropic piden un JSON libre; la Decisions API (openai) usa INSTRUCTIONS solas
+# porque responde preguntas tipadas.
+SYSTEM_PROMPT = INSTRUCTIONS + "\nRespondé solo con el JSON pedido, un elemento por plato."
 
 # Esquema JSON de la respuesta (report_plates). Lo usan los dos proveedores.
 REPORT_PLATES_SCHEMA: dict = {

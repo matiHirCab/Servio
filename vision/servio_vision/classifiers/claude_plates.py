@@ -11,15 +11,14 @@ Proveedor según `CLAUDE_PROVIDER`:
 - `openai`: la Decisions API de OpenAI con `OPENAI_API_KEY` (`pip install "openai>=3.26.0"`).
   En vez de un JSON libre hace preguntas tipadas por plato (ver `prompt.decision_questions`).
 
-Variables opcionales: `CLAUDE_MODEL` (por defecto `haiku` / `claude-haiku-5-5` / `gpt-6-luna`),
-`CLAUDE_TIMEOUT_S` (por defecto 15 s con `cli`, 10 s con `anthropic` y `openai`), `CLAUDE_CLI`
+Variables opcionales: `CLAUDE_MODEL` (por defecto `haiku` / `claude-haiku-5-5`), `OPENAI_MODEL`
+(por defecto `gpt-6-luna`; separado para que un modelo de Claude no termine en OpenAI), `CLAUDE_TIMEOUT_S` (por defecto 15 s con `cli`, 10 s con `anthropic` y `openai`), `CLAUDE_CLI`
 (ruta a `claude.exe` si no está en el PATH).
 
 Prueba rápida: `python -m servio_vision.classifiers.claude_plates mesa.jpg plato1.jpg plato2.jpg`
 """
 
 import base64
-import functools
 import json
 import logging
 import os
@@ -28,6 +27,7 @@ import subprocess
 import sys
 import tempfile
 import time
+from dataclasses import dataclass
 from pathlib import Path
 
 from pydantic import BaseModel, Field, ValidationError
@@ -37,6 +37,7 @@ from servio_vision import prompt
 logger = logging.getLogger(__name__)
 
 DEFAULT_MODELS = {"cli": "haiku", "anthropic": "claude-haiku-5-5", "openai": "gpt-6-luna"}
+MODEL_ENV = {"cli": "CLAUDE_MODEL", "anthropic": "CLAUDE_MODEL", "openai": "OPENAI_MODEL"}
 # `claude -p` tarda ~6-8 s con 8 platos (arranque del CLI incluido).
 DEFAULT_TIMEOUTS = {"cli": 15.0, "anthropic": 10.0, "openai": 10.0}
 RETRY_WAIT_S = 2.0
@@ -60,38 +61,55 @@ class ClaudeCallError(RuntimeError):
     """La llamada a Claude falló o devolvió algo que no se pudo leer."""
 
 
-def _image_block(jpeg: bytes) -> dict:
+@dataclass(frozen=True)
+class PlatesRequest:
+    """Lo que se le pregunta a Claude por una mesa. `references[i]`, si está, es el
+    plato i recién servido y va antes del recorte actual."""
+
+    table_jpeg: bytes
+    plate_jpegs: list[bytes]
+    table_id: str
+    references: list[bytes | None] | None = None
+
+    @property
+    def has_reference(self) -> list[bool]:
+        return [r is not None for r in self.references or [None] * len(self.plate_jpegs)]
+
+
+def _image_block(jpeg: bytes, openai: bool = False) -> dict:
     data = base64.standard_b64encode(jpeg).decode()
+    if openai:
+        return {"type": "input_image", "image_url": f"data:image/jpeg;base64,{data}"}
     return {
         "type": "image",
         "source": {"type": "base64", "media_type": "image/jpeg", "data": data},
     }
 
 
-def build_content(
-    table_jpeg: bytes,
-    plate_jpegs: list[bytes],
-    table_id: str,
-    references: list[bytes | None] | None = None,
-) -> list:
-    """Bloques del mensaje (texto + imágenes), iguales para los dos proveedores.
+def _text_block(text: str, openai: bool = False) -> dict:
+    return {"type": "input_text" if openai else "text", "text": text}
 
-    `references[i]`, si está, es el plato i recién servido y va antes del recorte actual."""
+
+def build_content(request: PlatesRequest, *, openai: bool = False) -> list:
+    """Bloques del mensaje (texto + imágenes) en el formato de Anthropic o, con
+    `openai=True`, en el de la Decisions API (sin el cierre que pide JSON)."""
     content: list[dict] = [
-        {"type": "text", "text": prompt.table_caption(table_id)},
-        _image_block(table_jpeg),
+        _text_block(prompt.table_caption(request.table_id), openai),
+        _image_block(request.table_jpeg, openai),
     ]
-    references = references or [None] * len(plate_jpegs)
+    plate_jpegs = request.plate_jpegs
+    references = request.references or [None] * len(plate_jpegs)
     # strict: un plato sin su lugar en `references` no se manda en silencio
     for i, (jpeg, ref) in enumerate(zip(plate_jpegs, references, strict=True), start=1):
         if ref is None:
-            content.append({"type": "text", "text": prompt.plate_caption(i)})
+            content.append(_text_block(prompt.plate_caption(i), openai))
         else:
-            content.append({"type": "text", "text": prompt.reference_caption(i)})
-            content.append(_image_block(ref))
-            content.append({"type": "text", "text": prompt.current_caption(i)})
-        content.append(_image_block(jpeg))
-    content.append({"type": "text", "text": prompt.closing_text(len(plate_jpegs))})
+            content.append(_text_block(prompt.reference_caption(i), openai))
+            content.append(_image_block(ref, openai))
+            content.append(_text_block(prompt.current_caption(i), openai))
+        content.append(_image_block(jpeg, openai))
+    if not openai:
+        content.append(_text_block(prompt.closing_text(len(plate_jpegs))))
     return content
 
 
@@ -120,17 +138,17 @@ def json_from_text(text: str) -> dict:
     raise ClaudeCallError(f"claude -p no devolvió JSON: {text[:300]!r}")
 
 
-def _call_cli(content: list, model: str, timeout_s: float) -> tuple[dict, dict]:
+def _call_cli(request: PlatesRequest, model: str, timeout_s: float) -> tuple[dict, dict]:
     """`claude -p` con las imágenes por stdin (stream-json).
 
     El prompt va dentro del mensaje y no como argumento: en Windows, si `claude` es
     un `.cmd`, los argumentos de varias líneas o con comillas llegan rotos.
     """
     exe = _find_cli()
-    instructions = {"type": "text", "text": prompt.SYSTEM_PROMPT}
+    instructions = _text_block(prompt.SYSTEM_PROMPT)
     message = {
         "type": "user",
-        "message": {"role": "user", "content": [instructions, *content]},
+        "message": {"role": "user", "content": [instructions, *build_content(request)]},
     }
     args = [
         exe,
@@ -196,9 +214,14 @@ def _call_cli(content: list, model: str, timeout_s: float) -> tuple[dict, dict]:
     }
 
 
-def _call_anthropic(content: list, model: str, timeout_s: float) -> tuple[dict, dict]:
+def _call_anthropic(
+    request: PlatesRequest, model: str, timeout_s: float
+) -> tuple[dict, dict]:
     """API de Anthropic con salida estructurada (`output_config.format`)."""
-    import anthropic
+    try:
+        import anthropic
+    except ImportError as e:
+        raise ClaudeCallError("falta el paquete anthropic: pip install anthropic") from e
 
     client = anthropic.Anthropic(timeout=timeout_s, max_retries=0)
     try:
@@ -206,7 +229,7 @@ def _call_anthropic(content: list, model: str, timeout_s: float) -> tuple[dict, 
             model=model,
             max_tokens=2048,
             system=prompt.SYSTEM_PROMPT,
-            messages=[{"role": "user", "content": content}],
+            messages=[{"role": "user", "content": build_content(request)}],
             output_config={
                 "format": {
                     "type": "json_schema",
@@ -230,70 +253,81 @@ def _call_anthropic(content: list, model: str, timeout_s: float) -> tuple[dict, 
     }
 
 
-def to_openai_parts(content: list) -> list[dict]:
-    """Bloques de `build_content` (formato Anthropic) → partes de la Decisions API.
-
-    El prompt va primero como texto: la API no tiene system prompt."""
-    parts = [{"type": "input_text", "text": prompt.SYSTEM_PROMPT}]
-    for block in content:
-        if block["type"] == "text":
-            parts.append({"type": "input_text", "text": block["text"]})
-        else:
-            src = block["source"]
-            url = f"data:{src['media_type']};base64,{src['data']}"
-            parts.append({"type": "input_image", "image_url": url})
-    return parts
-
-
 def _answers_to_report(answers: list, has_reference: list[bool]) -> dict:
-    """Respuestas tipadas → el mismo dict que devuelven los otros proveedores."""
+    """Respuestas tipadas → el mismo dict que devuelven los otros proveedores.
+
+    Cualquier respuesta con forma rara es `ClaudeCallError`, así se reintenta y, si
+    vuelve a fallar, la mesa usa lo de YOLO en vez de cortar el pipeline."""
+    expected = {q["name"] for q in prompt.decision_questions(has_reference)}
     by_name = {}
     for answer in answers:
-        if answer.type == "refusal":
-            raise ClaudeCallError(f"la Decisions API rechazó {answer.name!r}")
-        by_name[answer.name] = answer
+        name = getattr(answer, "name", None)
+        if getattr(answer, "type", None) == "refusal":
+            raise ClaudeCallError(f"la Decisions API rechazó {name!r}")
+        if name not in expected:
+            raise ClaudeCallError(f"la Decisions API respondió algo no pedido: {name!r}")
+        if name in by_name:
+            raise ClaudeCallError(f"la Decisions API respondió dos veces {name!r}")
+        by_name[name] = answer
 
-    def get(name: str):
+    def number(name: str, field: str) -> float:
         if name not in by_name:
             raise ClaudeCallError(f"la Decisions API no respondió {name!r}")
-        return by_name[name]
+        value = getattr(by_name[name], field, None)
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            raise ClaudeCallError(f"{name}.{field} no es un número: {value!r}")
+        return float(value)
 
+    # score es el índice del nivel en FILL_LEVELS (0 = vacío); fuera de rango es
+    # otra escala y no se recorta: mejor caer a YOLO que avisar mal.
     top = len(prompt.FILL_LEVELS) - 1
     plates = []
     for i, ref in enumerate(has_reference, start=1):
-        fill = get(f"fill_{i}")
+        score = number(f"fill_{i}", "score")
+        if not 0 <= score <= top:
+            raise ClaudeCallError(f"fill_{i}.score fuera de 0..{top}: {score}")
         plates.append(
             {
                 "index": i,
-                "fill_ratio": min(max(fill.score / top, 0.0), 1.0),
-                "confidence": fill.confidence,
-                "visible": get(f"visible_{i}").probability >= 0.5,
-                "same_plate": get(f"same_plate_{i}").probability >= 0.5 if ref else True,
+                "fill_ratio": score / top,
+                "confidence": number(f"fill_{i}", "confidence"),
+                "visible": number(f"visible_{i}", "probability") >= 0.5,
+                "same_plate": number(f"same_plate_{i}", "probability") >= 0.5
+                if ref
+                else True,
             }
         )
     return {
         "plates": plates,
-        "people_present": get("people_present").probability >= 0.5,
+        "people_present": number("people_present", "probability") >= 0.5,
     }
 
 
-def _call_openai(
-    content: list, model: str, timeout_s: float, has_reference: list[bool]
-) -> tuple[dict, dict]:
-    """Decisions API de OpenAI (`POST /v1/decisions`) con `OPENAI_API_KEY`."""
-    import openai
+def _call_openai(request: PlatesRequest, model: str, timeout_s: float) -> tuple[dict, dict]:
+    """Decisions API de OpenAI (`POST /v1/decisions`) con `OPENAI_API_KEY`.
 
+    El prompt va primero como texto (la API no tiene system prompt) y sin el pedido
+    de JSON: acá se responden preguntas tipadas."""
+    try:
+        import openai
+    except ImportError as e:
+        raise ClaudeCallError(
+            'falta el paquete openai: pip install "openai>=3.26.0"'
+        ) from e
+
+    parts = [_text_block(prompt.INSTRUCTIONS, True), *build_content(request, openai=True)]
     client = openai.OpenAI(timeout=timeout_s, max_retries=0)
     try:
         resp = client.decisions.create(
             model=model,
-            input=[{"role": "user", "content": to_openai_parts(content)}],
-            questions=prompt.decision_questions(has_reference),
+            input=[{"role": "user", "content": parts}],
+            # las preguntas same_plate_i solo van para los platos con referencia
+            questions=prompt.decision_questions(request.has_reference),
         )
     except openai.OpenAIError as e:
         raise ClaudeCallError(f"Decisions API de OpenAI: {e}") from e
     usage = getattr(resp, "usage", None)
-    return _answers_to_report(resp.answers, has_reference), {
+    return _answers_to_report(getattr(resp, "answers", None) or [], request.has_reference), {
         "input_tokens": getattr(usage, "input_tokens", None),
     }
 
@@ -322,7 +356,7 @@ def estimate_plates(
 ) -> PlatesReport | None:
     """Estima `fill_ratio`, `confidence`, `visible` y `same_plate` de cada plato.
 
-    `references`: por plato, su recorte recién servido (o `None`), ver `build_content`.
+    `references`: por plato, su recorte recién servido (o `None`), ver `PlatesRequest`.
     Devuelve `None` si Claude falla dos veces (el `hybrid` usa entonces lo de YOLO).
     """
     if not plate_jpegs:
@@ -332,22 +366,18 @@ def estimate_plates(
         raise ValueError(
             f"CLAUDE_PROVIDER desconocido: {provider!r}. Opciones: {sorted(_BACKENDS)}"
         )
-    model = model or os.environ.get("CLAUDE_MODEL") or DEFAULT_MODELS[provider]
+    model = model or os.environ.get(MODEL_ENV[provider]) or DEFAULT_MODELS[provider]
     if timeout_s is None:
         timeout_s = float(
             os.environ.get("CLAUDE_TIMEOUT_S") or DEFAULT_TIMEOUTS[provider]
         )
-    content = build_content(table_jpeg, plate_jpegs, table_id, references)
+    request = PlatesRequest(table_jpeg, plate_jpegs, table_id, references)
     backend = _BACKENDS[provider]
-    if provider == "openai":
-        # las preguntas same_plate_i solo van para los platos con referencia
-        has_reference = [r is not None for r in references or [None] * len(plate_jpegs)]
-        backend = functools.partial(backend, has_reference=has_reference)
 
     for attempt in range(1, ATTEMPTS + 1):
         start = time.monotonic()
         try:
-            data, usage = backend(content, model, timeout_s)
+            data, usage = backend(request, model, timeout_s)
             report = _parse(data, len(plate_jpegs))
         except (ClaudeCallError, ValidationError, ValueError) as e:
             logger.warning(

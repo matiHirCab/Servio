@@ -11,6 +11,7 @@ from servio_vision.classifiers import claude_plates
 from servio_vision.classifiers.claude_plates import ClaudeCallError, estimate_plates
 
 JPEG = b"\xff\xd8fake"
+REQUEST = claude_plates.PlatesRequest(JPEG, [JPEG], "T1")
 
 
 def _answer(n, people=True):
@@ -27,7 +28,8 @@ def backend(monkeypatch):
     calls = []
     answers = []
 
-    def fake(content, model, timeout_s):
+    def fake(request, model, timeout_s):
+        content = claude_plates.build_content(request)
         calls.append({"content": content, "model": model, "timeout_s": timeout_s})
         answer = answers.pop(0)
         if isinstance(answer, Exception):
@@ -139,12 +141,14 @@ def test_cli_reads_structured_output(monkeypatch):
 
     def fake_run(args, **kwargs):
         assert "--json-schema" in args
-        assert json.loads(kwargs["input"])["message"]["content"][1:] == ["x"]
+        content = json.loads(kwargs["input"])["message"]["content"]
+        assert content[0]["text"] == claude_plates.prompt.SYSTEM_PROMPT
+        assert content[1:] == claude_plates.build_content(REQUEST)
         return subprocess.CompletedProcess(args, 0, stdout=stdout, stderr="")
 
     monkeypatch.setattr(claude_plates, "_find_cli", lambda: "claude")
     monkeypatch.setattr(claude_plates.subprocess, "run", fake_run)
-    data, usage = claude_plates._call_cli(["x"], "haiku", 10)
+    data, usage = claude_plates._call_cli(REQUEST, "haiku", 10)
     assert data == _answer(1)
     assert usage["cost_usd"] == 0.001
 
@@ -156,7 +160,7 @@ def test_cli_timeout_is_a_call_error(monkeypatch):
     monkeypatch.setattr(claude_plates, "_find_cli", lambda: "claude")
     monkeypatch.setattr(claude_plates.subprocess, "run", fake_run)
     with pytest.raises(ClaudeCallError):
-        claude_plates._call_cli(["x"], "haiku", 10)
+        claude_plates._call_cli(REQUEST, "haiku", 10)
 
 
 @pytest.mark.parametrize(
@@ -195,7 +199,7 @@ def test_cli_on_windows_cmd_skips_schema_and_parses_text(monkeypatch):
 
     monkeypatch.setattr(claude_plates, "_find_cli", lambda: r"C:\npm\claude.cmd")
     monkeypatch.setattr(claude_plates.subprocess, "run", fake_run)
-    data, _ = claude_plates._call_cli([{"type": "text", "text": "x"}], "haiku", 10)
+    data, _ = claude_plates._call_cli(REQUEST, "haiku", 10)
     assert data == _answer(1)
 
 
@@ -211,7 +215,7 @@ def test_cli_uses_the_answer_even_if_claude_exits_with_error(monkeypatch):
 
     monkeypatch.setattr(claude_plates, "_find_cli", lambda: "claude")
     monkeypatch.setattr(claude_plates.subprocess, "run", fake_run)
-    data, _ = claude_plates._call_cli(["x"], "haiku", 10)
+    data, _ = claude_plates._call_cli(REQUEST, "haiku", 10)
     assert data == _answer(1)
 
 
@@ -222,7 +226,7 @@ def test_cli_error_without_json_is_a_call_error(monkeypatch):
     monkeypatch.setattr(claude_plates, "_find_cli", lambda: "claude")
     monkeypatch.setattr(claude_plates.subprocess, "run", fake_run)
     with pytest.raises(ClaudeCallError, match="se cortó"):
-        claude_plates._call_cli(["x"], "haiku", 10)
+        claude_plates._call_cli(REQUEST, "haiku", 10)
 
 
 class _FakeOpenAI:
@@ -275,6 +279,7 @@ def openai_api(monkeypatch):
     monkeypatch.setattr(claude_plates, "RETRY_WAIT_S", 0)
     monkeypatch.setenv("CLAUDE_PROVIDER", "openai")
     monkeypatch.delenv("CLAUDE_MODEL", raising=False)
+    monkeypatch.delenv("OPENAI_MODEL", raising=False)
     monkeypatch.delenv("CLAUDE_TIMEOUT_S", raising=False)
     return fake
 
@@ -297,7 +302,9 @@ def test_openai_sends_images_as_data_urls(openai_api):
     openai_api.responses.append(_decisions(1))
     estimate_plates(b"mesa", [b"p1"], "T1")
     parts = openai_api.requests[0]["input"][0]["content"]
-    assert parts[0]["text"] == claude_plates.prompt.SYSTEM_PROMPT
+    assert parts[0]["text"] == claude_plates.prompt.INSTRUCTIONS
+    # con preguntas tipadas no se pide JSON en ningún lado
+    assert not any("JSON" in p.get("text", "") for p in parts)
     images = [p["image_url"] for p in parts if p["type"] == "input_image"]
     assert images == [
         "data:image/jpeg;base64," + claude_plates.base64.b64encode(b).decode()
@@ -328,3 +335,59 @@ def test_openai_missing_answer_is_retried(openai_api):
     incomplete = _decisions(2)[:-2]  # falta visible_2 y people_present
     openai_api.responses += [incomplete, incomplete]
     assert estimate_plates(JPEG, [JPEG] * 2, "T1") is None
+
+
+def test_openai_score_none_is_retried(openai_api):
+    answers = _decisions(1)
+    answers[0].score = None
+    openai_api.responses += [answers, answers]
+    assert estimate_plates(JPEG, [JPEG], "T1") is None
+
+
+def test_openai_score_out_of_scale_is_rejected(openai_api):
+    # 5 niveles: score va de 0 a 4; un 5 es otra escala y no se recorta a 1
+    too_high = _decisions(1, fill_score=5.0)
+    openai_api.responses += [too_high, too_high]
+    assert estimate_plates(JPEG, [JPEG], "T1") is None
+
+
+def test_openai_top_score_is_full(openai_api):
+    openai_api.responses.append(_decisions(1, fill_score=4.0))
+    assert estimate_plates(JPEG, [JPEG], "T1").plates[0].fill_ratio == 1.0
+
+
+def test_openai_refusal_without_name_is_retried(openai_api):
+    refusal = [SimpleNamespace(type="refusal")]
+    openai_api.responses += [refusal, refusal]
+    assert estimate_plates(JPEG, [JPEG], "T1") is None
+
+
+def test_openai_duplicate_answer_is_rejected(openai_api):
+    dup = _decisions(1) + [_decision("score", "fill_1", score=4.0, confidence=0.9)]
+    openai_api.responses += [dup, dup]
+    assert estimate_plates(JPEG, [JPEG], "T1") is None
+
+
+def test_openai_unexpected_answer_is_rejected(openai_api):
+    extra = _decisions(1) + [_decision("predicate", "same_plate_1", probability=0.9)]
+    openai_api.responses += [extra, extra]
+    assert estimate_plates(JPEG, [JPEG], "T1") is None
+
+
+def test_openai_ignores_claude_model(openai_api, monkeypatch):
+    monkeypatch.setenv("CLAUDE_MODEL", "haiku")
+    openai_api.responses.append(_decisions(1))
+    estimate_plates(JPEG, [JPEG], "T1")
+    assert openai_api.requests[0]["model"] == "gpt-6-luna"
+
+
+def test_openai_model_env(openai_api, monkeypatch):
+    monkeypatch.setenv("OPENAI_MODEL", "gpt-otro")
+    openai_api.responses.append(_decisions(1))
+    estimate_plates(JPEG, [JPEG], "T1")
+    assert openai_api.requests[0]["model"] == "gpt-otro"
+
+
+def test_openai_missing_package_falls_back(openai_api, monkeypatch):
+    monkeypatch.setitem(sys.modules, "openai", None)  # import openai → ImportError
+    assert estimate_plates(JPEG, [JPEG], "T1") is None
