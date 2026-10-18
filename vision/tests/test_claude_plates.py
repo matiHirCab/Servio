@@ -2,6 +2,8 @@
 
 import json
 import subprocess
+import sys
+from types import SimpleNamespace
 
 import pytest
 
@@ -221,3 +223,108 @@ def test_cli_error_without_json_is_a_call_error(monkeypatch):
     monkeypatch.setattr(claude_plates.subprocess, "run", fake_run)
     with pytest.raises(ClaudeCallError, match="se cortó"):
         claude_plates._call_cli(["x"], "haiku", 10)
+
+
+class _FakeOpenAI:
+    """Módulo `openai` falso: guarda el pedido y devuelve respuestas en cola."""
+
+    class OpenAIError(Exception):
+        pass
+
+    def __init__(self, responses):
+        self.requests = []
+        self.responses = responses
+        fake = self
+
+        class Client:
+            def __init__(self, **kwargs):
+                fake.client_kwargs = kwargs
+                self.decisions = self
+
+            def create(self, **kwargs):
+                fake.requests.append(kwargs)
+                answers = fake.responses.pop(0)
+                if isinstance(answers, Exception):
+                    raise answers
+                return SimpleNamespace(
+                    answers=answers, usage=SimpleNamespace(input_tokens=42)
+                )
+
+        self.OpenAI = Client
+
+
+def _decision(type_, name, **fields):
+    return SimpleNamespace(type=type_, name=name, **fields)
+
+
+def _decisions(n, refs=(), fill_score=2.0, visible=0.9, same=0.9, people=0.8):
+    answers = []
+    for i in range(1, n + 1):
+        answers.append(_decision("score", f"fill_{i}", score=fill_score, confidence=0.7))
+        answers.append(_decision("predicate", f"visible_{i}", probability=visible))
+        if i in refs:
+            answers.append(_decision("predicate", f"same_plate_{i}", probability=same))
+    answers.append(_decision("predicate", "people_present", probability=people))
+    return answers
+
+
+@pytest.fixture
+def openai_api(monkeypatch):
+    fake = _FakeOpenAI([])
+    monkeypatch.setitem(sys.modules, "openai", fake)
+    monkeypatch.setattr(claude_plates, "RETRY_WAIT_S", 0)
+    monkeypatch.setenv("CLAUDE_PROVIDER", "openai")
+    monkeypatch.delenv("CLAUDE_MODEL", raising=False)
+    monkeypatch.delenv("CLAUDE_TIMEOUT_S", raising=False)
+    return fake
+
+
+def test_openai_maps_answers_to_report(openai_api):
+    openai_api.responses.append(_decisions(2, refs={2}, fill_score=1.0, same=0.2))
+    report = estimate_plates(b"mesa", [b"p1", b"p2"], "T1", references=[None, b"ref2"])
+    assert [p.fill_ratio for p in report.plates] == [0.25, 0.25]
+    assert [p.confidence for p in report.plates] == [0.7, 0.7]
+    assert [p.same_plate for p in report.plates] == [True, False]
+    assert report.people_present is True
+    request = openai_api.requests[0]
+    assert request["model"] == "gpt-6-luna"
+    assert openai_api.client_kwargs["timeout"] == 10.0
+    names = [q["name"] for q in request["questions"]]
+    assert names == ["fill_1", "visible_1", "fill_2", "visible_2", "same_plate_2", "people_present"]
+
+
+def test_openai_sends_images_as_data_urls(openai_api):
+    openai_api.responses.append(_decisions(1))
+    estimate_plates(b"mesa", [b"p1"], "T1")
+    parts = openai_api.requests[0]["input"][0]["content"]
+    assert parts[0]["text"] == claude_plates.prompt.SYSTEM_PROMPT
+    images = [p["image_url"] for p in parts if p["type"] == "input_image"]
+    assert images == [
+        "data:image/jpeg;base64," + claude_plates.base64.b64encode(b).decode()
+        for b in (b"mesa", b"p1")
+    ]
+
+
+def test_openai_low_visibility_marks_not_visible(openai_api):
+    openai_api.responses.append(_decisions(1, visible=0.1, people=0.1))
+    report = estimate_plates(JPEG, [JPEG], "T1")
+    assert report.plates[0].visible is False
+    assert report.people_present is False
+
+
+def test_openai_refusal_retries_then_none(openai_api):
+    refusal = [_decision("refusal", "fill_1")]
+    openai_api.responses += [refusal, refusal]
+    assert estimate_plates(JPEG, [JPEG], "T1") is None
+    assert len(openai_api.requests) == 2
+
+
+def test_openai_api_error_then_success(openai_api):
+    openai_api.responses += [_FakeOpenAI.OpenAIError("429"), _decisions(1)]
+    assert estimate_plates(JPEG, [JPEG], "T1") is not None
+
+
+def test_openai_missing_answer_is_retried(openai_api):
+    incomplete = _decisions(2)[:-2]  # falta visible_2 y people_present
+    openai_api.responses += [incomplete, incomplete]
+    assert estimate_plates(JPEG, [JPEG] * 2, "T1") is None

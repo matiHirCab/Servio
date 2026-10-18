@@ -8,15 +8,18 @@ Proveedor según `CLAUDE_PROVIDER`:
 - `cli` (por defecto): el Claude Code instalado y logueado (`claude -p`), con la
   suscripción del equipo. No necesita API key.
 - `anthropic`: la API de Anthropic con `ANTHROPIC_API_KEY` (respaldo; `pip install anthropic`).
+- `openai`: la Decisions API de OpenAI con `OPENAI_API_KEY` (`pip install "openai>=3.26.0"`).
+  En vez de un JSON libre hace preguntas tipadas por plato (ver `prompt.decision_questions`).
 
-Variables opcionales: `CLAUDE_MODEL` (por defecto `haiku` / `claude-haiku-5-5`),
-`CLAUDE_TIMEOUT_S` (por defecto 15 s con `cli`, 10 s con `anthropic`), `CLAUDE_CLI`
+Variables opcionales: `CLAUDE_MODEL` (por defecto `haiku` / `claude-haiku-5-5` / `gpt-6-luna`),
+`CLAUDE_TIMEOUT_S` (por defecto 15 s con `cli`, 10 s con `anthropic` y `openai`), `CLAUDE_CLI`
 (ruta a `claude.exe` si no está en el PATH).
 
 Prueba rápida: `python -m servio_vision.classifiers.claude_plates mesa.jpg plato1.jpg plato2.jpg`
 """
 
 import base64
+import functools
 import json
 import logging
 import os
@@ -33,9 +36,9 @@ from servio_vision import prompt
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_MODELS = {"cli": "haiku", "anthropic": "claude-haiku-5-5"}
+DEFAULT_MODELS = {"cli": "haiku", "anthropic": "claude-haiku-5-5", "openai": "gpt-6-luna"}
 # `claude -p` tarda ~6-8 s con 8 platos (arranque del CLI incluido).
-DEFAULT_TIMEOUTS = {"cli": 15.0, "anthropic": 10.0}
+DEFAULT_TIMEOUTS = {"cli": 15.0, "anthropic": 10.0, "openai": 10.0}
 RETRY_WAIT_S = 2.0
 ATTEMPTS = 2  # un intento + un reintento
 
@@ -227,7 +230,75 @@ def _call_anthropic(content: list, model: str, timeout_s: float) -> tuple[dict, 
     }
 
 
-_BACKENDS = {"cli": _call_cli, "anthropic": _call_anthropic}
+def to_openai_parts(content: list) -> list[dict]:
+    """Bloques de `build_content` (formato Anthropic) → partes de la Decisions API.
+
+    El prompt va primero como texto: la API no tiene system prompt."""
+    parts = [{"type": "input_text", "text": prompt.SYSTEM_PROMPT}]
+    for block in content:
+        if block["type"] == "text":
+            parts.append({"type": "input_text", "text": block["text"]})
+        else:
+            src = block["source"]
+            url = f"data:{src['media_type']};base64,{src['data']}"
+            parts.append({"type": "input_image", "image_url": url})
+    return parts
+
+
+def _answers_to_report(answers: list, has_reference: list[bool]) -> dict:
+    """Respuestas tipadas → el mismo dict que devuelven los otros proveedores."""
+    by_name = {}
+    for answer in answers:
+        if answer.type == "refusal":
+            raise ClaudeCallError(f"la Decisions API rechazó {answer.name!r}")
+        by_name[answer.name] = answer
+
+    def get(name: str):
+        if name not in by_name:
+            raise ClaudeCallError(f"la Decisions API no respondió {name!r}")
+        return by_name[name]
+
+    top = len(prompt.FILL_LEVELS) - 1
+    plates = []
+    for i, ref in enumerate(has_reference, start=1):
+        fill = get(f"fill_{i}")
+        plates.append(
+            {
+                "index": i,
+                "fill_ratio": min(max(fill.score / top, 0.0), 1.0),
+                "confidence": fill.confidence,
+                "visible": get(f"visible_{i}").probability >= 0.5,
+                "same_plate": get(f"same_plate_{i}").probability >= 0.5 if ref else True,
+            }
+        )
+    return {
+        "plates": plates,
+        "people_present": get("people_present").probability >= 0.5,
+    }
+
+
+def _call_openai(
+    content: list, model: str, timeout_s: float, has_reference: list[bool]
+) -> tuple[dict, dict]:
+    """Decisions API de OpenAI (`POST /v1/decisions`) con `OPENAI_API_KEY`."""
+    import openai
+
+    client = openai.OpenAI(timeout=timeout_s, max_retries=0)
+    try:
+        resp = client.decisions.create(
+            model=model,
+            input=[{"role": "user", "content": to_openai_parts(content)}],
+            questions=prompt.decision_questions(has_reference),
+        )
+    except openai.OpenAIError as e:
+        raise ClaudeCallError(f"Decisions API de OpenAI: {e}") from e
+    usage = getattr(resp, "usage", None)
+    return _answers_to_report(resp.answers, has_reference), {
+        "input_tokens": getattr(usage, "input_tokens", None),
+    }
+
+
+_BACKENDS = {"cli": _call_cli, "anthropic": _call_anthropic, "openai": _call_openai}
 
 
 def _parse(data: dict, n_plates: int) -> PlatesReport:
@@ -267,11 +338,16 @@ def estimate_plates(
             os.environ.get("CLAUDE_TIMEOUT_S") or DEFAULT_TIMEOUTS[provider]
         )
     content = build_content(table_jpeg, plate_jpegs, table_id, references)
+    backend = _BACKENDS[provider]
+    if provider == "openai":
+        # las preguntas same_plate_i solo van para los platos con referencia
+        has_reference = [r is not None for r in references or [None] * len(plate_jpegs)]
+        backend = functools.partial(backend, has_reference=has_reference)
 
     for attempt in range(1, ATTEMPTS + 1):
         start = time.monotonic()
         try:
-            data, usage = _BACKENDS[provider](content, model, timeout_s)
+            data, usage = backend(content, model, timeout_s)
             report = _parse(data, len(plate_jpegs))
         except (ClaudeCallError, ValidationError, ValueError) as e:
             logger.warning(

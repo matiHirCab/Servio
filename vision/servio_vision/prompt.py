@@ -60,6 +60,66 @@ REPORT_PLATES_SCHEMA: dict = {
 }
 
 
+# Decisions API de OpenAI (CLAUDE_PROVIDER=openai): en vez de un JSON libre, una
+# pregunta tipada por dato. Los niveles de fill van de menos a más y equiespaciados:
+# fill_ratio = score / (len(FILL_LEVELS) - 1).
+FILL_LEVELS: list[dict] = [
+    {"label": "vacío", "description": "Vacío o solo restos mínimos (0–0.05)."},
+    {"label": "restos", "description": "Quedan restos, se comió casi todo (~0.25)."},
+    {"label": "mitad", "description": "Queda más o menos la mitad (~0.5)."},
+    {"label": "parte", "description": "Se comió una parte, queda la mayoría (~0.75)."},
+    {"label": "intacto", "description": "Recién servido o sin señales de que se comió (0.9–1)."},
+]
+
+
+def decision_questions(has_reference: list[bool]) -> list[dict]:
+    """Preguntas para la Decisions API: por plato fill, visible y (con referencia)
+    same_plate; más people_present para la mesa."""
+    questions: list[dict] = []
+    for i, ref in enumerate(has_reference, start=1):
+        questions.append(
+            {
+                "type": "score",
+                "name": f"fill_{i}",
+                "instructions": (
+                    f"Plato {i}: ¿qué fracción de la porción servida queda? "
+                    "Seguí las reglas de fill_ratio de las instrucciones."
+                ),
+                "levels": FILL_LEVELS,
+            }
+        )
+        questions.append(
+            {
+                "type": "predicate",
+                "name": f"visible_{i}",
+                "instructions": (
+                    f"Plato {i}: ¿se puede medir la comida? Falso solo si una mano, un brazo "
+                    "o un cubierto agarrado está encima de la comida o agarrando comida del "
+                    "plato. Cubiertos apoyados, una servilleta o una mano en el borde: verdadero."
+                ),
+            }
+        )
+        if ref:
+            questions.append(
+                {
+                    "type": "predicate",
+                    "name": f"same_plate_{i}",
+                    "instructions": (
+                        f"Plato {i}: ¿la referencia (recién servido) muestra la misma "
+                        "comida que el recorte de ahora?"
+                    ),
+                }
+            )
+    questions.append(
+        {
+            "type": "predicate",
+            "name": "people_present",
+            "instructions": "¿Hay personas sentadas en la mesa?",
+        }
+    )
+    return questions
+
+
 def table_caption(table_id: str) -> str:
     return f"Mesa {table_id}, vista desde arriba:"
 
