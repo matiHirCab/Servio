@@ -121,7 +121,7 @@ def draw_overlay(
 ) -> np.ndarray:
     view = frame.copy()
     width = view.shape[1]
-    scale = max(0.5, width / 1920)
+    scale = max(0.9, width / 1920)  # videos chicos (celular vertical): texto legible
     for zone in zones.tables:
         table = state.tables[zone.table_id]
         color = TABLE_COLORS[table.status]
