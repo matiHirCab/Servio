@@ -128,6 +128,9 @@ class AlertProcessor:
         image = self.db.path.parent / "metricas.png"
         metrics.render(m, image)
         self.notifier.send_photo(image, metrics.summary(m))
+        problems = metrics.problems_text(m)  # aparte: en el pie de foto no entra
+        if problems:
+            self.notifier.send(problems)
 
     def _on_feedback(self, event: dict[str, Any]) -> None:
         """Respuesta de un mozo: al log y a la base."""

@@ -270,3 +270,6 @@ def test_metrics_command_sends_the_image(tmp_path):
     [(path, caption)] = sent
     assert path.exists() and path.suffix == ".png"
     assert "Risotto de hongos" in caption  # el historial simulado
+    problems = p.notifier.sent[-1][0]  # los problemas por plato, en otro mensaje
+    assert "Risotto de hongos · vuelve lleno el" in problems
+    assert "Estaba frío:" in problems and "Está todo bien" not in problems

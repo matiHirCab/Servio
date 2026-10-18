@@ -58,9 +58,32 @@ SELECT (SELECT COUNT(DISTINCT substr(abierto_at, 1, 10)) FROM avisos
 """
 
 
+# Por plato, cada problema que respondieron los mozos y su % sobre todas las
+# respuestas de ese plato ("Está todo bien" no es un problema, pero cuenta en el total).
+SQL_PROBLEMS = """
+SELECT p.nombre AS plato, r.texto AS problema,
+       COUNT(*) * 1.0 / (SELECT COUNT(*)
+                           FROM respuestas r2
+                           JOIN avisos a2 ON a2.id = r2.aviso_id
+                           JOIN platos_servidos ps2 ON ps2.id = a2.plato_servido_id
+                          WHERE ps2.plato_id = p.id) AS porcentaje
+  FROM respuestas r
+  JOIN avisos a ON a.id = r.aviso_id
+  JOIN platos_servidos ps ON ps.id = a.plato_servido_id
+  JOIN platos p ON p.id = ps.plato_id
+ WHERE r.texto NOT LIKE 'Está todo bien%'
+ GROUP BY p.id, r.texto
+ ORDER BY p.nombre, porcentaje DESC
+"""
+
+
 def compute(db: Database) -> dict:
     totals = db.query(SQL_TOTALS)[0]
+    problems: dict[str, list[tuple[str, float]]] = {}
+    for r in db.query(SQL_PROBLEMS):
+        problems.setdefault(r["plato"], []).append((r["problema"], r["porcentaje"]))
     return {
+        "problems": problems,
         "dishes": [
             (r["plato"], r["vuelve_lleno"], r["motivo"] or "-")
             for r in db.query(SQL_DISHES)
@@ -84,8 +107,20 @@ def print_report(m: dict) -> None:
     print("\nSegundos en responder el aviso")
     for waiter, v in m["answer"]:
         print(f"  {waiter:10} {v:5.0f} s")
+    if m["problems"]:
+        print("\nProblemas por plato (% de las respuestas de los mozos)")
+        for dish, _, _ in m["dishes"]:
+            if dish in m["problems"]:
+                print(f"  {dish}")
+                for text, pct in problem_lines(m, dish):
+                    print(f"    {text:30} {pct * 100:5.1f} %")
     if m["live_answers"]:
         print(f"\n(incluye {m['live_answers']} respuestas reales de las demos)")
+
+
+def problem_lines(m: dict, dish: str) -> list[tuple[str, float]]:
+    """Problemas de un plato, del más al menos común."""
+    return sorted(m["problems"].get(dish, []), key=lambda p: -p[1])
 
 
 def _fonts(size: int, bold_size: int):
@@ -189,13 +224,29 @@ def render(m: dict, path: Path) -> None:
     image.save(path)
 
 
+def problems_text(m: dict) -> str | None:
+    """Problemas por plato para Telegram, en un mensaje aparte (máx. 4096
+    caracteres): del plato que más vuelve lleno al que menos."""
+    with_problems = [d for d in m["dishes"] if d[0] in m["problems"]]
+    if not with_problems:
+        return None
+    lines = ["🔎 Platos con problemas (qué respondieron los mozos)"]
+    for dish, rate, _ in with_problems:
+        lines.append("")
+        lines.append(f"🍽️ {dish} · vuelve lleno el {rate * 100:.0f} %")
+        lines += [
+            f"   {text}: {pct * 100:.0f} %" for text, pct in problem_lines(m, dish)
+        ]
+    return "\n".join(lines)[:4096]
+
+
 def summary(m: dict) -> str:
     """Resumen corto para Telegram (va como pie de la imagen: máx. 1024 caracteres)."""
     lines = ["📊 Servio: lo que aprendimos del salón"]
     worst = [d for d in m["dishes"] if d[1] > 0][:3]
     if worst:
         lines.append("")
-        lines.append("Platos que vuelven llenos:")
+        lines.append("Platos que más vuelven llenos:")
         lines += [
             f"• {dish}: {rate * 100:.0f} % ({reason})" for dish, rate, reason in worst
         ]
