@@ -15,6 +15,7 @@ Prueba manual:
 import argparse
 import logging
 import sys
+import threading
 import time
 from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
@@ -27,6 +28,10 @@ logger = logging.getLogger(__name__)
 
 IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png", ".webp", ".bmp"}
 STREAM_PREFIXES = ("http://", "https://", "rtsp://", "rtmp://")
+CAMERA_WARMUP_S = 1.5  # frames de la cámara que se descartan al abrirla
+CAMERA_RECONNECT_S = 60.0  # cuánto se reintenta abrir una cámara que se cortó
+READ_FAILURES_TO_RECONNECT = 5  # lecturas fallidas seguidas antes de reconectar
+READ_RETRY_S = 0.1  # espera entre lecturas fallidas
 
 Frame = tuple[np.ndarray, datetime]
 
@@ -107,24 +112,133 @@ def read_folder(
 
 
 def read_camera(source: int | str, interval: float) -> Iterator[Frame]:
-    cap = cv2.VideoCapture(source)
-    if not cap.isOpened():
-        raise OSError(f"No se pudo abrir la cámara: {source}")
+    reader = CameraReader(source)
+    reader.start()
     last = -interval
     try:
-        while True:
-            # Se lee siempre, aunque no toque devolver, para que el buffer
-            # de la cámara no se llene y el frame entregado sea el actual.
-            ok, frame = cap.read()
-            if not ok:
-                logger.warning("La cámara dejó de mandar frames: %s", source)
-                return
+        # `frames()` da siempre el frame más nuevo: si el loop estuvo ocupado
+        # clasificando, se entrega el actual, no uno de hace 10 s.
+        for frame in reader.frames():
             now = time.monotonic()
             if now - last >= interval:
                 last = now
                 yield frame, datetime.now(UTC)
     finally:
-        cap.release()
+        reader.stop()
+
+
+class CameraReader:
+    """Lee la cámara en un hilo aparte y se queda con el último frame.
+
+    Se lee siempre, aunque el loop esté ocupado clasificando: si no, el buffer
+    se llena, el frame entregado es viejo y un stream por red (DroidCam, IP
+    Webcam) corta la conexión. Un fallo suelto de lectura se reintenta; con
+    `READ_FAILURES_TO_RECONNECT` seguidos, reabre la cámara durante
+    `CAMERA_RECONNECT_S` antes de darse por vencida. Lo usan `read_camera` y
+    `tools/vista_demo.py`.
+    """
+
+    def __init__(self, source: int | str) -> None:
+        self.source = source
+        self.fps = 30.0
+        self._cond = threading.Condition()
+        self._frame: np.ndarray | None = None
+        self._seq = 0  # frames leídos
+        self._taken = 0  # último frame entregado
+        self._done = False
+        self._stop = threading.Event()
+        self._thread: threading.Thread | None = None
+
+    def start(self) -> None:
+        """Abre la cámara (`OSError` si no abre) y empieza a leer."""
+        cap = self._open()
+        if cap is None:
+            raise OSError(f"No se pudo abrir la cámara: {self.source}")
+        self.fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
+        self._thread = threading.Thread(target=self._run, args=(cap,), daemon=True)
+        self._thread.start()
+
+    def stop(self) -> None:
+        self._stop.set()
+        if self._thread is not None:
+            self._thread.join(timeout=2)
+
+    def frames(self) -> Iterator[np.ndarray]:
+        """Cada frame nuevo, hasta que la cámara se corta del todo. Requiere `start()`."""
+        try:
+            while (frame := self.latest()) is not None:
+                yield frame
+            logger.warning("La cámara dejó de mandar frames: %s", self.source)
+        finally:
+            self.stop()
+
+    def latest(self) -> np.ndarray | None:
+        """Espera un frame que no se haya entregado; `None` si la cámara terminó.
+
+        No tiene tope: mientras el hilo esté reconectando, espera. Espera en
+        tramos cortos porque en Windows una espera larga no deja que Ctrl+C
+        corte el programa.
+        """
+        with self._cond:
+            while self._seq <= self._taken and not self._done:
+                self._cond.wait(timeout=0.5)
+            if self._seq <= self._taken:
+                return None
+            self._taken = self._seq
+            return self._frame
+
+    def _open(self) -> cv2.VideoCapture | None:
+        cap = cv2.VideoCapture(self.source)
+        if not cap.isOpened():
+            cap.release()
+            return None
+        # Una webcam recién abierta manda frames negros hasta que ajusta la
+        # exposición (~0,5 s): sin esto, la primera lectura es una mesa vacía.
+        warmup_end = time.monotonic() + CAMERA_WARMUP_S
+        while time.monotonic() < warmup_end and cap.read()[0]:
+            pass
+        return cap
+
+    def _run(self, cap: cv2.VideoCapture) -> None:
+        failures = 0
+        try:
+            while not self._stop.is_set():
+                ok, frame = cap.read()
+                if ok:
+                    failures = 0
+                    with self._cond:
+                        self._frame = frame
+                        self._seq += 1
+                        self._cond.notify_all()
+                    continue
+                # Por Wi-Fi, un paquete atrasado hace fallar una lectura suelta:
+                # recién se reconecta si fallan varias seguidas.
+                failures += 1
+                if failures < READ_FAILURES_TO_RECONNECT:
+                    self._stop.wait(READ_RETRY_S)
+                    continue
+                cap.release()
+                cap = self._reconnect()
+                if cap is None:
+                    break
+                failures = 0
+        finally:
+            if cap is not None:
+                cap.release()
+            with self._cond:
+                self._done = True
+                self._cond.notify_all()
+
+    def _reconnect(self) -> cv2.VideoCapture | None:
+        logger.warning("La cámara se cortó, reintento: %s", self.source)
+        deadline = time.monotonic() + CAMERA_RECONNECT_S
+        while not self._stop.is_set() and time.monotonic() < deadline:
+            cap = self._open()
+            if cap is not None:
+                logger.info("Cámara reconectada: %s", self.source)
+                return cap
+            self._stop.wait(2)
+        return None
 
 
 class _Pacer:

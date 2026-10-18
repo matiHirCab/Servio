@@ -4,6 +4,7 @@ node_modules/
 .venv/
 __pycache__/
 *.pt
+mobileclip*.ts
 videos/
 datasets/
 .next/
