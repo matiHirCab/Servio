@@ -1,8 +1,16 @@
 """Tests de ids estables y filtro de cajas (TOM-4)."""
 
+import pytest
+
 from servio_vision.detector import Detection, filter_detections
 from servio_vision.schemas import Item
-from servio_vision.tracking import IdCounter, match_ids, position_label
+from servio_vision.tracking import (
+    MAX_MISSING,
+    IdCounter,
+    bbox_iou,
+    match_ids,
+    position_label,
+)
 
 
 def _item(pid, bbox):
@@ -96,3 +104,38 @@ def test_filter_keeps_small_plate_partly_under_a_big_one():
         Detection((70, 0, 110, 40), 0.8, "plate"),
     ]
     assert len(filter_detections(dets, min_rel=0.1)) == 2
+
+
+def test_bbox_iou():
+    assert bbox_iou((0, 0, 0.2, 0.2), (0, 0, 0.2, 0.2)) == pytest.approx(1)
+    assert bbox_iou((0, 0, 0.2, 0.2), (0.1, 0, 0.2, 0.2)) == pytest.approx(1 / 3)
+    assert bbox_iou((0, 0, 0.2, 0.2), (0.5, 0.5, 0.2, 0.2)) == 0
+
+
+def _items(**boxes):
+    return [
+        Item(id=k, position="centro", bbox=b, visible=False) for k, b in boxes.items()
+    ]
+
+
+def test_lost_plate_is_remembered_even_if_the_caller_still_has_it():
+    """main.py no actualiza `previous` si una lectura falla: p2, que YOLO no vio en la
+    última assign, igual va con los recordados y no le gana a p1."""
+    a, b = (0.25, 0.25, 0.2, 0.4), (0.375, 0.25, 0.2, 0.4)
+    counter = IdCounter()
+    assert counter.assign("T1", [a, b], []) == ["p1", "p2"]
+    stale = _items(p1=a, p2=b)
+    assert counter.assign("T1", [a], stale) == ["p1"]
+    assert counter.assign("T1", [(0.325, 0.25, 0.2, 0.4)], stale) == ["p1"]
+
+
+def test_keep_extends_the_memory_of_a_lost_plate():
+    a, b = (0.1, 0.1, 0.2, 0.2), (0.6, 0.6, 0.2, 0.2)
+    counter = IdCounter()
+    previous = _items(p1=a, p2=b)
+    counter.assign("T1", [a, b], [])
+    for _ in range(MAX_MISSING + 2):
+        counter.assign("T1", [a], previous)
+        assert [pid for pid, _ in counter.missing("T1")] == ["p2"]
+        counter.keep("T1", "p2")
+    assert counter.assign("T1", [a, b], previous) == ["p1", "p2"]

@@ -79,7 +79,8 @@ def build_content(
         _image_block(table_jpeg),
     ]
     references = references or [None] * len(plate_jpegs)
-    for i, (jpeg, ref) in enumerate(zip(plate_jpegs, references), start=1):
+    # strict: un plato sin su lugar en `references` no se manda en silencio
+    for i, (jpeg, ref) in enumerate(zip(plate_jpegs, references, strict=True), start=1):
         if ref is None:
             content.append({"type": "text", "text": prompt.plate_caption(i)})
         else:
