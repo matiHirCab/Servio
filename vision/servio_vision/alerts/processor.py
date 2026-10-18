@@ -20,6 +20,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from servio_vision import metrics
 from servio_vision.alerts.config import AlertConfig
 from servio_vision.alerts.engine import evaluate, table_name
 from servio_vision.alerts.feedback import FeedbackDesk, Question
@@ -77,7 +78,8 @@ class AlertProcessor:
             db.load_restaurant(restaurant)
         self.feedback: FeedbackDesk | None = None
         if restaurant is not None:
-            self.feedback = FeedbackDesk(notifier, self._on_feedback)
+            commands = {"metricas": self._send_metrics} if db is not None else {}
+            self.feedback = FeedbackDesk(notifier, self._on_feedback, commands)
             self.feedback.start()
         # Marca dónde empieza la corrida (el log se agrega) y con qué umbrales: replay.py
         # corta el archivo acá y reproduce con la misma config.
@@ -112,6 +114,20 @@ class AlertProcessor:
         track_id = self._alert_plate.get(alert.id)
         served_id = self._served_rows.get(track_id) if track_id else None
         self.db.alert_opened(alert.id, alert.type, alert.table_id, served_id, ts)
+
+    def _send_metrics(self) -> None:
+        """`/metricas` en el grupo: la imagen de métricas con un resumen corto.
+        Junta el historial simulado (se importa una vez) con lo de hoy."""
+        if self.db is None or self.restaurant is None:
+            return
+        self.db.import_history(metrics.HISTORY, self.restaurant)
+        m = metrics.compute(self.db)
+        if not m["dishes"]:
+            self.notifier.send("📊 Todavía no hay datos para las métricas.")
+            return
+        image = self.db.path.parent / "metricas.png"
+        metrics.render(m, image)
+        self.notifier.send_photo(image, metrics.summary(m))
 
     def _on_feedback(self, event: dict[str, Any]) -> None:
         """Respuesta de un mozo: al log y a la base."""

@@ -91,7 +91,7 @@ python tools/generar_historial.py              # historial simulado de 30 días 
 python tools/metricas.py --image out/metricas.png
 ```
 
-Platos que vuelven llenos (% y motivo más común según los mozos), minutos hasta atender una mesa que terminó y segundos en responder el aviso, por mozo. Salen de consultas SQL a la base (`--sql` las muestra), que junta el historial simulado (se importa la primera vez) con lo que pasó en las demos.
+En la demo, escribí **`/metricas`** en el grupo de Telegram y el bot responde con la imagen y un resumen (con el programa corriendo). Platos que vuelven llenos (% y motivo más común según los mozos), minutos hasta atender una mesa que terminó y segundos en responder el aviso, por mozo. Salen de consultas SQL a la base (`--sql` las muestra), que junta el historial simulado (se importa la primera vez) con lo que pasó en las demos.
 
 ## Tabla de lo que pasó (cierre de la demo)
 

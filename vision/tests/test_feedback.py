@@ -240,3 +240,33 @@ def test_message_format_is_emoji_waiter_table_message(tmp_path):
         )
     finally:
         p.close()
+
+
+def test_metrics_command_sends_the_image(tmp_path):
+    from servio_vision.alerts.config import AlertConfig
+    from servio_vision.alerts.processor import AlertProcessor
+    from servio_vision.db import Database
+
+    sent = []
+
+    class Photos(FakeTelegram):
+        def send_photo(self, path, caption=""):
+            sent.append((path, caption))
+            return 1
+
+    p = AlertProcessor(
+        AlertConfig(interval=5, t1=10, t2=10, reminder=10),
+        Photos(),
+        tmp_path / "eventos.jsonl",
+        Restaurant.load(),
+        Database(tmp_path / "servio.db"),
+    )
+    try:
+        p.feedback.handle(
+            {"message": {"chat": {"id": -1}, "text": "/metricas@servio_mozos_bot"}}
+        )
+    finally:
+        p.close()
+    [(path, caption)] = sent
+    assert path.exists() and path.suffix == ".png"
+    assert "Risotto de hongos" in caption  # el historial simulado

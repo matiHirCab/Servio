@@ -11,6 +11,7 @@ import logging
 import os
 import sys
 from collections.abc import Mapping
+from pathlib import Path
 from typing import Any, Protocol
 
 import httpx
@@ -120,16 +121,29 @@ class TelegramNotifier:
     def is_group(self, chat_id: object) -> bool:
         return str(chat_id) == str(self._chat_id)
 
+    def send_photo(self, path: Path, caption: str = "") -> int | None:
+        """Manda una imagen al grupo (por ejemplo, las métricas)."""
+        files = {"photo": (path.name, path.read_bytes(), "image/png")}
+        data = {"chat_id": self._chat_id, "caption": caption}
+        return _message_id(self._call("sendPhoto", data, files=files, timeout=60))
+
     def _call(
-        self, method: str, payload: dict[str, Any], timeout: float | None = None
+        self,
+        method: str,
+        payload: dict[str, Any],
+        timeout: float | None = None,
+        files: dict[str, Any] | None = None,
     ) -> Any:
-        """POST a la Bot API; devuelve `result` o None si falló (ya logueado)."""
+        """POST a la Bot API; devuelve `result` o None si falló (ya logueado).
+        Con `files`, va como formulario (multipart) en vez de JSON."""
         url = f"{API_URL}/bot{self._token}/{method}"
+        body: dict[str, Any] = (
+            {"data": payload, "files": files} if files else {"json": payload}
+        )
+        if timeout is not None:
+            body["timeout"] = timeout
         try:
-            if timeout is None:
-                response = self._client.post(url, json=payload)
-            else:
-                response = self._client.post(url, json=payload, timeout=timeout)
+            response = self._client.post(url, **body)
             data = response.json()
         except (httpx.HTTPError, ValueError) as error:
             # Sin el mensaje de httpx: trae la URL, y la URL trae el token.
@@ -164,6 +178,11 @@ class ConsoleNotifier:
     def edit(self, message_id: int, text: str) -> bool:
         _print(f"[telegram editado #{message_id}] {text}")
         return True
+
+    def send_photo(self, path: Path, caption: str = "") -> int:
+        self._last_id += 1
+        _print(f"[telegram #{self._last_id}] (imagen {path}) {caption}")
+        return self._last_id
 
 
 def _keyboard(buttons: Buttons) -> dict[str, Any]:

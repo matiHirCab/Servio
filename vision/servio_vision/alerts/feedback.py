@@ -47,9 +47,16 @@ class Question:
 class FeedbackDesk:
     """Preguntas abiertas (por token de botón) y sus respuestas."""
 
-    def __init__(self, notifier: Any, log_event: Callable[[dict], None]) -> None:
+    def __init__(
+        self,
+        notifier: Any,
+        log_event: Callable[[dict], None],
+        commands: dict[str, Callable[[], None]] | None = None,
+    ) -> None:
         self.notifier = notifier
         self.log_event = log_event
+        # comandos del grupo ("/metricas" → commands["metricas"]())
+        self.commands = commands or {}
         self._questions: dict[str, Question] = {}  # token → pregunta
         self._by_message: dict[int, Question] = {}
         self._prompts: dict[int, str] = {}  # message_id del "escribí qué pasó" → token
@@ -166,6 +173,14 @@ class FeedbackDesk:
             return
         reply_to = (message.get("reply_to_message") or {}).get("message_id")
         text = (message.get("text") or "").strip()
+        if text.startswith("/"):
+            # "/metricas" o "/metricas@servio_mozos_bot"
+            name = text.split()[0][1:].split("@")[0].lower()
+            command = self.commands.get(name)
+            if command is not None:
+                logger.info("Comando /%s desde Telegram", name)
+                command()
+            return
         with self._lock:
             token = self._prompts.pop(reply_to, None) if reply_to else None
             question = self._questions.get(token) if token else None
