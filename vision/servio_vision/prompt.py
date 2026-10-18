@@ -29,7 +29,9 @@ Indicá también si hay personas sentadas en la mesa (people_present)."""
 
 # cli y anthropic piden un JSON libre; la Decisions API (openai) usa INSTRUCTIONS solas
 # porque responde preguntas tipadas.
-SYSTEM_PROMPT = INSTRUCTIONS + "\nRespondé solo con el JSON pedido, un elemento por plato."
+SYSTEM_PROMPT = (
+    INSTRUCTIONS + "\nRespondé solo con el JSON pedido, un elemento por plato."
+)
 
 # Esquema JSON de la respuesta (report_plates). Lo usan los dos proveedores.
 REPORT_PLATES_SCHEMA: dict = {
@@ -64,21 +66,22 @@ REPORT_PLATES_SCHEMA: dict = {
 
 
 # Decisions API de OpenAI (CLAUDE_PROVIDER=openai): en vez de un JSON libre, una
-# pregunta tipada por dato. Los niveles de fill van de menos a más y sus rangos siguen
-# los umbrales de estado de schemas.py (EMPTY_MAX, EATING_MIN, FULL_MIN), así cada nivel
-# cae en un solo estado del plato.
+# pregunta tipada por dato. Los niveles de fill van de menos a más (la API los numera
+# desde 0) y se describen con las palabras de la guía de INSTRUCTIONS, sin números: los
+# rangos de la guía no coinciden con los umbrales de estado de schemas.py.
 FILL_LEVELS: list[dict] = [
-    {"label": "vacío", "description": "Vacío o solo restos mínimos (menos de 0.05)."},
-    {"label": "restos", "description": "Quedan restos, se comió casi todo (0.05–0.3)."},
-    {"label": "mitad", "description": "Se comió bastante, queda cerca de la mitad (0.3–0.6)."},
-    {"label": "parte", "description": "Se comió una parte, queda la mayoría (0.6–0.75)."},
+    {"label": "vacío", "description": "Vacío o solo restos mínimos."},
+    {"label": "restos", "description": "Quedan restos: se comió casi todo."},
+    {"label": "mitad", "description": "Se comió bastante: queda cerca de la mitad."},
+    {"label": "parte", "description": "Se comió una parte, pero queda la mayoría."},
     {
         "label": "intacto",
-        "description": "Recién servido, sin señales de que se comió o igual a la referencia (0.75–1).",
+        "description": "Recién servido: sin señales de que se comió, o igual a la referencia.",
     },
 ]
-# fill_ratio de cada nivel (mismo orden): vacio, por_terminar, comiendo, comiendo, lleno.
-# Va aparte porque a la API solo le llegan label y description.
+# fill_ratio de cada nivel (mismo orden), uno por estado de schemas.py: vacio,
+# por_terminar, comiendo, comiendo, lleno. Va aparte porque a la API solo le llegan
+# label y description.
 FILL_RATIOS: list[float] = [0.0, 0.15, 0.45, 0.65, 1.0]
 
 
@@ -93,8 +96,9 @@ def decision_questions(has_reference: list[bool]) -> list[dict]:
                 "name": f"fill_{i}",
                 "instructions": (
                     f"Plato {i}: ¿qué fracción de la porción servida queda? "
-                    "Estimá cuánto queda con las reglas de fill_ratio de las instrucciones "
-                    "y elegí el nivel cuyo rango lo contiene."
+                    "Elegí el nivel que mejor describe cuánto queda, con los criterios de "
+                    "fill_ratio de las instrucciones (referencia, contar piezas, señales "
+                    "de que se comió)."
                 ),
                 "levels": FILL_LEVELS,
             }

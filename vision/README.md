@@ -70,7 +70,7 @@ No hay créditos de AWS, así que Claude va por el Claude Code logueado (`claude
 python -m servio_vision.classifiers.claude_plates mesa.jpg plato1.jpg plato2.jpg
 ```
 
-- `CLAUDE_PROVIDER=cli` (por defecto), `anthropic` (necesita `ANTHROPIC_API_KEY` y `pip install anthropic`) u `openai` (Decisions API de OpenAI, modelo `gpt-6-luna` o el de `OPENAI_MODEL`; necesita `OPENAI_API_KEY` y `pip install "openai>=3.26.0"`). Con `openai` no hay JSON libre: se hacen preguntas tipadas por plato (`prompt.decision_questions`) y se arma el mismo `PlatesReport`.
+- `CLAUDE_PROVIDER=cli` (por defecto), `anthropic` (necesita `ANTHROPIC_API_KEY` y `pip install anthropic`) u `openai` (Decisions API de OpenAI, modelo `gpt-6-luna` o el de `OPENAI_MODEL`, timeout de 20 s o el de `OPENAI_TIMEOUT_S`; necesita `OPENAI_API_KEY` y `pip install "openai>=3.26.0"`). Con `openai` no hay JSON libre: se hacen preguntas tipadas por plato (`prompt.decision_questions`) y se arma el mismo `PlatesReport`.
 - En Windows llama a `claude.exe` directo; si no está en el PATH, poner la ruta en `CLAUDE_CLI`.
 - Primera prueba (8 platos, video de IA): 6–8 s por mesa con `haiku`.
 

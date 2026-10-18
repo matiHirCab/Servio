@@ -11,9 +11,10 @@ Proveedor según `CLAUDE_PROVIDER`:
 - `openai`: la Decisions API de OpenAI con `OPENAI_API_KEY` (`pip install "openai>=3.26.0"`).
   En vez de un JSON libre hace preguntas tipadas por plato (ver `prompt.decision_questions`).
 
-Variables opcionales: `CLAUDE_MODEL` (por defecto `haiku` / `claude-haiku-5-5`), `OPENAI_MODEL`
-(por defecto `gpt-6-luna`; separado para que un modelo de Claude no termine en OpenAI), `CLAUDE_TIMEOUT_S` (por defecto 15 s con `cli`, 10 s con `anthropic` y 20 s con `openai`), `CLAUDE_CLI`
-(ruta a `claude.exe` si no está en el PATH).
+Variables opcionales: `CLAUDE_MODEL` (por defecto `haiku` / `claude-haiku-5-5`), `CLAUDE_TIMEOUT_S`
+(por defecto 15 s con `cli`, 10 s con `anthropic`), `CLAUDE_CLI` (ruta a `claude.exe` si no está en
+el PATH). Con `openai`: `OPENAI_MODEL` (por defecto `gpt-6-luna`) y `OPENAI_TIMEOUT_S` (por defecto
+20 s); van aparte para que un valor pensado para Claude no termine en OpenAI.
 
 Prueba rápida: `python -m servio_vision.classifiers.claude_plates mesa.jpg plato1.jpg plato2.jpg`
 """
@@ -21,6 +22,7 @@ Prueba rápida: `python -m servio_vision.classifiers.claude_plates mesa.jpg plat
 import base64
 import json
 import logging
+import math
 import os
 import shutil
 import subprocess
@@ -37,11 +39,24 @@ from servio_vision import prompt
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_MODELS = {"cli": "haiku", "anthropic": "claude-haiku-5-5", "openai": "gpt-6-luna"}
-MODEL_ENV = {"cli": "CLAUDE_MODEL", "anthropic": "CLAUDE_MODEL", "openai": "OPENAI_MODEL"}
+DEFAULT_MODELS = {
+    "cli": "haiku",
+    "anthropic": "claude-haiku-5-5",
+    "openai": "gpt-6-luna",
+}
+MODEL_ENV = {
+    "cli": "CLAUDE_MODEL",
+    "anthropic": "CLAUDE_MODEL",
+    "openai": "OPENAI_MODEL",
+}
 # `claude -p` tarda ~6-8 s con 8 platos (arranque del CLI incluido).
 # openai: unas 25 preguntas tipadas y ~17 imágenes en una mesa de 8 platos con referencias.
 DEFAULT_TIMEOUTS = {"cli": 15.0, "anthropic": 10.0, "openai": 20.0}
+TIMEOUT_ENV = {
+    "cli": "CLAUDE_TIMEOUT_S",
+    "anthropic": "CLAUDE_TIMEOUT_S",
+    "openai": "OPENAI_TIMEOUT_S",
+}
 RETRY_WAIT_S = 2.0
 ATTEMPTS = 2  # un intento + un reintento
 
@@ -92,10 +107,17 @@ ANTHROPIC_FORMAT = _Format(
 # La Decisions API responde preguntas tipadas: sin el cierre que pide JSON.
 OPENAI_FORMAT = _Format(
     text=lambda text: {"type": "input_text", "text": text},
-    image=lambda data: {"type": "input_image", "image_url": f"data:image/jpeg;base64,{data}"},
+    image=lambda data: {
+        "type": "input_image",
+        "image_url": f"data:image/jpeg;base64,{data}",
+    },
     closing=False,
 )
-_FORMATS = {"cli": ANTHROPIC_FORMAT, "anthropic": ANTHROPIC_FORMAT, "openai": OPENAI_FORMAT}
+_FORMATS = {
+    "cli": ANTHROPIC_FORMAT,
+    "anthropic": ANTHROPIC_FORMAT,
+    "openai": OPENAI_FORMAT,
+}
 
 
 def build_content(
@@ -153,7 +175,9 @@ def json_from_text(text: str) -> dict:
     raise ClaudeCallError(f"claude -p no devolvió JSON: {text[:300]!r}")
 
 
-def _call_cli(request: PlatesRequest, model: str, timeout_s: float) -> tuple[dict, dict]:
+def _call_cli(
+    request: PlatesRequest, model: str, timeout_s: float
+) -> tuple[dict, dict]:
     """`claude -p` con las imágenes por stdin (stream-json).
 
     El prompt va dentro del mensaje y no como argumento: en Windows, si `claude` es
@@ -236,7 +260,9 @@ def _call_anthropic(
     try:
         import anthropic
     except ImportError as e:
-        raise ClaudeCallError("falta el paquete anthropic: pip install anthropic") from e
+        raise ClaudeCallError(
+            "falta el paquete anthropic: pip install anthropic"
+        ) from e
 
     client = anthropic.Anthropic(timeout=timeout_s, max_retries=0)
     try:
@@ -271,11 +297,40 @@ def _call_anthropic(
 def _fill_ratio(score: float) -> float:
     """Score de la Decisions API → fill_ratio, interpolando en `prompt.FILL_RATIOS`.
 
-    No sabemos si la API devuelve el índice del nivel o un promedio entre niveles
-    (p. ej. 2.5): interpolar sirve para los dos."""
+    El score es el promedio de los índices de nivel ponderado por probabilidad (puede
+    dar 2.5). Es el respaldo de `_fill_from_probabilities`."""
     low = min(int(score), len(prompt.FILL_RATIOS) - 2)
     frac = score - low
     return prompt.FILL_RATIOS[low] * (1 - frac) + prompt.FILL_RATIOS[low + 1] * frac
+
+
+def _get(obj, field: str):
+    """Campo de un objeto del SDK o de un dict."""
+    return obj.get(field) if isinstance(obj, dict) else getattr(obj, field, None)
+
+
+def _fill_from_probabilities(answer) -> float | None:
+    """Valor esperado del fill_ratio con las `probabilities` de cada nivel.
+
+    Es más exacto que interpolar el score porque `FILL_RATIOS` no está equiespaciado
+    (50% vacío y 50% intacto da 0.5, no 0.45). `None` si faltan o no se entienden."""
+    ratios = {
+        level["label"]: r for level, r in zip(prompt.FILL_LEVELS, prompt.FILL_RATIOS)
+    }
+    total = expected = 0.0
+    for entry in _get(answer, "probabilities") or []:
+        label, p = _get(entry, "label"), _get(entry, "probability")
+        if (
+            label not in ratios
+            or isinstance(p, bool)
+            or not isinstance(p, (int, float))
+        ):
+            return None
+        if not math.isfinite(p) or p < 0:
+            return None
+        total += p
+        expected += p * ratios[label]
+    return expected / total if total > 0 else None
 
 
 def _answers_to_report(
@@ -292,7 +347,9 @@ def _answers_to_report(
         if getattr(answer, "type", None) == "refusal":
             raise ClaudeCallError(f"la Decisions API rechazó {name!r}")
         if name not in expected:
-            raise ClaudeCallError(f"la Decisions API respondió algo no pedido: {name!r}")
+            raise ClaudeCallError(
+                f"la Decisions API respondió algo no pedido: {name!r}"
+            )
         if name in by_name:
             raise ClaudeCallError(f"la Decisions API respondió dos veces {name!r}")
         by_name[name] = answer
@@ -303,6 +360,10 @@ def _answers_to_report(
         value = getattr(by_name[name], field, None)
         if isinstance(value, bool) or not isinstance(value, (int, float)):
             raise ClaudeCallError(f"{name}.{field} no es un número: {value!r}")
+        if not math.isfinite(value):
+            raise ClaudeCallError(f"{name}.{field} no es finito: {value!r}")
+        if field == "probability" and not 0 <= value <= 1:
+            raise ClaudeCallError(f"{name}.probability fuera de 0..1: {value}")
         return float(value)
 
     # score va de 0 (vacío) al último nivel de FILL_LEVELS; fuera de rango es otra
@@ -313,10 +374,11 @@ def _answers_to_report(
         score = number(f"fill_{i}", "score")
         if not 0 <= score <= top:
             raise ClaudeCallError(f"fill_{i}.score fuera de 0..{top}: {score}")
+        fill_ratio = _fill_from_probabilities(by_name[f"fill_{i}"])
         plates.append(
             {
                 "index": i,
-                "fill_ratio": _fill_ratio(score),
+                "fill_ratio": _fill_ratio(score) if fill_ratio is None else fill_ratio,
                 "confidence": number(f"fill_{i}", "confidence"),
                 "visible": number(f"visible_{i}", "probability") >= 0.5,
                 "same_plate": number(f"same_plate_{i}", "probability") >= 0.5
@@ -330,7 +392,9 @@ def _answers_to_report(
     }
 
 
-def _call_openai(request: PlatesRequest, model: str, timeout_s: float) -> tuple[dict, dict]:
+def _call_openai(
+    request: PlatesRequest, model: str, timeout_s: float
+) -> tuple[dict, dict]:
     """Decisions API de OpenAI (`POST /v1/decisions`) con `OPENAI_API_KEY`.
 
     El prompt va primero como texto (la API no tiene system prompt) y sin el pedido
@@ -346,6 +410,10 @@ def _call_openai(request: PlatesRequest, model: str, timeout_s: float) -> tuple[
     # las preguntas same_plate_i solo van para los platos con referencia
     questions = prompt.decision_questions(request.has_reference)
     client = openai.OpenAI(timeout=timeout_s, max_retries=0)
+    if not hasattr(client, "decisions"):
+        raise ClaudeCallError(
+            'el paquete openai es viejo para la Decisions API: pip install "openai>=3.26.0"'
+        )
     try:
         resp = client.decisions.create(
             model=model,
@@ -398,7 +466,7 @@ def estimate_plates(
     model = model or os.environ.get(MODEL_ENV[provider]) or DEFAULT_MODELS[provider]
     if timeout_s is None:
         timeout_s = float(
-            os.environ.get("CLAUDE_TIMEOUT_S") or DEFAULT_TIMEOUTS[provider]
+            os.environ.get(TIMEOUT_ENV[provider]) or DEFAULT_TIMEOUTS[provider]
         )
     # Una sola vez y fuera del loop: las imágenes no se recodifican en cada intento, y un
     # `references` de otro largo es un bug del que llama (ValueError), no un fallo de Claude.

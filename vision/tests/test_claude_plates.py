@@ -273,10 +273,15 @@ def _decision(type_, name, **fields):
     return SimpleNamespace(type=type_, name=name, **fields)
 
 
-def _decisions(n, refs=(), fill_score=2.0, visible=0.9, same=0.9, people=0.8):
+def _decisions(
+    n, refs=(), fill_score=2.0, visible=0.9, same=0.9, people=0.8, probabilities=None
+):
     answers = []
     for i in range(1, n + 1):
-        answers.append(_decision("score", f"fill_{i}", score=fill_score, confidence=0.7))
+        fill = _decision("score", f"fill_{i}", score=fill_score, confidence=0.7)
+        if probabilities is not None:
+            fill.probabilities = probabilities
+        answers.append(fill)
         answers.append(_decision("predicate", f"visible_{i}", probability=visible))
         if i in refs:
             answers.append(_decision("predicate", f"same_plate_{i}", probability=same))
@@ -293,6 +298,7 @@ def openai_api(monkeypatch):
     monkeypatch.delenv("CLAUDE_MODEL", raising=False)
     monkeypatch.delenv("OPENAI_MODEL", raising=False)
     monkeypatch.delenv("CLAUDE_TIMEOUT_S", raising=False)
+    monkeypatch.delenv("OPENAI_TIMEOUT_S", raising=False)
     return fake
 
 
@@ -307,7 +313,14 @@ def test_openai_maps_answers_to_report(openai_api):
     assert request["model"] == "gpt-6-luna"
     assert openai_api.client_kwargs["timeout"] == 20.0
     names = [q["name"] for q in request["questions"]]
-    assert names == ["fill_1", "visible_1", "fill_2", "visible_2", "same_plate_2", "people_present"]
+    assert names == [
+        "fill_1",
+        "visible_1",
+        "fill_2",
+        "visible_2",
+        "same_plate_2",
+        "people_present",
+    ]
 
 
 def test_openai_sends_images_as_data_urls(openai_api):
@@ -418,3 +431,48 @@ def test_openai_fractional_score_is_interpolated(openai_api):
     openai_api.responses.append(_decisions(1, fill_score=2.5))
     report = estimate_plates(JPEG, [JPEG], "T1")
     assert report.plates[0].fill_ratio == pytest.approx(0.55)  # entre mitad y parte
+
+
+def _level_probs(**by_label):
+    return [{"label": label, "probability": p} for label, p in by_label.items()]
+
+
+def test_openai_fill_ratio_is_the_expected_value(openai_api):
+    # score 2.0 interpolado daría 0.45; con las probabilidades da el valor esperado
+    probs = _level_probs(vacío=0.5, intacto=0.5)
+    openai_api.responses.append(_decisions(1, fill_score=2.0, probabilities=probs))
+    report = estimate_plates(JPEG, [JPEG], "T1")
+    assert report.plates[0].fill_ratio == pytest.approx(0.5)
+
+
+def test_openai_unknown_level_label_falls_back_to_score(openai_api):
+    probs = _level_probs(otro=1.0)
+    openai_api.responses.append(_decisions(1, fill_score=4.0, probabilities=probs))
+    assert estimate_plates(JPEG, [JPEG], "T1").plates[0].fill_ratio == 1.0
+
+
+def test_openai_old_sdk_without_decisions_falls_back(openai_api, monkeypatch):
+    class OldClient:
+        def __init__(self, **kwargs):
+            pass
+
+    monkeypatch.setattr(openai_api, "OpenAI", OldClient)
+    assert estimate_plates(JPEG, [JPEG], "T1") is None
+
+
+@pytest.mark.parametrize("probability", [float("nan"), 50.0])
+def test_openai_bad_probability_is_rejected(openai_api, probability):
+    bad = _decisions(1, people=probability)
+    openai_api.responses += [bad, bad]
+    assert estimate_plates(JPEG, [JPEG], "T1") is None
+
+
+def test_openai_has_its_own_timeout(openai_api, monkeypatch):
+    monkeypatch.setenv("CLAUDE_TIMEOUT_S", "10")
+    openai_api.responses.append(_decisions(1))
+    estimate_plates(JPEG, [JPEG], "T1")
+    assert openai_api.client_kwargs["timeout"] == 20.0
+    monkeypatch.setenv("OPENAI_TIMEOUT_S", "30")
+    openai_api.responses.append(_decisions(1))
+    estimate_plates(JPEG, [JPEG], "T1")
+    assert openai_api.client_kwargs["timeout"] == 30.0
