@@ -64,7 +64,7 @@ FINISHED_AFTER=20           # 20 s en "por terminar" → "vacío"
 ```
 
 - **`--realtime`:** con un video, la vista se comporta como la cámara: el video nunca espera a la IA y, si está ocupada, esa lectura se saltea. Con la cámara es siempre así. Sin `--realtime`, el video espera cada lectura (todas las lecturas, pero se ve a los tirones).
-- **Sobre cada plato** se muestra solo el estado; arriba, "Analizando..." mientras la IA procesa.
+- **Sobre cada plato** se muestra solo el estado (sin id, % ni confianza), sin encabezado.
 - **`--yolo-conf`:** umbral del detector (por defecto 0,25). Para videos de baja calidad (cámaras de seguridad) YOLOE da confianzas de ~0,08: probar con 0,07.
 
 - **Teclas:** `q` sale, espacio pausa. Con `--no-window --record` graba sin abrir la ventana.

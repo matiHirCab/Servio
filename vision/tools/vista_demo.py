@@ -120,7 +120,11 @@ def _label(img, text, org, color, scale=0.7, thickness=2) -> None:
 
 
 def draw_overlay(
-    frame: np.ndarray, zones: Zones, state: DemoState, now: datetime, header: str
+    frame: np.ndarray,
+    zones: Zones,
+    state: DemoState,
+    now: datetime,
+    header: str = "",
 ) -> np.ndarray:
     view = frame.copy()
     width = view.shape[1]
@@ -162,7 +166,8 @@ def draw_overlay(
             0.9 * scale,
             2,
         )
-    _label(view, header, (12, round(36 * scale)), (255, 255, 255), 0.8 * scale, 2)
+    if header:
+        _label(view, header, (12, round(36 * scale)), (255, 255, 255), 0.8 * scale, 2)
     return view
 
 
@@ -316,9 +321,7 @@ def run(args) -> int:
             state.update(pipeline, pending_ts)
 
     def render(frame, ts, video_s) -> np.ndarray:
-        # "Analizando..." solo mientras la IA procesa una lectura
-        header = "Servio" + ("   * Analizando..." if pending is not None else "")
-        return draw_overlay(frame, pipeline.zones, state, ts, header)
+        return draw_overlay(frame, pipeline.zones, state, ts)
 
     if not args.no_window:
         cv2.namedWindow(WINDOW, cv2.WINDOW_NORMAL)
