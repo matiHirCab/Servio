@@ -1,5 +1,6 @@
 """Tests de capture.py con un video y fotos sintéticos (sin cámara)."""
 
+import threading
 import time
 from datetime import UTC, datetime, timedelta
 from typing import ClassVar
@@ -71,8 +72,9 @@ class _FakeCamera:
 
     instances: ClassVar[list["_FakeCamera"]] = []
 
-    def __init__(self, source, fail_after=None, fail_once_at=None):
+    def __init__(self, source, *args, fail_after=None, fail_once_at=None):
         _FakeCamera.instances.append(self)
+        self.args = args
         self.count = 0
         self.reads = 0
         self.fail_after = fail_after
@@ -116,8 +118,11 @@ def fake_camera(monkeypatch):
     _FakeCamera.instances = []
     monkeypatch.setattr(capture, "CAMERA_WARMUP_S", 0)
     monkeypatch.setattr(capture, "READ_RETRY_S", 0.001)
+    monkeypatch.setattr(capture, "CAMERA_RETRY_S", 0.01)
     return lambda **kw: monkeypatch.setattr(
-        capture.cv2, "VideoCapture", lambda source: _FakeCamera(source, **kw)
+        capture.cv2,
+        "VideoCapture",
+        lambda source, *args: _FakeCamera(source, *args, **kw),
     )
 
 
@@ -152,3 +157,40 @@ def test_camera_delivers_latest_frame_while_loop_is_busy(fake_camera):
     second, _ = next(source)
     source.close()
     assert _frame_number(second) >= _frame_number(first) + 5
+
+
+def test_camera_that_opens_but_sends_no_frames_does_not_start(fake_camera):
+    """Una webcam que usa otro programa abre (isOpened) pero no manda frames."""
+    fake_camera(fail_after=0)
+    with pytest.raises(OSError):
+        next(open_source("0", interval=0.01))
+
+
+def test_camera_reconnect_deadline_counts_since_the_last_good_frame(
+    fake_camera, monkeypatch
+):
+    """Cada conexión abre y se corta enseguida: no reconecta para siempre, se da por
+    vencida a los CAMERA_RECONNECT_S del último frame bueno."""
+    from servio_vision import capture
+
+    monkeypatch.setattr(capture, "CAMERA_RECONNECT_S", 0.3)
+    fake_camera(fail_after=1)  # el único frame de cada conexión lo usa la apertura
+    done = threading.Event()
+
+    def run():
+        list(open_source("0", interval=0.01))
+        done.set()
+
+    threading.Thread(target=run, daemon=True).start()
+    assert done.wait(timeout=3), "la cámara siguió reconectando"
+    assert len(_FakeCamera.instances) >= 2
+
+
+def test_network_stream_opens_with_timeouts(fake_camera):
+    fake_camera()
+    source = open_source("http://192.168.0.10:4747/video", interval=0.01)
+    next(source)
+    source.close()
+    backend, params = _FakeCamera.instances[0].args
+    assert backend == cv2.CAP_FFMPEG
+    assert cv2.CAP_PROP_READ_TIMEOUT_MSEC in params
