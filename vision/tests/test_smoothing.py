@@ -180,3 +180,20 @@ def test_without_finished_after_nothing_changes():
     for sec in (0, 600, 1200):
         [item] = smoother.update([plate("por_terminar")], t0 + timedelta(seconds=sec))
     assert item.state == "por_terminar"
+
+
+def test_thresholds_come_from_env(monkeypatch):
+    import pytest
+
+    monkeypatch.setenv("SMOOTH_HARD_READINGS", "2")
+    monkeypatch.setenv("SMOOTH_MIN_CONFIDENCE", "0.6")
+    s = TableSmoother()
+    lleno = Item(id="p1", state="lleno", confidence=0.9, position="c")
+    s.update([lleno])
+    dudoso = Item(id="p1", state="por_terminar", confidence=0.65, position="c")
+    s.update([dudoso])
+    [item] = s.update([dudoso])  # 2 lecturas con 0.65 alcanzan (por defecto: nunca)
+    assert item.state == "por_terminar"
+    monkeypatch.setenv("SMOOTH_MIN_CONFIDENCE", "2")
+    with pytest.raises(ValueError):
+        TableSmoother()

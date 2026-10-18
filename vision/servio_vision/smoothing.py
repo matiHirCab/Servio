@@ -24,10 +24,16 @@ cliente no va a comer). Después, las lecturas `por_terminar` no lo devuelven
 atrás; solo un plato que se vuelve a servir (`lleno`/`comiendo`) sale de `vacio`.
 Necesita el `ts` de cada lectura (`update(items, ts)`).
 
+Configurable por `.env` (se lee al crear el suavizado; vacío = el valor de arriba):
+`SMOOTH_READINGS` (2), `SMOOTH_HARD_READINGS` (3) y `SMOOTH_MIN_CONFIDENCE` (0.8).
+Menos lecturas o menos confianza = cambia de estado más rápido, pero una lectura
+mala pesa más. La Decisions API de OpenAI da confianzas más bajas que Claude.
+
 Uso: un `TableSmoother` por mesa; `update()` con los ítems de cada lectura
 válida (si el clasificador devolvió `None`, no se llama).
 """
 
+import os
 from dataclasses import dataclass
 from datetime import datetime
 
@@ -38,6 +44,19 @@ NEIGHBOR_READINGS = 2
 HARD_READINGS = 3
 HARD_MIN_CONFIDENCE = 0.8
 MISSING_TO_REMOVE = 2
+
+
+def _env_number(name: str, default: float, low: float, high: float) -> float:
+    value = (os.environ.get(name) or "").strip()
+    if not value:
+        return default
+    try:
+        number = float(value)
+    except ValueError as e:
+        raise ValueError(f"{name}={value!r} no es un número") from e
+    if not low <= number <= high:
+        raise ValueError(f"{name}={value!r} tiene que estar entre {low} y {high}")
+    return number
 
 
 def is_hard_change(current: PlateState, new: PlateState) -> bool:
@@ -62,6 +81,15 @@ class TableSmoother:
     def __init__(self, finished_after: float | None = None) -> None:
         self._tracks: dict[str, _Track] = {}
         self.finished_after = finished_after
+        self.neighbor_readings = int(
+            _env_number("SMOOTH_READINGS", NEIGHBOR_READINGS, 1, 10)
+        )
+        self.hard_readings = int(
+            _env_number("SMOOTH_HARD_READINGS", HARD_READINGS, 1, 10)
+        )
+        self.hard_min_confidence = _env_number(
+            "SMOOTH_MIN_CONFIDENCE", HARD_MIN_CONFIDENCE, 0, 1
+        )
 
     def update(self, items: list[Item], ts: datetime | None = None) -> list[Item]:
         """Procesa una lectura y devuelve los platos suavizados de la mesa."""
@@ -143,12 +171,12 @@ class TableSmoother:
         if new != track.candidate:
             track.candidate, track.streak = new, 0
         hard = is_hard_change(current, new)
-        if hard and (item.confidence or 0) < HARD_MIN_CONFIDENCE:
+        if hard and (item.confidence or 0) < self.hard_min_confidence:
             # para un cambio difícil, una lectura dudosa corta la racha
             track.streak = 0
             return
         track.streak += 1
-        if track.streak >= (HARD_READINGS if hard else NEIGHBOR_READINGS):
+        if track.streak >= (self.hard_readings if hard else self.neighbor_readings):
             track.accepted = _keep_box(item, track.accepted)
             track.candidate, track.streak = None, 0
 

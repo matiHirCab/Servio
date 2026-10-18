@@ -449,6 +449,17 @@ def build_pipeline(args: argparse.Namespace) -> Pipeline | None:
             logger.error("%s", e)
             return None
         logger.info("IA: %s · prompt %s", provider, prompt.prompt_file(provider))
+    try:
+        smoother = TableSmoother()  # valida SMOOTH_* del .env antes de arrancar
+    except ValueError as e:
+        logger.error("Suavizado: %s", e)
+        return None
+    logger.info(
+        "Cambio de estado: %d lecturas (saltos: %d con confianza ≥ %g)",
+        smoother.neighbor_readings,
+        smoother.hard_readings,
+        smoother.hard_min_confidence,
+    )
     classifier = get_classifier(args.classifier, **classifier_kwargs(args))
     restaurant = load_restaurant(args.restaurante)
     finished_after = finished_after_seconds(args, demo_enabled(args.demo))

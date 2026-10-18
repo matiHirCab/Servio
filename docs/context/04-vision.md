@@ -91,6 +91,7 @@ Por cada plato:
 - Cambio a un estado vecino: se acepta si aparece en **2 lecturas seguidas**.
 - Retroceso (`vacio → comiendo`) o salto de más de un estado (`lleno → vacio`): se acepta con **3 lecturas seguidas** con `confidence ≥ 0.8`.
 - Ausente en 1 lectura: se mantiene. Ausente en 2 seguidas: retirado (deja de venir en la observación).
+- Las cantidades de lecturas y la confianza se cambian en el `.env`: `SMOOTH_READINGS` (2), `SMOOTH_HARD_READINGS` (3) y `SMOOTH_MIN_CONFIDENCE` (0.8). Con la Decisions API de OpenAI conviene bajar la confianza (~0.6): da confianzas más bajas que Claude y, con 0.8, un salto como `lleno → por_terminar` puede no aceptarse nunca.
 - Plato terminado por tiempo: si queda en `por_terminar` durante `--finished-after` segundos de video (o `FINISHED_AFTER` en el `.env`; por defecto 6 min, y en demo 6 lecturas), pasa a `vacio` (son restos). Las lecturas `por_terminar` posteriores no lo devuelven atrás; solo un plato que se vuelve a servir sale de `vacio`.
 
 ## Estructura
