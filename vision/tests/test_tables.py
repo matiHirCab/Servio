@@ -95,3 +95,19 @@ def test_remap_bbox_keeps_the_plate_in_place():
     # plato en (150..200, 150..200) del frame; recorte viejo (100..300), nuevo (50..250)
     old, new = (100, 100, 300, 300), (50, 50, 250, 250)
     assert remap_bbox((0.25, 0.25, 0.25, 0.25), old, new) == (0.5, 0.5, 0.25, 0.25)
+
+
+def test_new_tables_are_numbered_by_rows():
+    # 2x2: la más segura es la de abajo a la derecha, pero es la Mesa 4
+    detections = [
+        ((300, 220, 450, 370), 0.9),  # abajo derecha
+        ((20, 20, 170, 170), 0.3),  # arriba izquierda
+        ((310, 30, 460, 180), 0.5),  # arriba derecha (un poco más abajo)
+        ((10, 230, 160, 380), 0.6),  # abajo izquierda
+    ]
+    zones = TableTracker(FakeDetector(detections)).update(FRAME)
+    named = {t.name: box_of(zones, t.table_id) for t in zones.tables}
+    assert named["Mesa 1"][0] < 100 and named["Mesa 1"][1] < 100
+    assert named["Mesa 2"][0] > 250 and named["Mesa 2"][1] < 100
+    assert named["Mesa 3"][0] < 100 and named["Mesa 3"][1] > 150
+    assert named["Mesa 4"][0] > 250 and named["Mesa 4"][1] > 150

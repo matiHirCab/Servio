@@ -96,11 +96,17 @@ class TableTracker:
                 table.box = best[0] if moved else _blend(table.box, best[0])
                 unmatched.remove(best)
             # sin detección: la mesa queda donde estaba
+        # mesas nuevas: primero se descartan las repetidas (gana la más segura) y
+        # después se numeran por filas, de arriba a abajo y de izquierda a derecha
+        new: list[Box] = []
         for box, _conf in unmatched:
-            if all(iou(t.box, box) < NEW_TABLE_MAX_IOU for t in self.tables):
-                self.tables.append(_Table(f"T{self._next}", box))
-                logger.info("Mesa nueva: Mesa %d", self._next)
-                self._next += 1
+            known = [t.box for t in self.tables] + new
+            if all(iou(k, box) < NEW_TABLE_MAX_IOU for k in known):
+                new.append(box)
+        for box in reading_order(new):
+            self.tables.append(_Table(f"T{self._next}", box))
+            logger.info("Mesa nueva: Mesa %d", self._next)
+            self._next += 1
         if not self.tables:
             return _whole_frame(width, height, self.camera_id)
         return Zones(
@@ -123,6 +129,18 @@ def iou(a: Box, b: Box) -> float:
     inter = ix * iy
     union = (a[2] - a[0]) * (a[3] - a[1]) + (b[2] - b[0]) * (b[3] - b[1]) - inter
     return inter / union if union > 0 else 0.0
+
+
+def reading_order(boxes: list[Box]) -> list[Box]:
+    """Por filas (de arriba a abajo) y, en cada fila, de izquierda a derecha. Dos
+    mesas están en la misma fila si sus centros difieren menos de media mesa en y."""
+    rows: list[list[Box]] = []
+    for box in sorted(boxes, key=lambda b: _center(b)[1]):
+        if rows and abs(_center(box)[1] - _center(rows[-1][0])[1]) < _size(box) / 2:
+            rows[-1].append(box)
+        else:
+            rows.append([box])
+    return [b for row in rows for b in sorted(row, key=lambda b: _center(b)[0])]
 
 
 def _center(box: Box) -> tuple[float, float]:
