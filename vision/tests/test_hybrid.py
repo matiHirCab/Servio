@@ -369,3 +369,37 @@ def test_hybrid_drops_a_reference_of_other_food(claude):
     clf.classify(_jpeg(), "T1", previous)
     assert claude.references[1] is not None and claude.references[1][0] is not None
     assert claude.references[2] == [None]
+
+
+def _one_plate(fill):
+    return PlatesReport(
+        plates=[PlateEstimate(index=1, fill_ratio=fill, confidence=0.8, visible=True)]
+    )
+
+
+def test_hybrid_reading_that_rises_is_not_taken_until_it_repeats(claude):
+    """La comida no vuelve: una subida grande no cuenta; si se repite
+    HIDDEN_READINGS veces es otro plato y se acepta."""
+    clf = HybridClassifier(
+        detector=FakeDetector([Detection((20, 20, 100, 100), 0.9, "plate")])
+    )
+    claude.answer = _one_plate(0.3)
+    items = clf.classify(_jpeg(), "T1", []).items
+    claude.answer = _one_plate(0.8)
+    seen = []
+    for _ in range(hybrid.HIDDEN_READINGS):
+        items = clf.classify(_jpeg(), "T1", items).items
+        seen.append((items[0].fill_ratio, items[0].visible))
+    assert seen[:-1] == [(0.3, False)] * (hybrid.HIDDEN_READINGS - 1)
+    assert seen[-1] == (0.8, True)
+
+
+def test_hybrid_small_rise_is_taken(claude):
+    clf = HybridClassifier(
+        detector=FakeDetector([Detection((20, 20, 100, 100), 0.9, "plate")])
+    )
+    claude.answer = _one_plate(0.4)
+    items = clf.classify(_jpeg(), "T1", []).items
+    claude.answer = _one_plate(0.55)
+    item = clf.classify(_jpeg(), "T1", items).items[0]
+    assert (item.fill_ratio, item.visible) == (0.55, True)

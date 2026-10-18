@@ -8,7 +8,10 @@ estima cuánta comida queda en cada uno.
 3. Cada plato se recorta con 10 % de margen.
 4. Una llamada a Claude por mesa (`claude_plates.estimate_plates`) con la mesa y los platos;
    cada plato que ya tiene referencia (su recorte recién servido) la lleva al lado.
-5. Si Claude falla, usa el estado de la clase de YOLO con confianza más baja; si el
+5. La comida no vuelve: una lectura que sube más de `RISE_MAX` respecto de la anterior
+   (casi siempre una mano que Claude no marcó) no se toma como vista. Si la subida se
+   repite `HIDDEN_READINGS` veces seguidas se acepta (es otro plato con el mismo id).
+6. Si Claude falla, usa el estado de la clase de YOLO con confianza más baja; si el
    detector no da estado (YOLOE sin entrenar), la lectura se descarta (`None`).
 
 `classify` hace todo junto. Para correr varias lecturas a la vez está partido en
@@ -53,6 +56,9 @@ LOST_MAX_DROP = 0.3
 # adopta como «lleno» un plato medio comido. Si Claude dice que la referencia es de otra
 # comida (`same_plate=False`, ids cambiados), se descarta.
 REFERENCE_READINGS = 3
+# La comida no vuelve: una lectura que sube más que esto respecto de la anterior es casi
+# siempre una mano encima o un cambio de id.
+RISE_MAX = 0.2
 
 
 def _jpeg(img: Image.Image, side: int) -> bytes:
@@ -121,6 +127,7 @@ class HybridClassifier:
         self.lost: dict[str, set[str]] = {}  # por mesa, perdidos en la última lectura
         self.references: dict[tuple[str, str], bytes] = {}  # ver REFERENCE_READINGS
         self.readings: dict[tuple[str, str], int] = {}  # lecturas visibles por plato
+        self.rises: dict[tuple[str, str], int] = {}  # lecturas seguidas que suben
         self.claude_kwargs = {
             "provider": provider,
             "model": model,
@@ -198,6 +205,8 @@ class HybridClassifier:
             visible = est.visible
             if visible and p.id in prepared.lost:
                 visible = not _looks_taken(est.fill_ratio, last.get(p.id))
+            if visible and self._rose(key, est.fill_ratio, last.get(p.id)):
+                visible = False
             self.hidden[key] = 0 if visible else self.hidden.get(key, 0) + 1
             if visible and p.id not in prepared.lost:
                 self._update_reference(key, est, crop)
@@ -230,7 +239,9 @@ class HybridClassifier:
 
     def _update_reference(self, key, est: claude_plates.PlateEstimate, crop: bytes):
         if not est.same_plate and self.references.pop(key, None) is not None:
-            logger.info("Mesa %s %s: la referencia es de otra comida, se descarta", *key)
+            logger.info(
+                "Mesa %s %s: la referencia es de otra comida, se descarta", *key
+            )
             # no toma otra: lo de ahora puede ser un plato medio comido que se ve lleno
             self.readings[key] = REFERENCE_READINGS
         n = self.readings[key] = self.readings.get(key, 0) + 1
@@ -240,3 +251,19 @@ class HybridClassifier:
             and est.fill_ratio >= FULL_MIN
         ):
             self.references[key] = crop
+
+    def _rose(self, key: tuple[str, str], fill_ratio: float, last: Item | None) -> bool:
+        """True si la lectura sube de golpe y todavía no hay que creerle."""
+        if (
+            last is None
+            or last.fill_ratio is None
+            or fill_ratio - last.fill_ratio <= RISE_MAX
+        ):
+            self.rises.pop(key, None)
+            return False
+        self.rises[key] = self.rises.get(key, 0) + 1
+        if self.rises[key] < HIDDEN_READINGS:
+            return True
+        # subió varias lecturas seguidas: es otro plato con el mismo id
+        self.rises.pop(key, None)
+        return False

@@ -16,6 +16,7 @@ Por cada llamada a `classify(recorte_mesa, table_id, items_anteriores)`:
 2. **Ids:** empareja cada caja con los `items_anteriores` por distancia entre centros (`servio_vision/tracking.py`). Si no hay pareja cerca, es un plato nuevo (`p{n}` siguiente).
 3. **Claude:** una sola llamada por mesa con el recorte de la mesa (para `people_present`) y los recortes de cada plato numerados (con 10 % de margen). Devuelve, por plato, `fill_ratio`, `confidence`, `visible` y `same_plate`.
    - **Referencia:** cada plato manda también su recorte *recién servido*, para que Claude mida contra lo que se sirvió (sin ella, 1 galletita entera de 3 parecía «intacto»). Se toma en las primeras 3 lecturas visibles del plato y solo si Claude lo ve lleno (≥ 0,75): un id nuevo a mitad de comida no adopta un plato medio comido como «lleno». Si Claude dice `same_plate: false` (la referencia es de otra comida, p. ej. ids cambiados), se descarta y ese id no toma otra.
+   - **La comida no vuelve:** una lectura que sube más de 0,2 respecto de la anterior no cuenta (queda la anterior con `visible: false`): casi siempre es una mano que Claude no marcó. Si sube 3 lecturas seguidas se acepta, porque es otro plato con el mismo id.
 4. Arma el `TableReport` con `id`, `bbox`, `position` (derivada de la caja), `fill_ratio` y el estado.
 5. Si Claude falla o tarda más de 10 s: estado según la clase de YOLO, con confianza más baja.
 
