@@ -18,11 +18,18 @@ Decisiones donde el doc no dice nada:
   `bbox` salen siempre de la lectura visible más reciente, aunque el cambio de
   estado esté pendiente, para que el plato se dibuje y empareje donde está.
 
+Plato terminado por tiempo (`finished_after`, en segundos de video): un plato
+que queda en `por_terminar` ese tiempo pasa a `vacio` (quedan restos que el
+cliente no va a comer). Después, las lecturas `por_terminar` no lo devuelven
+atrás; solo un plato que se vuelve a servir (`lleno`/`comiendo`) sale de `vacio`.
+Necesita el `ts` de cada lectura (`update(items, ts)`).
+
 Uso: un `TableSmoother` por mesa; `update()` con los ítems de cada lectura
 válida (si el clasificador devolvió `None`, no se llama).
 """
 
 from dataclasses import dataclass
+from datetime import datetime
 
 from servio_vision.schemas import Item, PlateState
 
@@ -45,15 +52,18 @@ class _Track:
     candidate: PlateState | None = None
     streak: int = 0  # lecturas seguidas (válidas) del candidato
     missing: int = 0  # lecturas seguidas en las que no vino
+    state_since: datetime | None = None  # desde cuándo tiene el estado aceptado
+    finished: bool = False  # pasó a vacio por tiempo en por_terminar
 
 
 class TableSmoother:
     """Suaviza los platos de una mesa entre lecturas."""
 
-    def __init__(self) -> None:
+    def __init__(self, finished_after: float | None = None) -> None:
         self._tracks: dict[str, _Track] = {}
+        self.finished_after = finished_after
 
-    def update(self, items: list[Item]) -> list[Item]:
+    def update(self, items: list[Item], ts: datetime | None = None) -> list[Item]:
         """Procesa una lectura y devuelve los platos suavizados de la mesa."""
         present = {item.id for item in items}
         for item in items:
@@ -61,10 +71,15 @@ class TableSmoother:
                 continue  # tapado: no cuenta como lectura
             track = self._tracks.get(item.id)
             if track is None:
-                self._tracks[item.id] = _Track(accepted=item)
+                self._tracks[item.id] = _Track(accepted=item, state_since=ts)
             else:
                 track.missing = 0
+                before = track.accepted.state
                 self._observe(track, item)
+                if track.accepted.state != before:
+                    track.state_since = ts
+                    track.finished = False
+            self._finish_by_time(self._tracks[item.id], ts)
 
         for item_id in list(self._tracks):
             if item_id in present:
@@ -76,9 +91,35 @@ class TableSmoother:
 
         return [track.accepted for track in self._tracks.values()]
 
+    def _finish_by_time(self, track: _Track, ts: datetime | None) -> None:
+        """`por_terminar` durante `finished_after` segundos → `vacio`."""
+        if (
+            self.finished_after is None
+            or ts is None
+            or track.state_since is None
+            or track.accepted.state != "por_terminar"
+        ):
+            return
+        if (ts - track.state_since).total_seconds() >= self.finished_after:
+            track.accepted = track.accepted.model_copy(
+                update={"state": "vacio", "fill_ratio": 0.0}
+            )
+            track.state_since, track.finished = ts, True
+            track.candidate, track.streak = None, 0
+
     def _observe(self, track: _Track, item: Item) -> None:
         current = track.accepted.state
         new = item.state
+        if track.finished and new in ("por_terminar", "vacio"):
+            # terminado por tiempo: los restos no lo devuelven a por_terminar
+            track.accepted = _keep_box(
+                track.accepted.model_copy(
+                    update={"position": item.position, "bbox": item.bbox}
+                ),
+                track.accepted,
+            )
+            track.candidate, track.streak = None, 0
+            return
         if new == current:
             track.accepted = _keep_box(item, track.accepted)
             track.candidate, track.streak = None, 0

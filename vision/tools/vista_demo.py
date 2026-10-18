@@ -10,7 +10,10 @@ el grupo de Telegram espejado (`scrcpy`). Corre el mismo pipeline que
 El video se reproduce fluido; cada `--interval` segundos de video se manda
 un frame al pipeline en segundo plano y la vista dibuja la última lectura.
 Si el pipeline tarda más que la reproducción, el video espera y después
-retoma su ritmo (lo mismo al salir de una pausa).
+retoma su ritmo (lo mismo al salir de una pausa). Con la cámara, o con un
+video y `--realtime`, el video nunca espera: si la IA está ocupada, esa
+lectura se saltea y se toma la próxima apenas se libere (como en la demo en
+vivo).
 
 Fuentes: video, carpeta de fotos (cada foto dura `--interval` s), cámara o
 URL (en vivo). A diferencia de `main.py`, sin `--speed` reproduce en tiempo
@@ -289,6 +292,8 @@ def run(args) -> int:
         return 2
 
     speed = args.speed or 1.0  # la vista es para mirar: por defecto, tiempo real
+    # cámara (siempre) o video con --realtime: el video nunca espera a la IA
+    realtime = source.live or args.realtime
     state = DemoState(pipeline.zones)
     worker = ThreadPoolExecutor(max_workers=1)
     recorder = _Recorder(args.record, source.fps)
@@ -325,7 +330,10 @@ def run(args) -> int:
             if pending is not None and pending.done():
                 finish_pending()
             limit_ok = args.limit is None or submitted < args.limit
-            if video_s >= next_reading and limit_ok:
+            due_reading = video_s >= next_reading and limit_ok
+            if due_reading and pending is not None and realtime:
+                pass  # la IA sigue ocupada: el video no espera; se lee apenas se libere
+            elif due_reading:
                 if pending is not None:
                     # el pipeline va atrasado: el video espera y después retoma su ritmo
                     finish_pending()
@@ -333,9 +341,9 @@ def run(args) -> int:
                 pending = worker.submit(pipeline.process_frame, frame.copy(), ts)
                 pending_ts = ts
                 submitted += 1
-                # en vivo, la próxima lectura cuenta desde ahora: si el modelo se
-                # atrasó, no se acumulan lecturas pendientes
-                base = video_s if source.live else next_reading
+                # en tiempo real, la próxima lectura cuenta desde ahora: si el modelo
+                # se atrasó, no se acumulan lecturas pendientes
+                base = video_s if realtime else next_reading
                 next_reading = base + args.interval
 
             image = render(frame, ts, video_s)
@@ -344,6 +352,9 @@ def run(args) -> int:
             if not args.no_window:
                 cv2.imshow(WINDOW, image)
             due = None if source.live else ref_clock + (video_s - ref_s) / speed
+            if args.no_window and realtime and due is not None:
+                # sin ventana pero en tiempo real: igual se respeta el reloj
+                time.sleep(max(0.0, due - time.monotonic()))
             action = _wait(due, args.no_window)
             if action == "quit":
                 break
@@ -374,6 +385,11 @@ def run(args) -> int:
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser("Servio: vista de la demo.")
     parser.add_argument("--record", type=Path, help="guardar la vista en un video .mp4")
+    parser.add_argument(
+        "--realtime",
+        action="store_true",
+        help="video como cámara en vivo: no espera a la IA (salta lecturas si está ocupada)",
+    )
     parser.add_argument(
         "--no-window", action="store_true", help="sin ventana (con --record)"
     )

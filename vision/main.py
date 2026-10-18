@@ -48,11 +48,14 @@ class Pipeline:
         classifier: Classifier,
         zones: Zones,
         on_observation: ObservationHandler,
+        finished_after: float | None = None,
     ) -> None:
         self.classifier = classifier
         self.zones = zones
         self.on_observation = on_observation
-        self.smoothers = {t.table_id: TableSmoother() for t in zones.tables}
+        self.smoothers = {
+            t.table_id: TableSmoother(finished_after) for t in zones.tables
+        }
         self.previous: dict[str, list[Item]] = {t.table_id: [] for t in zones.tables}
         self._pool = ThreadPoolExecutor(max_workers=max(1, len(zones.tables)))
 
@@ -75,7 +78,7 @@ class Pipeline:
                 logger.warning("%s %s: lectura fallida, se descarta", ts, table_id)
                 continue
             try:
-                items = self.smoothers[table_id].update(report.items)
+                items = self.smoothers[table_id].update(report.items, ts)
                 self.previous[table_id] = items
                 observation = self._observation(table_id, ts, report, items)
             except Exception:
@@ -141,6 +144,21 @@ def classifier_kwargs(args: argparse.Namespace) -> dict:
     return kwargs
 
 
+# Plato en por_terminar tanto tiempo → vacio (quedan restos). Producción: 6 min.
+PROD_FINISHED_AFTER = 6 * 60
+DEMO_FINISHED_READINGS = 6  # en demo, 6 lecturas (30 s con --interval 5)
+
+
+def finished_after_seconds(args: argparse.Namespace, demo: bool) -> float:
+    """--finished-after > FINISHED_AFTER del .env > demo (6 lecturas) o producción."""
+    if args.finished_after is not None:
+        return args.finished_after
+    raw = os.getenv("FINISHED_AFTER", "").strip()
+    if raw:
+        return float(raw)
+    return DEMO_FINISHED_READINGS * args.interval if demo else PROD_FINISHED_AFTER
+
+
 def demo_enabled(flag: bool) -> bool:
     """--demo le gana a DEMO_MODE (09-convenciones.md)."""
     return flag or os.getenv("DEMO_MODE", "").strip().lower() in {"1", "true", "yes"}
@@ -178,6 +196,11 @@ def build_parser(
     parser.add_argument("--limit", type=int, help="cortar tras N lecturas")
     parser.add_argument("--fake-mode", default="script", choices=["script", "replay"])
     parser.add_argument("--fixture", type=Path, help="jsonl para --fake-mode replay")
+    parser.add_argument(
+        "--finished-after",
+        type=float,
+        help="segundos en por_terminar para pasar a vacio (por defecto 6 min; demo 6 lecturas)",
+    )
     parser.add_argument(
         "--yolo-conf",
         type=float,
@@ -232,7 +255,14 @@ def build_pipeline(args: argparse.Namespace) -> Pipeline | None:
     )
 
     classifier = get_classifier(args.classifier, **classifier_kwargs(args))
-    return Pipeline(classifier, zones, observation_handler(config, args.no_telegram))
+    finished_after = finished_after_seconds(args, demo_enabled(args.demo))
+    logger.info("Plato por terminar → vacío a los %gs", finished_after)
+    return Pipeline(
+        classifier,
+        zones,
+        observation_handler(config, args.no_telegram),
+        finished_after=finished_after,
+    )
 
 
 def main(argv: list[str] | None = None) -> int:
