@@ -84,24 +84,33 @@ def table_rect(
     return x0, y0, x1, y1
 
 
+# Lado mínimo (fracción del recorte) para que una caja recortada siga siendo un plato.
+MIN_BOX_SIDE = 0.01
+
+
 def remap_bbox(
     bbox: tuple[float, float, float, float],
     old: tuple[int, int, int, int],
     new: tuple[int, int, int, int],
-) -> tuple[float, float, float, float]:
+) -> tuple[float, float, float, float] | None:
     """Caja [x, y, w, h] normalizada en el recorte `old` → la misma caja en `new`.
 
-    `old`/`new` son (x0, y0, x1, y1) en píxeles del frame (`table_rect`).
+    `old`/`new` son (x0, y0, x1, y1) en píxeles del frame (`table_rect`). Si la caja
+    queda en parte afuera del recorte nuevo, se recorta; si queda (casi) toda
+    afuera, devuelve `None`: ese plato ya no está en la mesa.
     """
     bx, by, bw, bh = bbox
     ow, oh = old[2] - old[0], old[3] - old[1]
     nw, nh = new[2] - new[0], new[3] - new[1]
-    x = (old[0] + bx * ow - new[0]) / nw
-    y = (old[1] + by * oh - new[1]) / nh
-    w, h = bw * ow / nw, bh * oh / nh
-    x = min(max(x, 0.0), 1.0)
-    y = min(max(y, 0.0), 1.0)
-    return (x, y, min(w, 1.0 - x), min(h, 1.0 - y))
+    x0 = (old[0] + bx * ow - new[0]) / nw
+    y0 = (old[1] + by * oh - new[1]) / nh
+    x1 = x0 + bw * ow / nw
+    y1 = y0 + bh * oh / nh
+    x0, y0 = max(x0, 0.0), max(y0, 0.0)
+    x1, y1 = min(x1, 1.0), min(y1, 1.0)
+    if x1 - x0 < MIN_BOX_SIDE or y1 - y0 < MIN_BOX_SIDE:
+        return None
+    return (x0, y0, x1 - x0, y1 - y0)
 
 
 def crop_table(frame: np.ndarray, zone: TableZone, zones: Zones) -> np.ndarray:

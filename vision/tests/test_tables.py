@@ -140,3 +140,12 @@ def test_lost_plate_memory_follows_the_table():
     [(pid, bbox)] = ids.missing("T1")
     assert pid == "p1"
     assert bbox == pytest.approx((0.5, 0.5, 0.1, 0.1))  # mismo lugar del frame
+
+
+def test_remap_clips_boxes_and_forgets_the_ones_left_outside():
+    from servio_vision.zones import remap_bbox
+
+    old, new = (0, 0, 1000, 1000), (0, 0, 800, 1000)
+    assert remap_bbox((0.9, 0.4, 0.08, 0.1), old, new) is None  # quedó afuera
+    x, _, w, _ = remap_bbox((0.7, 0.4, 0.2, 0.1), old, new)  # mitad afuera
+    assert (x, x + w) == pytest.approx((0.875, 1.0))

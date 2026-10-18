@@ -92,8 +92,12 @@ class IdCounter:
         """La mesa se movió: las cajas recordadas pasan al recorte nuevo (si no, un
         plato perdido volvería con la caja del recorte viejo, corrida)."""
         where = self._where.get(table_id, {})
-        for pid, (bbox, r) in where.items():
-            where[pid] = (remap(bbox), r)
+        for pid, (bbox, r) in list(where.items()):
+            moved = remap(bbox)
+            if moved is None:
+                del where[pid]  # quedó fuera de la mesa: no se busca más
+            else:
+                where[pid] = (moved, r)
 
     def keep(self, table_id: str, pid: str) -> None:
         """Otro (Claude) confirmó que un plato perdido sigue ahí: se lo recuerda

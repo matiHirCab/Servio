@@ -53,11 +53,30 @@ class Restaurant:
         with self._lock:
             served = self._served.setdefault(table_id, {})
             if track_id not in served:
-                order = self.tables.get(table_id, {}).get("pedido", [])
-                if len(served) >= len(order):
+                # el primero del pedido que falta (la visión puede haber asignado
+                # fuera de orden: nunca dos platos con el mismo lugar del pedido)
+                pending = self._pending(table_id)
+                if not pending:
                     return None
-                served[track_id] = order[len(served)]
+                served[track_id] = pending[0]
             return self.dishes.get(served[track_id])
+
+    def release_missing(self, table_id: str, present: set[str]) -> None:
+        """Los platos que la cámara dejó de seguir liberan su lugar del pedido: si
+        el mismo plato vuelve con otro id (lo taparon, la mesa se movió), lo
+        recupera en vez de quedar afuera como "no pedido"."""
+        with self._lock:
+            served = self._served.get(table_id, {})
+            for track_id in [t for t in served if t not in present]:
+                del served[track_id]
+
+    def _pending(self, table_id: str) -> list[str]:
+        """Ids del pedido que no tienen plato de la cámara (con el lock tomado)."""
+        pending = list(self.tables.get(table_id, {}).get("pedido", []))
+        for dish_id in self._served.get(table_id, {}).values():
+            if dish_id in pending:
+                pending.remove(dish_id)
+        return pending
 
     def has_order(self, table_id: str) -> bool:
         return bool(self.tables.get(table_id, {}).get("pedido"))
@@ -69,12 +88,7 @@ class Restaurant:
     def unassigned(self, table_id: str) -> list[Dish]:
         """Platos del pedido de la mesa que todavía no se vieron en cámara."""
         with self._lock:
-            served = list(self._served.get(table_id, {}).values())
-            pending = list(self.tables.get(table_id, {}).get("pedido", []))
-            for dish_id in served:
-                if dish_id in pending:
-                    pending.remove(dish_id)
-            return [self.dishes[d] for d in pending if d in self.dishes]
+            return [self.dishes[d] for d in self._pending(table_id) if d in self.dishes]
 
     def assign(self, table_id: str, track_id: str, dish: Dish) -> None:
         """Este plato de la cámara es este plato del pedido (lo identificó la visión)."""
@@ -83,11 +97,11 @@ class Restaurant:
 
     def see_plates(self, table_id: str, track_ids: list[str]) -> None:
         """Registra los platos de una lectura, en orden, para asignarles el pedido."""
-        for track_id in sorted(track_ids, key=_plate_number):
+        for track_id in sorted(track_ids, key=plate_order):
             self.dish(table_id, track_id)
 
 
-def _plate_number(track_id: str) -> tuple[int, str]:
+def plate_order(track_id: str) -> tuple[int, str]:
     """`T1-p12` → 12 (para ordenar p2 antes que p10)."""
     tail = track_id.rsplit("-p", 1)[-1]
     return (int(tail), track_id) if tail.isdigit() else (10**9, track_id)

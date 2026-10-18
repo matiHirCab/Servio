@@ -284,7 +284,7 @@ def estimate_plates(
             if attempt < ATTEMPTS:
                 time.sleep(RETRY_WAIT_S)
             continue
-        logger.info(
+        logger.debug(
             "Claude mesa=%s platos=%d proveedor=%s modelo=%s latencia=%.2fs uso=%s",
             table_id,
             len(plate_jpegs),

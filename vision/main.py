@@ -18,6 +18,7 @@ import argparse
 import logging
 import os
 import sys
+import warnings
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
@@ -33,7 +34,7 @@ from servio_vision.capture import open_source
 from servio_vision.classifier import Classifier, available_classifiers, get_classifier
 from servio_vision.dish_match import DishMatcher
 from servio_vision.restaurant import DEFAULT_DIR as RESTAURANT_DIR
-from servio_vision.restaurant import Restaurant
+from servio_vision.restaurant import Restaurant, plate_order
 from servio_vision.schemas import Item, TableReport
 from servio_vision.smoothing import TableSmoother
 from servio_vision.tables import TableDetector, TableTracker
@@ -117,7 +118,7 @@ class Pipeline:
         zone = next((z for z in self.zones.tables if z.table_id == table_id), None)
         if zone is None:
             return
-        for item in sorted(items, key=lambda i: i.id):
+        for item in sorted(items, key=lambda i: plate_order(f"{table_id}-{i.id}")):
             track_id = f"{table_id}-{item.id}"
             if item.bbox is None or self.restaurant.is_assigned(table_id, track_id):
                 continue
@@ -185,6 +186,10 @@ class Pipeline:
             try:
                 items = self.smoothers[table_id].update(report.items, ts)
                 self.previous[table_id] = items
+                if self.restaurant is not None:
+                    self.restaurant.release_missing(
+                        table_id, {f"{table_id}-{i.id}" for i in items}
+                    )
                 self._identify_dishes(frame, table_id, items)
                 items = self._only_ordered(table_id, items)
                 observation = self._observation(table_id, ts, report, items)
@@ -325,6 +330,9 @@ def build_parser(
         "--no-telegram", action="store_true", help="no mandar a Telegram"
     )
     parser.add_argument("--limit", type=int, help="cortar tras N lecturas")
+    parser.add_argument(
+        "--verbose", action="store_true", help="mostrar todo en la terminal (depurar)"
+    )
     parser.add_argument("--fake-mode", default="script", choices=["script", "replay"])
     parser.add_argument("--fixture", type=Path, help="jsonl para --fake-mode replay")
     parser.add_argument(
@@ -345,17 +353,45 @@ def build_parser(
     return parser
 
 
-def setup_logging() -> None:
+# Librerías que llenan la terminal: solo sus advertencias y errores.
+NOISY_LOGGERS = (
+    "httpx",
+    "httpx2",
+    "httpcore",
+    "anthropic",
+    "ultralytics",
+    "PIL",
+    "urllib3",
+)
+
+
+def _quiet_libraries(record: logging.LogRecord) -> bool:
+    noisy = record.name.split(".")[0] in NOISY_LOGGERS
+    return not noisy or record.levelno >= logging.WARNING
+
+
+def setup_logging(verbose: bool = False) -> None:
+    """Terminal limpia: arranque, mesas y platos nuevos, avisos y errores.
+    Con `--verbose`, todo (cada llamada a Claude, pedidos HTTP, advertencias)."""
     # La consola de Windows (cp1252) no puede escribir los emojis de los avisos:
     # sin esto, el aviso impreso con --no-telegram tira UnicodeEncodeError.
     for stream in (sys.stdout, sys.stderr):
         if hasattr(stream, "reconfigure"):
             stream.reconfigure(encoding="utf-8", errors="replace")
     logging.basicConfig(
-        level=logging.INFO,
+        level=logging.DEBUG if verbose else logging.INFO,
         format="%(asctime)s %(levelname)s %(message)s",
+        datefmt="%H:%M:%S",
         stream=sys.stderr,
     )
+    if verbose:
+        return
+    # en el handler y no con setLevel: el SDK de Anthropic vuelve a subir httpx a INFO
+    for handler in logging.getLogger().handlers:
+        handler.addFilter(_quiet_libraries)
+    # advertencias de torch/ultralytics (FutureWarning…): no son errores nuestros
+    warnings.filterwarnings("ignore", module=r"(torch|ultralytics|torchvision)")
+    warnings.filterwarnings("ignore", category=FutureWarning)
 
 
 ENV_FILE = alerts.VISION_DIR.parent / ".env"
@@ -421,7 +457,7 @@ def build_pipeline(args: argparse.Namespace) -> Pipeline | None:
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
-    setup_logging()
+    setup_logging(args.verbose)
     pipeline = build_pipeline(args)
     if pipeline is None:
         return 2

@@ -415,7 +415,7 @@ def main(argv: list[str] | None = None) -> int:
         "--no-window", action="store_true", help="sin ventana (con --record)"
     )
     args = parser.parse_args(argv)
-    setup_logging()
+    setup_logging(args.verbose)
     return run(args)
 
 

@@ -39,6 +39,9 @@ class Question:
     asked_at: datetime
     message_id: int | None = None
     feedback: list[str] = field(default_factory=list)  # líneas "📝 ..."
+    answered: bool = False  # ya respondió alguien (un segundo toque no cuenta)
+    # el aviso se cerró: arma el texto "ya resuelto" con las respuestas
+    final: Callable[[str], str] | None = None
 
 
 class FeedbackDesk:
@@ -72,10 +75,25 @@ class FeedbackDesk:
     def suffix(self, message_id: int) -> str:
         """Respuestas ya registradas de ese mensaje, para no perderlas al editarlo."""
         with self._lock:
+            return self._suffix(self._by_message.get(message_id))
+
+    @staticmethod
+    def _suffix(question: Question | None) -> str:
+        return "".join(f"\n\n{line}" for line in question.feedback) if question else ""
+
+    def rewrite(
+        self, message_id: int, build: Callable[[str], str], resolved: bool
+    ) -> str:
+        """Edita un mensaje con `build(respuestas)`. Todas las ediciones de un
+        mensaje con preguntas pasan por acá, con el lock: una respuesta que llega
+        justo cuando se cierra el aviso no pisa el "ya resuelto" (ni al revés)."""
+        with self._lock:
             question = self._by_message.get(message_id)
-            return (
-                "".join(f"\n\n{line}" for line in question.feedback) if question else ""
-            )
+            text = build(self._suffix(question))
+            if question is not None and resolved:
+                question.final = build
+            self.notifier.edit(message_id, text)
+        return text
 
     # --- escuchar ---
 
@@ -125,9 +143,12 @@ class FeedbackDesk:
                 callback["id"], "Este aviso ya no está activo"
             )
             return
+        if question.answered:
+            self.notifier.answer_callback(callback["id"], "Ya respondieron este aviso")
+            return
         if choice == OTHER:
             self.notifier.answer_callback(callback["id"], "Escribí qué pasó")
-            prompt = f"✏️ {who}, respondé a este mensaje contando qué pasó"
+            prompt = "✏️ Respondé a este mensaje contando qué pasó"
             if question.dish:
                 prompt += f" con {question.dish}"
             prompt += f" ({_table_name(question.table_id)})."
@@ -148,7 +169,7 @@ class FeedbackDesk:
         with self._lock:
             token = self._prompts.pop(reply_to, None) if reply_to else None
             question = self._questions.get(token) if token else None
-        if question is None or not text:
+        if question is None or not text or question.answered:
             return
         self.notifier.delete(
             reply_to
@@ -160,10 +181,18 @@ class FeedbackDesk:
     ) -> None:
         now = datetime.now(UTC)
         with self._lock:
+            if question.answered:
+                return  # dos toques casi juntos: cuenta el primero
+            question.answered = True
             question.feedback.append(f"📝 {answer}")  # quién respondió queda en la base
-            text = question.text + "".join(f"\n\n{line}" for line in question.feedback)
-        if question.message_id is not None:
-            self.notifier.edit(question.message_id, text)  # saca los botones
+            answers = self._suffix(question)
+            # si el aviso ya se cerró, se mantiene el "ya resuelto"
+            if question.final is not None:
+                text = question.final(answers)
+            else:
+                text = question.text + answers
+            if question.message_id is not None:
+                self.notifier.edit(question.message_id, text)  # saca los botones
         self.log_event(
             {
                 "event": "alert_feedback",

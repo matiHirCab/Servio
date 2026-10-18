@@ -262,14 +262,22 @@ class AlertProcessor:
     def _edit(self, message_id: int) -> str:
         """Reescribe un mensaje con sus avisos cerrados marcados; devuelve el texto."""
         alerts = self._messages[message_id]
-        # las respuestas del mozo quedan en el mensaje (antes del "ya resuelto")
-        answers = self.feedback.suffix(message_id) if self.feedback else ""
-        if all(a.id in self._resolved_ids for a in alerts):
-            text = resolved_text("\n".join(a.message for a in alerts) + answers)
+        done = all(a.id in self._resolved_ids for a in alerts)
+        resolved_ids = set(self._resolved_ids)
+
+        def build(answers: str) -> str:
+            # las respuestas del mozo quedan en el mensaje (antes del "ya resuelto")
+            if done:
+                return resolved_text("\n".join(a.message for a in alerts) + answers)
+            return _partial_text(alerts, resolved_ids) + answers
+
+        if done:
             del self._messages[message_id]
             self._resolved_ids -= {a.id for a in alerts}
-        else:
-            text = _partial_text(alerts, self._resolved_ids) + answers
+        if self.feedback is not None:
+            # con el lock de las respuestas: una que llega a la vez no lo pisa
+            return self.feedback.rewrite(message_id, build, resolved=done)
+        text = build("")
         self.notifier.edit(message_id, text)  # si falla, ya se logueó
         return text
 

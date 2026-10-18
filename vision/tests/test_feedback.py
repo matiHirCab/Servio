@@ -106,7 +106,7 @@ def test_other_answer_asks_to_write_and_takes_the_reply():
     d.handle(
         {"callback_query": {"id": "c1", "data": other, "from": {"first_name": "Ana"}}}
     )
-    assert "respondé a este mensaje" in d.notifier.prompts[0][0]
+    assert "Respondé a este mensaje" in d.notifier.prompts[0][0]
     d.handle(
         {
             "message": {
@@ -182,3 +182,42 @@ def test_plates_not_in_the_order_are_dropped(monkeypatch):
     kept = pipeline._only_ordered("T1", plates)
     pipeline.close()
     assert [i.id for i in kept] == ["p1", "p2"]
+
+
+# --- regresiones (code review del PR #38) ---
+
+
+def test_dishes_never_repeat_when_assigned_out_of_order():
+    r = Restaurant.load()
+    r.assign("T1", "T1-p1", r.dishes["donas"])  # la visión asigna fuera de orden
+    # al siguiente le toca el que falta, no "el 2.º del pedido" (que es donas otra vez)
+    assert r.dish("T1", "T1-p2").name == "Cookies con chips de chocolate"
+    assert r.dish("T1", "T1-p3") is None
+
+
+def test_a_plate_that_comes_back_with_a_new_id_keeps_its_dish():
+    r = Restaurant.load()
+    r.see_plates("T1", ["T1-p1", "T1-p2"])
+    # YOLO perdió las donas y volvieron como p5: p2 dejó de seguirse
+    r.release_missing("T1", {"T1-p1", "T1-p5"})
+    assert r.dish("T1", "T1-p5").name == "Donas glaseadas"
+
+
+def test_late_answer_keeps_the_resolved_mark():
+    d, logged = desk()
+    d.ask(question())
+    d.rewrite(101, lambda answers: "✅ cerrado" + answers, resolved=True)
+    data = d.notifier.sent[0][1][1][0][1]
+    d.handle({"callback_query": {"id": "c1", "data": data, "from": {}}})
+    assert d.notifier.edits[-1][1] == "✅ cerrado\n\n📝 No le gustaron"
+    assert len(logged) == 1
+
+
+def test_second_tap_does_not_count_twice():
+    d, logged = desk()
+    d.ask(question())
+    data = d.notifier.sent[0][1][0][0][1]
+    for cid in ("c1", "c2"):
+        d.handle({"callback_query": {"id": cid, "data": data, "from": {}}})
+    assert len(logged) == 1
+    assert d.notifier.answers[-1] == "Ya respondieron este aviso"
