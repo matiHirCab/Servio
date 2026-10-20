@@ -14,16 +14,26 @@ las líneas cerradas llevan "✅".
 import dataclasses
 import json
 import logging
+import threading
 from collections.abc import Sequence
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
+from servio_vision import metrics
 from servio_vision.alerts.config import AlertConfig
-from servio_vision.alerts.engine import evaluate
+from servio_vision.alerts.engine import evaluate, table_name
+from servio_vision.alerts.feedback import FeedbackDesk, Question
 from servio_vision.alerts.models import Alert, TableObservation
 from servio_vision.alerts.notify import Notifier, resolved_text
-from servio_vision.alerts.state import TableState, empty_table, update_table
+from servio_vision.alerts.state import (
+    TableState,
+    empty_table,
+    table_status,
+    update_table,
+)
+from servio_vision.db import Database
+from servio_vision.restaurant import Restaurant
 
 logger = logging.getLogger(__name__)
 
@@ -38,9 +48,11 @@ class EventLog:
         path.parent.mkdir(parents=True, exist_ok=True)
         # Abierto una sola vez; buffering=1 baja cada línea al disco al escribirla.
         self._file = path.open("a", encoding="utf-8", buffering=1)
+        self._lock = threading.Lock()  # también escriben las respuestas de los mozos
 
     def write(self, event: dict[str, Any]) -> None:
-        self._file.write(json.dumps(event, ensure_ascii=False) + "\n")
+        with self._lock:
+            self._file.write(json.dumps(event, ensure_ascii=False) + "\n")
 
     def close(self) -> None:
         self._file.close()
@@ -49,10 +61,31 @@ class EventLog:
 class AlertProcessor:
     """Estado en memoria de todas las mesas y de los avisos abiertos."""
 
-    def __init__(self, config: AlertConfig, notifier: Notifier, log_path: Path) -> None:
+    def __init__(
+        self,
+        config: AlertConfig,
+        notifier: Notifier,
+        log_path: Path,
+        restaurant: Restaurant | None = None,
+        db: Database | None = None,
+    ) -> None:
         self.config = config
         self.notifier = notifier
         self.log = EventLog(log_path)
+        # Con los datos del restaurante, los avisos nombran el plato y el mozo, y el de
+        # plato lleno pregunta qué pasó (botones en Telegram, ver feedback.py).
+        self.restaurant = restaurant
+        # base relacional (db.py): platos servidos, avisos y respuestas
+        self.db = db
+        self._served_rows: dict[str, int] = {}  # track_id → platos_servidos.id
+        self._alert_plate: dict[str, str] = {}  # aviso → track_id del plato
+        if db is not None and restaurant is not None:
+            db.load_restaurant(restaurant)
+        self.feedback: FeedbackDesk | None = None
+        if restaurant is not None:
+            commands = {"metricas": self._send_metrics} if db is not None else {}
+            self.feedback = FeedbackDesk(notifier, self._on_feedback, commands)
+            self.feedback.start()
         # Marca dónde empieza la corrida (el log se agrega) y con qué umbrales: replay.py
         # corta el archivo acá y reproduce con la misma config.
         self.log.write(
@@ -67,6 +100,54 @@ class AlertProcessor:
         # message_id → avisos de ese mensaje (en orden) y cuáles ya se cerraron.
         self._messages: dict[int, list[Alert]] = {}
         self._resolved_ids: set[str] = set()
+        # aviso de mesa terminada cerrado porque retiraron los platos → la línea
+        # que reemplaza al "ya resuelto" (quién y cuánto tardó)
+        self._close_notes: dict[str, str] = {}
+
+    def _record_plates(self, table_id: str, table: TableState, ts: datetime) -> None:
+        """Cada plato nuevo de la mesa, a la base (con el plato del pedido que es)."""
+        if self.db is None or self.restaurant is None:
+            return
+        for plate in table.active_plates():
+            if plate.track_id in self._served_rows:
+                continue
+            dish = self.restaurant.dish(table_id, plate.track_id)
+            self._served_rows[plate.track_id] = self.db.served(
+                table_id, dish.dish_id if dish else None, plate.track_id, ts
+            )
+
+    def _record_opened(self, alert: Alert, ts: datetime) -> None:
+        if self.db is None:
+            return
+        track_id = self._alert_plate.get(alert.id)
+        served_id = self._served_rows.get(track_id) if track_id else None
+        self.db.alert_opened(alert.id, alert.type, alert.table_id, served_id, ts)
+
+    def _send_metrics(self) -> None:
+        """`/metricas` en el grupo: la imagen de métricas con un resumen corto.
+        Junta el historial simulado (se importa una vez) con lo de hoy."""
+        if self.db is None or self.restaurant is None:
+            return
+        self.db.import_history(metrics.HISTORY, self.restaurant)
+        m = metrics.compute(self.db)
+        if not m["dishes"]:
+            self.notifier.send("📊 Todavía no hay datos para las métricas.")
+            return
+        image = self.db.path.parent / "metricas.png"
+        metrics.render(m, image)
+        self.notifier.send_photo(image, metrics.summary(m))
+        problems = metrics.problems_text(m)  # aparte: en el pie de foto no entra
+        if problems:
+            self.notifier.send(problems)
+
+    def _on_feedback(self, event: dict[str, Any]) -> None:
+        """Respuesta de un mozo: al log y a la base."""
+        self.log.write(event)
+        if self.db is not None:
+            try:
+                self.db.feedback(event)
+            except Exception:
+                logger.exception("No se pudo guardar la respuesta en la base")
 
     def process(self, obs: TableObservation) -> list[dict[str, Any]]:
         """Procesa una observación de mesa; devuelve los eventos que escribió al log.
@@ -85,23 +166,46 @@ class AlertProcessor:
         table = update_table(prev, obs)  # ValueError si el ts va hacia atrás
         self.tables[obs.table_id] = table
 
-        result = evaluate(table, obs.ts, self.config, self.open_alerts.values())
+        if self.restaurant is not None:
+            self.restaurant.see_plates(
+                obs.table_id, [p.track_id for p in table.active_plates()]
+            )
+        self._record_plates(obs.table_id, table, obs.ts)
 
-        if result.opened:
-            text = "\n".join(a.message for a in result.opened)
+        result = evaluate(table, obs.ts, self.config, self.open_alerts.values())
+        opened_all = [self._with_context(a, table, obs.ts) for a in result.opened]
+        grouped = [a for a, question in opened_all if question is None]
+
+        if grouped:
+            text = "\n".join(a.message for a in grouped)
             message_id = self.notifier.send(text)
             opened = [
                 a.model_copy(update={"telegram_message_id": message_id})
-                for a in result.opened
+                for a in grouped
             ]
             if message_id is not None:
                 self._messages[message_id] = opened
             for alert in opened:
                 self.open_alerts[alert.id] = alert
                 log(_alert_event("alert_opened", obs.ts, alert, text))
+                self._record_opened(alert, obs.ts)
+
+        for alert, question in opened_all:
+            if question is None:
+                continue
+            # plato lleno: mensaje propio, con los botones de "¿qué pasó?"
+            message_id = self.feedback.ask(question)
+            alert = alert.model_copy(update={"telegram_message_id": message_id})
+            if message_id is not None:
+                self._messages[message_id] = [alert]
+            self.open_alerts[alert.id] = alert
+            log(_alert_event("alert_opened", obs.ts, alert, alert.message))
+            self._record_opened(alert, obs.ts)
 
         if result.reminded:
-            text = "\n".join(r.message for r in result.reminded)
+            text = "\n".join(
+                self._mention_waiter(r.message, obs.table_id) for r in result.reminded
+            )
             self.notifier.send(text)  # si falla, ya se logueó; el aviso sigue igual
             for reminder in result.reminded:
                 self.open_alerts[reminder.alert.id] = reminder.alert
@@ -109,6 +213,7 @@ class AlertProcessor:
 
         # Primero se marcan todos los cerrados, así un mensaje se edita una sola vez.
         message_ids: list[int] = []
+        reasons = {a.id: self._close_reason(a, table, obs.ts) for a in result.resolved}
         for alert in result.resolved:
             del self.open_alerts[alert.id]
             message_id = alert.telegram_message_id
@@ -120,24 +225,126 @@ class AlertProcessor:
         for alert in result.resolved:
             # Sin mensaje (Telegram falló al abrir) no hubo nada que editar: text None.
             text = edited.get(alert.telegram_message_id)
-            log(_alert_event("alert_resolved", obs.ts, alert, text))
+            event = _alert_event("alert_resolved", obs.ts, alert, text)
+            if reasons[alert.id]:
+                event["close_reason"] = reasons[alert.id]
+            log(event)
+            if self.db is not None:
+                self.db.alert_resolved(alert.id, obs.ts, reasons[alert.id])
 
         return events
 
     def close(self) -> None:
+        if self.feedback is not None:
+            self.feedback.stop()
         self.log.close()
+        if self.db is not None:
+            self.db.close()
+
+    def _with_context(
+        self, alert: Alert, table: TableState, now: datetime
+    ) -> tuple[Alert, Question | None]:
+        """Aviso con el plato y el mozo (si hay datos del restaurante). El de plato
+        lleno vuelve con la pregunta para el mozo."""
+        if self.restaurant is None:
+            return alert, None
+        waiter = self.restaurant.waiter(alert.table_id)
+        if alert.type != "plato_lleno_mucho" or self.feedback is None:
+            message = self._mention_waiter(alert.message, alert.table_id)
+            return alert.model_copy(update={"message": message}), None
+        full = sorted(
+            (p for p in table.active_plates() if p.state == "lleno"),
+            key=lambda p: p.first_seen,
+        )
+        plate = full[0] if full else None
+        if plate is not None:
+            self._alert_plate[alert.id] = plate.track_id
+        dish = self.restaurant.dish(alert.table_id, plate.track_id) if plate else None
+        minutes = (
+            max(1, round((now - plate.first_seen).total_seconds() / 60)) if plate else 1
+        )
+        who = f"{waiter} · " if waiter else ""
+        what = dish.name if dish else "un plato"
+        message = (
+            f"❓ {who}{table_name(alert.table_id)}: {what} sigue lleno hace "
+            f"{minutes} min. ¿Está todo bien? Pasá a preguntar y contanos qué pasó."
+        )
+        alert = alert.model_copy(update={"message": message})
+        question = Question(
+            alert_id=alert.id,
+            table_id=alert.table_id,
+            alert_type=alert.type,
+            dish=dish.name if dish else None,
+            waiter=waiter,
+            text=message,
+            answers=dish.answers if dish else ("Está todo bien", "No le gustó"),
+            asked_at=datetime.now(UTC),
+        )
+        return alert, question
+
+    def _mention_waiter(self, message: str, table_id: str) -> str:
+        """`🍽️ Mesa 1: terminó.` → `🍽️ Juan · Mesa 1: terminó.`"""
+        waiter = self.restaurant.waiter(table_id) if self.restaurant else None
+        if not waiter:
+            return message
+        name = table_name(table_id)
+        return message.replace(name, f"{waiter} · {name}", 1)
+
+    def _close_reason(
+        self, alert: Alert, table: TableState, now: datetime
+    ) -> str | None:
+        """Por qué se cerró un aviso de mesa terminada: "retirados" (la mesa quedó
+        libre) o "servido" (llegó algo nuevo). Con retirados, deja la línea que va en
+        el mensaje: quién retiró y cuánto después de que terminó la mesa."""
+        if alert.type != "mesa_terminada":
+            return None
+        if table_status(p.state for p in table.active_plates()) != "libre":
+            return "servido"
+        waiter = self.restaurant.waiter(alert.table_id) if self.restaurant else None
+        who = f"{waiter} retiró" if waiter else "Retiraron"
+        took = _duration(now - alert.created_at)
+        self._close_notes[alert.id] = (
+            f"✅ {who} los platos {took} después de que terminó la mesa."
+        )
+        return "retirados"
 
     def _edit(self, message_id: int) -> str:
         """Reescribe un mensaje con sus avisos cerrados marcados; devuelve el texto."""
         alerts = self._messages[message_id]
-        if all(a.id in self._resolved_ids for a in alerts):
-            text = resolved_text("\n".join(a.message for a in alerts))
+        done = all(a.id in self._resolved_ids for a in alerts)
+        resolved_ids = set(self._resolved_ids)
+        notes = [
+            self._close_notes.pop(a.id) for a in alerts if a.id in self._close_notes
+        ]
+
+        def build(answers: str) -> str:
+            # las respuestas del mozo quedan en el mensaje (antes del "ya resuelto")
+            text = "\n".join(a.message for a in alerts) + answers
+            if done and notes:
+                # mesa terminada y platos retirados: quién y cuánto tardó
+                return text + "\n\n" + "\n".join(notes)
+            if done:
+                return resolved_text(text)
+            return _partial_text(alerts, resolved_ids) + answers
+
+        if done:
             del self._messages[message_id]
             self._resolved_ids -= {a.id for a in alerts}
-        else:
-            text = _partial_text(alerts, self._resolved_ids)
+        if self.feedback is not None:
+            # con el lock de las respuestas: una que llega a la vez no lo pisa
+            return self.feedback.rewrite(message_id, build, resolved=done)
+        text = build("")
         self.notifier.edit(message_id, text)  # si falla, ya se logueó
         return text
+
+
+def _duration(elapsed: timedelta) -> str:
+    """`timedelta` → "1 min 20 s" / "45 s"."""
+    seconds = max(0, round(elapsed.total_seconds()))
+    minutes, seconds = divmod(seconds, 60)
+    if not minutes:
+        return f"{seconds} s"
+    return f"{minutes} min {seconds} s" if seconds else f"{minutes} min"
 
 
 def _partial_text(alerts: Sequence[Alert], resolved_ids: set[str]) -> str:

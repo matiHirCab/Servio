@@ -7,7 +7,7 @@ Todo lo que cruza entre las partes de cada persona está definido acá. Si lo ca
 ```python
 ItemKind   = Literal["plate"]                                        # solo platos de comida
 PlateState = Literal["lleno", "comiendo", "por_terminar", "vacio"]
-AlertType  = Literal["mesa_por_terminar", "plato_vacio", "plato_lleno_mucho"]
+AlertType  = Literal["mesa_terminada", "plato_vacio", "plato_lleno_mucho"]
 AlertStatus = Literal["abierta", "resuelta"]
 ```
 
@@ -16,7 +16,7 @@ Estado según la comida que queda (`fill_ratio`, de 0 a 1), en `servio_vision/sc
 
 ## Zonas de mesas — `vision/config/zones.json`
 
-Coordenadas en píxeles del frame original. Se dibujan una vez con `vision/tools/draw_zones.py`.
+Coordenadas en píxeles del frame original. Opcional: sin `--zones`, las mesas se detectan solas en cada lectura y se arman zonas con este mismo formato (`servio_vision/tables.py`). Con `--zones`, se dibujan una vez con `vision/tools/draw_zones.py`.
 
 ```json
 {
@@ -113,6 +113,9 @@ Ejemplos concretos de este contrato para probar sin video ni modelo:
 Los modelos de la observación de mesa (`TableObservation`, `ObservedPlate`) y del aviso (`Alert`) están en `vision/servio_vision/alerts/models.py`. Rechazan campos desconocidos y un `state` que no coincide con su `fill_ratio`.
 
 ## Log — `vision/out/eventos.jsonl`
+
+Con datos del restaurante, lo mismo queda también en una base relacional (`vision/out/servio.db`, esquema en `vision/servio_vision/db.py`). Además de observaciones y avisos, las respuestas de los mozos al aviso de plato lleno: `{"event": "alert_feedback", "ts", "alert_id", "table_id", "type", "dish", "waiter", "answer", "free_text", "answered_by", "seconds_to_answer"}`.
+
 
 Una línea JSON por evento, en el orden en que pasan. Lo escribe `alerts.process()` (`alerts/processor.py`). El archivo se **agrega** (no se pisa): varias corridas quedan una detrás de otra; borralo antes de la corrida de la demo si querés una sola.
 

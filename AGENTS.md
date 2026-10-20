@@ -4,9 +4,9 @@ Guía para agentes de IA (Claude Code, Kiro, etc.) y para el equipo. Leé este a
 
 ## Qué es Servio (en una línea)
 
-Una cámara en alto mira el salón; YOLO encuentra los platos de cada mesa, Claude estima cuánta comida queda en cada uno, y cuando una mesa está por terminar, tiene platos vacíos o un plato sigue lleno mucho rato, le llega un aviso al mozo por Telegram.
+Una cámara en alto mira el salón; YOLO encuentra los platos de cada mesa, Claude estima cuánta comida queda en cada uno, y cuando una mesa terminó, tiene platos vacíos o un plato sigue lleno mucho rato, le llega un aviso al mozo por Telegram.
 
-Contexto: MVP de hackathon, 24 horas, equipo de 3 personas (Tomás, Matías, Jessica). Todo es un programa en Python dentro de `vision/`: no hay backend web, base de datos ni dashboard.
+Contexto: MVP de hackathon, 24 horas, equipo de 3 personas (Tomás, Matías, Jessica). Todo es un programa en Python dentro de `vision/`: no hay backend web ni dashboard. Lo que pasa (platos servidos, avisos, respuestas de los mozos) queda en una base SQLite (`vision/out/servio.db`) de la que salen las métricas (`tools/metricas.py`).
 
 ## Mapa de contexto
 
@@ -21,6 +21,7 @@ Contexto: MVP de hackathon, 24 horas, equipo de 3 personas (Tomás, Matías, Jes
 | [docs/context/08-plan-24h.md](docs/context/08-plan-24h.md) | Querés el panorama: roles y fases por hora. |
 | [docs/context/09-convenciones.md](docs/context/09-convenciones.md) | Antes de commitear: estructura, dueños por carpeta, ramas, estilo, variables de entorno. |
 | [docs/context/11-tareas.md](docs/context/11-tareas.md) | Vas a hacer una tarea: qué hacer, en qué archivo, de qué depende y cuándo está hecha. |
+| [docs/roadmap-producto.md](docs/roadmap-producto.md) | Vas a hacer una tarea de después de la hackathon (fases A–E): arquitectura, banco de pruebas en casa, mejoras y funciones nuevas. |
 
 ## Reglas para agentes
 

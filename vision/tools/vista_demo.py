@@ -10,7 +10,10 @@ el grupo de Telegram espejado (`scrcpy`). Corre el mismo pipeline que
 El video se reproduce fluido; cada `--interval` segundos de video se manda
 un frame al pipeline en segundo plano y la vista dibuja la última lectura.
 Si el pipeline tarda más que la reproducción, el video espera y después
-retoma su ritmo (lo mismo al salir de una pausa).
+retoma su ritmo (lo mismo al salir de una pausa). Con la cámara, o con un
+video y `--realtime`, el video nunca espera: si la IA está ocupada, esa
+lectura se saltea y se toma la próxima apenas se libere (como en la demo en
+vivo).
 
 Fuentes: video, carpeta de fotos (cada foto dura `--interval` s), cámara o
 URL (en vivo). A diferencia de `main.py`, sin `--speed` reproduce en tiempo
@@ -38,13 +41,21 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from main import Pipeline, build_parser, build_pipeline, setup_logging
 from servio_vision.alerts.state import table_status
-from servio_vision.capture import IMAGE_SUFFIXES, STREAM_PREFIXES, CameraReader
+from servio_vision.capture import (
+    IMAGE_SUFFIXES,
+    STREAM_PREFIXES,
+    CameraReader,
+    declared_fps,
+    frame_seconds,
+)
 from servio_vision.schemas import Item
 from servio_vision.zones import Zones, scaled_polygon, table_rect
 
 logger = logging.getLogger("servio.vista")
 
 WINDOW = "Servio"
+MAX_PLAUSIBLE_FPS = 120
+FALLBACK_FPS = 25
 
 # colores BGR, por estado de mesa y de plato
 TABLE_COLORS = {
@@ -60,12 +71,11 @@ PLATE_COLORS = {
     "por_terminar": (0, 200, 255),
     "vacio": (60, 60, 230),
 }
-TABLE_LABELS = {
-    "libre": "libre",
-    "servida": "servida",
+PLATE_LABELS = {
+    "lleno": "lleno",
     "comiendo": "comiendo",
     "por_terminar": "por terminar",
-    "terminada": "terminada",
+    "vacio": "vacio",  # sin tilde: la fuente de OpenCV no tiene acentos
 }
 FONT = cv2.FONT_HERSHEY_SIMPLEX
 
@@ -81,11 +91,17 @@ class DemoState:
     """Lo que se dibuja: la última lectura de cada mesa y desde cuándo está así."""
 
     def __init__(self, zones: Zones) -> None:
+        self.zones = (
+            zones  # mesas de la última lectura (con detección automática, cambian)
+        )
         self.tables = {t.table_id: TableView() for t in zones.tables}
         self.readings = 0
 
     def update(self, pipeline: Pipeline, ts: datetime) -> None:
         self.readings += 1
+        self.zones = getattr(pipeline, "zones", self.zones)
+        for t in self.zones.tables:
+            self.tables.setdefault(t.table_id, TableView())
         for table_id, view in self.tables.items():
             items = list(pipeline.previous.get(table_id, []))
             status = table_status(i.state for i in items if i.state)
@@ -103,13 +119,17 @@ def _label(img, text, org, color, scale=0.7, thickness=2) -> None:
 
 
 def draw_overlay(
-    frame: np.ndarray, zones: Zones, state: DemoState, now: datetime, header: str
+    frame: np.ndarray,
+    zones: Zones,
+    state: DemoState,
+    now: datetime,
+    header: str = "",
 ) -> np.ndarray:
     view = frame.copy()
     width = view.shape[1]
-    scale = max(0.5, width / 1920)
+    scale = max(0.9, width / 1920)  # videos chicos (celular vertical): texto legible
     for zone in zones.tables:
-        table = state.tables[zone.table_id]
+        table = state.tables.get(zone.table_id, TableView())
         color = TABLE_COLORS[table.status]
         polygon = scaled_polygon(zone, zones, view)
         cv2.polylines(view, [polygon], True, color, max(2, round(4 * scale)))
@@ -129,24 +149,20 @@ def draw_overlay(
             p2 = (round(x0 + (bx + bw) * w), round(y0 + (by + bh) * h))
             plate_color = PLATE_COLORS[item.state]
             cv2.rectangle(view, p1, p2, plate_color, max(2, round(3 * scale)))
-            text = f"{item.id} {item.state.replace('_', ' ')}"
-            if item.fill_ratio is not None:
-                text += f" {round(item.fill_ratio * 100)}%"
-            _label(view, text, (p1[0], max(p1[1] - 8, 20)), plate_color, 0.6 * scale, 2)
+            # para el jurado, solo el estado (sin id, % ni confianza)
+            text = PLATE_LABELS[item.state]
+            _label(view, text, (p1[0], max(p1[1] - 8, 20)), plate_color, 0.8 * scale, 2)
 
-        minutes = (
-            0 if table.since is None else int((now - table.since).total_seconds() // 60)
-        )
-        status_text = TABLE_LABELS[table.status]
         _label(
             view,
-            f"{zone.name}: {status_text} - {minutes} min",
-            (x0 + 8, y0 + round(34 * scale)),
+            zone.name,  # solo "Mesa 1": el estado se ve por el color
+            (x0 + 6, y0 + round(22 * scale)),
             color,
-            0.9 * scale,
-            2,
+            0.55 * scale,  # chico: no tapa la mesa
+            1,
         )
-    _label(view, header, (12, round(36 * scale)), (255, 255, 255), 0.8 * scale, 2)
+    if header:
+        _label(view, header, (12, round(36 * scale)), (255, 255, 255), 0.8 * scale, 2)
     return view
 
 
@@ -188,8 +204,14 @@ def open_view_source(source: str, interval: float) -> ViewSource:
         cap = cv2.VideoCapture(str(path))
         if not cap.isOpened():
             raise OSError(f"No se pudo abrir el video: {path}")
-        fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
-        frames = ((frame, i / fps) for i, frame in enumerate(_read_all(cap)))
+        fps = declared_fps(cap)
+        frames = (
+            (frame, frame_seconds(cap, i, fps))
+            for i, frame in enumerate(_read_all(cap))
+        )
+        if fps > MAX_PLAUSIBLE_FPS:  # fps falsos (cámaras de seguridad): para grabar
+            logger.warning("El video declara %g fps; grabo a %d", fps, FALLBACK_FPS)
+            fps = FALLBACK_FPS
         return ViewSource(frames, live=False, fps=fps)
     raise FileNotFoundError(f"No existe la fuente: {source}")
 
@@ -203,6 +225,25 @@ def _read_all(cap: cv2.VideoCapture) -> Iterator[np.ndarray]:
             yield frame
     finally:
         cap.release()
+
+
+def _screen_height() -> int:
+    try:
+        import ctypes
+
+        return int(ctypes.windll.user32.GetSystemMetrics(1))  # alto de la pantalla
+    except Exception:  # noqa: BLE001 — fuera de Windows, un alto razonable
+        return 1000
+
+
+def _fit_window(image: np.ndarray) -> None:
+    """La ventana ocupa el alto de la pantalla, pegada a la izquierda: la otra mitad
+    queda para Telegram."""
+    height, width = image.shape[:2]
+    target_h = int(_screen_height() * 0.88)
+    target_w = int(width * target_h / height)
+    cv2.resizeWindow(WINDOW, target_w, target_h)
+    cv2.moveWindow(WINDOW, 0, 0)
 
 
 def _wait(due: float | None, no_window: bool) -> str | None:
@@ -270,6 +311,8 @@ def run(args) -> int:
         return 2
 
     speed = args.speed or 1.0  # la vista es para mirar: por defecto, tiempo real
+    # cámara (siempre) o video con --realtime: el video nunca espera a la IA
+    realtime = source.live or args.realtime
     state = DemoState(pipeline.zones)
     worker = ThreadPoolExecutor(max_workers=1)
     recorder = _Recorder(args.record, source.fps)
@@ -282,6 +325,7 @@ def run(args) -> int:
     ref_clock, ref_s = time.monotonic(), 0.0
     last = None  # (frame, ts, video_s) del último frame mostrado
     interrupted = False
+    window_fitted = False
     failed = False
 
     def finish_pending() -> None:
@@ -292,11 +336,7 @@ def run(args) -> int:
             state.update(pipeline, pending_ts)
 
     def render(frame, ts, video_s) -> np.ndarray:
-        header = (
-            f"Servio - lectura {state.readings} - cada {args.interval:g} s"
-            f" - video {int(video_s // 60):02d}:{int(video_s % 60):02d}"
-        )
-        return draw_overlay(frame, pipeline.zones, state, ts, header)
+        return draw_overlay(frame, state.zones, state, ts)
 
     if not args.no_window:
         cv2.namedWindow(WINDOW, cv2.WINDOW_NORMAL)
@@ -308,7 +348,10 @@ def run(args) -> int:
             if pending is not None and pending.done():
                 finish_pending()
             limit_ok = args.limit is None or submitted < args.limit
-            if video_s >= next_reading and limit_ok:
+            due_reading = video_s >= next_reading and limit_ok
+            if due_reading and pending is not None and realtime:
+                pass  # la IA sigue ocupada: el video no espera; se lee apenas se libere
+            elif due_reading:
                 if pending is not None:
                     # el pipeline va atrasado: el video espera y después retoma su ritmo
                     finish_pending()
@@ -316,9 +359,9 @@ def run(args) -> int:
                 pending = worker.submit(pipeline.process_frame, frame.copy(), ts)
                 pending_ts = ts
                 submitted += 1
-                # en vivo, la próxima lectura cuenta desde ahora: si el modelo se
-                # atrasó, no se acumulan lecturas pendientes
-                base = video_s if source.live else next_reading
+                # en tiempo real, la próxima lectura cuenta desde ahora: si el modelo
+                # se atrasó, no se acumulan lecturas pendientes
+                base = video_s if realtime else next_reading
                 next_reading = base + args.interval
 
             image = render(frame, ts, video_s)
@@ -326,7 +369,13 @@ def run(args) -> int:
             recorder.write(image)
             if not args.no_window:
                 cv2.imshow(WINDOW, image)
+                if not window_fitted:
+                    _fit_window(image)
+                    window_fitted = True
             due = None if source.live else ref_clock + (video_s - ref_s) / speed
+            if args.no_window and realtime and due is not None:
+                # sin ventana pero en tiempo real: igual se respeta el reloj
+                time.sleep(max(0.0, due - time.monotonic()))
             action = _wait(due, args.no_window)
             if action == "quit":
                 break
@@ -358,10 +407,15 @@ def main(argv: list[str] | None = None) -> int:
     parser = build_parser("Servio: vista de la demo.")
     parser.add_argument("--record", type=Path, help="guardar la vista en un video .mp4")
     parser.add_argument(
+        "--realtime",
+        action="store_true",
+        help="video como cámara en vivo: no espera a la IA (salta lecturas si está ocupada)",
+    )
+    parser.add_argument(
         "--no-window", action="store_true", help="sin ventana (con --record)"
     )
     args = parser.parse_args(argv)
-    setup_logging()
+    setup_logging(args.verbose)
     return run(args)
 
 

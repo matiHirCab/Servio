@@ -1,0 +1,15 @@
+{
+  "_nota": "Datos simulados: qué mozo atiende cada mesa y qué pidió cada una (en el orden en que se sirve). El plato n de la mesa es el n-ésimo plato que aparece en la cámara.",
+  "mozos": {
+    "juan": {"nombre": "Juan"},
+    "sofia": {"nombre": "Sofía"},
+    "martin": {"nombre": "Martín"},
+    "lucia": {"nombre": "Lucía"}
+  },
+  "mesas": {
+    "T1": {"mozo": "juan", "pedido": ["cookies", "donas"]},
+    "T2": {"mozo": "sofia", "pedido": ["lomo", "risotto"]},
+    "T3": {"mozo": "martin", "pedido": ["milanesa", "ensalada"]},
+    "T4": {"mozo": "lucia", "pedido": ["pasta", "flan"]}
+  }
+}

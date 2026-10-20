@@ -168,10 +168,34 @@ def test_config_reaches_alerts(monkeypatch):
     monkeypatch.setattr(
         loop.alerts,
         "configure",
-        lambda config, telegram: calls.append((config.t1, telegram)),
+        lambda config, telegram, restaurant=None: calls.append((config.t1, telegram)),
         raising=False,
     )
     config = loop.load_config(30, demo=True, env={})
     handler = loop.observation_handler(config, no_telegram=True)
     assert calls == [(60, False)]
     assert handler == calls.append
+
+
+def test_env_file_thresholds_apply(tmp_path, monkeypatch):
+    env = tmp_path / ".env"
+    env.write_text("ALERT_T2=120\n", encoding="utf-8")
+    monkeypatch.setattr(loop, "load_dotenv", __import__("dotenv").load_dotenv)
+    monkeypatch.setattr(loop, "ENV_FILE", env)
+    monkeypatch.delenv("ALERT_T2", raising=False)
+    monkeypatch.delenv("DEMO_MODE", raising=False)
+    zones_path = tmp_path / "zones.json"
+    save_zones(ZONES, zones_path)
+    args = loop.build_parser().parse_args(
+        ["--source", str(tmp_path), "--zones", str(zones_path), "--demo"]
+    )
+    configured = []
+    monkeypatch.setattr(
+        loop.alerts,
+        "configure",
+        lambda config, telegram, restaurant=None: configured.append(config),
+    )
+    monkeypatch.setattr(loop.alerts, "process", lambda o: [], raising=False)
+    assert loop.build_pipeline(args) is not None
+    assert configured[0].t2 == 120  # del .env, no 2 × interval
+    monkeypatch.delenv("ALERT_T2")

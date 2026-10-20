@@ -145,3 +145,55 @@ def test_pending_change_keeps_latest_box_but_not_none():
     assert item.state == "lleno" and item.bbox == (0.5, 0.5, 0.2, 0.2)
     [item] = smoother.update([plate("lleno")])  # sin caja: se conserva la anterior
     assert item.bbox == (0.5, 0.5, 0.2, 0.2)
+
+
+def test_por_terminar_for_long_becomes_vacio_and_stays():
+    from datetime import UTC, datetime, timedelta
+
+    t0 = datetime(2026, 10, 18, 20, 0, tzinfo=UTC)
+    smoother = TableSmoother(finished_after=30)
+
+    def at(sec, *items):
+        return {
+            i.id: i.state
+            for i in smoother.update(list(items), t0 + timedelta(seconds=sec))
+        }
+
+    assert at(0, plate("por_terminar")) == {"p1": "por_terminar"}
+    assert at(25, plate("por_terminar")) == {"p1": "por_terminar"}
+    assert at(30, plate("por_terminar")) == {"p1": "vacio"}  # 30 s en por_terminar
+    [item] = smoother.update([plate("por_terminar")], t0 + timedelta(seconds=35))
+    assert (
+        item.state == "vacio" and item.fill_ratio == 0.0
+    )  # los restos no lo devuelven
+    # se vuelve a servir: sale de vacio como cualquier cambio (3 lecturas seguras)
+    for sec in (40, 45):
+        assert at(sec, plate("lleno")) == {"p1": "vacio"}
+    assert at(50, plate("lleno")) == {"p1": "lleno"}
+
+
+def test_without_finished_after_nothing_changes():
+    smoother = TableSmoother()
+    from datetime import UTC, datetime, timedelta
+
+    t0 = datetime(2026, 10, 18, 20, 0, tzinfo=UTC)
+    for sec in (0, 600, 1200):
+        [item] = smoother.update([plate("por_terminar")], t0 + timedelta(seconds=sec))
+    assert item.state == "por_terminar"
+
+
+def test_thresholds_come_from_env(monkeypatch):
+    import pytest
+
+    monkeypatch.setenv("SMOOTH_HARD_READINGS", "2")
+    monkeypatch.setenv("SMOOTH_MIN_CONFIDENCE", "0.6")
+    s = TableSmoother()
+    lleno = Item(id="p1", state="lleno", confidence=0.9, position="c")
+    s.update([lleno])
+    dudoso = Item(id="p1", state="por_terminar", confidence=0.65, position="c")
+    s.update([dudoso])
+    [item] = s.update([dudoso])  # 2 lecturas con 0.65 alcanzan (por defecto: nunca)
+    assert item.state == "por_terminar"
+    monkeypatch.setenv("SMOOTH_MIN_CONFIDENCE", "2")
+    with pytest.raises(ValueError):
+        TableSmoother()

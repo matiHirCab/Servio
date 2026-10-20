@@ -11,6 +11,7 @@ import logging
 import os
 import sys
 from collections.abc import Mapping
+from pathlib import Path
 from typing import Any, Protocol
 
 import httpx
@@ -28,13 +29,17 @@ def resolved_text(text: str) -> str:
     return text + RESOLVED_SUFFIX
 
 
+# Botones de un mensaje: filas de (texto, callback_data).
+Buttons = list[list[tuple[str, str]]]
+
+
 class Notifier(Protocol):
-    def send(self, text: str) -> int | None:
+    def send(self, text: str, buttons: Buttons | None = None) -> int | None:
         """Manda un mensaje al grupo; devuelve su `message_id` o None si falló."""
         ...
 
     def edit(self, message_id: int, text: str) -> bool:
-        """Reescribe un mensaje ya mandado; False si falló."""
+        """Reescribe un mensaje ya mandado (y le saca los botones); False si falló."""
         ...
 
 
@@ -70,23 +75,75 @@ class TelegramNotifier:
             raise ValueError(f"faltan variables de Telegram: {', '.join(missing)}")
         return cls(token, chat_id)
 
-    def send(self, text: str) -> int | None:
-        result = self._call("sendMessage", {"chat_id": self._chat_id, "text": text})
-        if not isinstance(result, dict) or not isinstance(
-            result.get("message_id"), int
-        ):
-            return None
-        return result["message_id"]
+    def send(self, text: str, buttons: Buttons | None = None) -> int | None:
+        payload: dict[str, Any] = {"chat_id": self._chat_id, "text": text}
+        if buttons:
+            payload["reply_markup"] = _keyboard(buttons)
+        return _message_id(self._call("sendMessage", payload))
 
     def edit(self, message_id: int, text: str) -> bool:
         payload = {"chat_id": self._chat_id, "message_id": message_id, "text": text}
         return self._call("editMessageText", payload) is not None
 
-    def _call(self, method: str, payload: dict[str, Any]) -> Any:
-        """POST a la Bot API; devuelve `result` o None si falló (ya logueado)."""
+    # --- respuestas de los mozos (feedback.py) ---
+
+    def ask_reply(self, text: str, reply_to: int) -> int | None:
+        """Pide que respondan a este mensaje escribiendo (force_reply)."""
+        payload = {
+            "chat_id": self._chat_id,
+            "text": text,
+            "reply_to_message_id": reply_to,
+            "reply_markup": {"force_reply": True, "selective": True},
+        }
+        return _message_id(self._call("sendMessage", payload))
+
+    def answer_callback(self, callback_id: str, text: str) -> None:
+        self._call(
+            "answerCallbackQuery", {"callback_query_id": callback_id, "text": text}
+        )
+
+    def delete(self, message_id: int) -> None:
+        self._call(
+            "deleteMessage", {"chat_id": self._chat_id, "message_id": message_id}
+        )
+
+    def get_updates(self, offset: int | None, timeout: int = 20) -> list[dict]:
+        """Toques de botones y mensajes nuevos (long polling); [] si falla."""
+        payload: dict[str, Any] = {
+            "timeout": timeout,
+            "allowed_updates": ["callback_query", "message"],
+        }
+        if offset is not None:
+            payload["offset"] = offset
+        result = self._call("getUpdates", payload, timeout=timeout + 10)
+        return result if isinstance(result, list) else []
+
+    def is_group(self, chat_id: object) -> bool:
+        return str(chat_id) == str(self._chat_id)
+
+    def send_photo(self, path: Path, caption: str = "") -> int | None:
+        """Manda una imagen al grupo (por ejemplo, las métricas)."""
+        files = {"photo": (path.name, path.read_bytes(), "image/png")}
+        data = {"chat_id": self._chat_id, "caption": caption}
+        return _message_id(self._call("sendPhoto", data, files=files, timeout=60))
+
+    def _call(
+        self,
+        method: str,
+        payload: dict[str, Any],
+        timeout: float | None = None,
+        files: dict[str, Any] | None = None,
+    ) -> Any:
+        """POST a la Bot API; devuelve `result` o None si falló (ya logueado).
+        Con `files`, va como formulario (multipart) en vez de JSON."""
         url = f"{API_URL}/bot{self._token}/{method}"
+        body: dict[str, Any] = (
+            {"data": payload, "files": files} if files else {"json": payload}
+        )
+        if timeout is not None:
+            body["timeout"] = timeout
         try:
-            response = self._client.post(url, json=payload)
+            response = self._client.post(url, **body)
             data = response.json()
         except (httpx.HTTPError, ValueError) as error:
             # Sin el mensaje de httpx: trae la URL, y la URL trae el token.
@@ -110,14 +167,37 @@ class ConsoleNotifier:
     def __init__(self) -> None:
         self._last_id = 0
 
-    def send(self, text: str) -> int:
+    def send(self, text: str, buttons: Buttons | None = None) -> int:
         self._last_id += 1
-        _print(f"[telegram #{self._last_id}] {text}")
+        options = ""
+        if buttons:
+            options = " | botones: " + " / ".join(b[0] for row in buttons for b in row)
+        _print(f"[telegram #{self._last_id}] {text}{options}")
         return self._last_id
 
     def edit(self, message_id: int, text: str) -> bool:
         _print(f"[telegram editado #{message_id}] {text}")
         return True
+
+    def send_photo(self, path: Path, caption: str = "") -> int:
+        self._last_id += 1
+        _print(f"[telegram #{self._last_id}] (imagen {path}) {caption}")
+        return self._last_id
+
+
+def _keyboard(buttons: Buttons) -> dict[str, Any]:
+    return {
+        "inline_keyboard": [
+            [{"text": label, "callback_data": data} for label, data in row]
+            for row in buttons
+        ]
+    }
+
+
+def _message_id(result: Any) -> int | None:
+    if not isinstance(result, dict) or not isinstance(result.get("message_id"), int):
+        return None
+    return result["message_id"]
 
 
 def _print(text: str) -> None:

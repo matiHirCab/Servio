@@ -18,11 +18,24 @@ Decisiones donde el doc no dice nada:
   `bbox` salen siempre de la lectura visible más reciente, aunque el cambio de
   estado esté pendiente, para que el plato se dibuje y empareje donde está.
 
+Plato terminado por tiempo (`finished_after`, en segundos de video): un plato
+que queda en `por_terminar` ese tiempo pasa a `vacio` (quedan restos que el
+cliente no va a comer). Después, las lecturas `por_terminar` no lo devuelven
+atrás; solo un plato que se vuelve a servir (`lleno`/`comiendo`) sale de `vacio`.
+Necesita el `ts` de cada lectura (`update(items, ts)`).
+
+Configurable por `.env` (se lee al crear el suavizado; vacío = el valor de arriba):
+`SMOOTH_READINGS` (2), `SMOOTH_HARD_READINGS` (3) y `SMOOTH_MIN_CONFIDENCE` (0.8).
+Menos lecturas o menos confianza = cambia de estado más rápido, pero una lectura
+mala pesa más. La Decisions API de OpenAI da confianzas más bajas que Claude.
+
 Uso: un `TableSmoother` por mesa; `update()` con los ítems de cada lectura
 válida (si el clasificador devolvió `None`, no se llama).
 """
 
+import os
 from dataclasses import dataclass
+from datetime import datetime
 
 from servio_vision.schemas import Item, PlateState
 
@@ -31,6 +44,19 @@ NEIGHBOR_READINGS = 2
 HARD_READINGS = 3
 HARD_MIN_CONFIDENCE = 0.8
 MISSING_TO_REMOVE = 2
+
+
+def _env_number(name: str, default: float, low: float, high: float) -> float:
+    value = (os.environ.get(name) or "").strip()
+    if not value:
+        return default
+    try:
+        number = float(value)
+    except ValueError as e:
+        raise ValueError(f"{name}={value!r} no es un número") from e
+    if not low <= number <= high:
+        raise ValueError(f"{name}={value!r} tiene que estar entre {low} y {high}")
+    return number
 
 
 def is_hard_change(current: PlateState, new: PlateState) -> bool:
@@ -45,15 +71,27 @@ class _Track:
     candidate: PlateState | None = None
     streak: int = 0  # lecturas seguidas (válidas) del candidato
     missing: int = 0  # lecturas seguidas en las que no vino
+    state_since: datetime | None = None  # desde cuándo tiene el estado aceptado
+    finished: bool = False  # pasó a vacio por tiempo en por_terminar
 
 
 class TableSmoother:
     """Suaviza los platos de una mesa entre lecturas."""
 
-    def __init__(self) -> None:
+    def __init__(self, finished_after: float | None = None) -> None:
         self._tracks: dict[str, _Track] = {}
+        self.finished_after = finished_after
+        self.neighbor_readings = int(
+            _env_number("SMOOTH_READINGS", NEIGHBOR_READINGS, 1, 10)
+        )
+        self.hard_readings = int(
+            _env_number("SMOOTH_HARD_READINGS", HARD_READINGS, 1, 10)
+        )
+        self.hard_min_confidence = _env_number(
+            "SMOOTH_MIN_CONFIDENCE", HARD_MIN_CONFIDENCE, 0, 1
+        )
 
-    def update(self, items: list[Item]) -> list[Item]:
+    def update(self, items: list[Item], ts: datetime | None = None) -> list[Item]:
         """Procesa una lectura y devuelve los platos suavizados de la mesa."""
         present = {item.id for item in items}
         for item in items:
@@ -61,10 +99,15 @@ class TableSmoother:
                 continue  # tapado: no cuenta como lectura
             track = self._tracks.get(item.id)
             if track is None:
-                self._tracks[item.id] = _Track(accepted=item)
+                self._tracks[item.id] = _Track(accepted=item, state_since=ts)
             else:
                 track.missing = 0
+                before = track.accepted.state
                 self._observe(track, item)
+                if track.accepted.state != before:
+                    track.state_since = ts
+                    track.finished = False
+            self._finish_by_time(self._tracks[item.id], ts)
 
         for item_id in list(self._tracks):
             if item_id in present:
@@ -76,9 +119,43 @@ class TableSmoother:
 
         return [track.accepted for track in self._tracks.values()]
 
+    def remap_boxes(self, remap) -> None:
+        """Pasa las cajas de los platos al recorte nuevo de la mesa (si se movió)."""
+        for track in self._tracks.values():
+            if track.accepted.bbox is not None:
+                track.accepted = track.accepted.model_copy(
+                    update={"bbox": remap(track.accepted.bbox)}
+                )
+
+    def _finish_by_time(self, track: _Track, ts: datetime | None) -> None:
+        """`por_terminar` durante `finished_after` segundos → `vacio`."""
+        if (
+            self.finished_after is None
+            or ts is None
+            or track.state_since is None
+            or track.accepted.state != "por_terminar"
+        ):
+            return
+        if (ts - track.state_since).total_seconds() >= self.finished_after:
+            track.accepted = track.accepted.model_copy(
+                update={"state": "vacio", "fill_ratio": 0.0}
+            )
+            track.state_since, track.finished = ts, True
+            track.candidate, track.streak = None, 0
+
     def _observe(self, track: _Track, item: Item) -> None:
         current = track.accepted.state
         new = item.state
+        if track.finished and new in ("por_terminar", "vacio"):
+            # terminado por tiempo: los restos no lo devuelven a por_terminar
+            track.accepted = _keep_box(
+                track.accepted.model_copy(
+                    update={"position": item.position, "bbox": item.bbox}
+                ),
+                track.accepted,
+            )
+            track.candidate, track.streak = None, 0
+            return
         if new == current:
             track.accepted = _keep_box(item, track.accepted)
             track.candidate, track.streak = None, 0
@@ -94,12 +171,12 @@ class TableSmoother:
         if new != track.candidate:
             track.candidate, track.streak = new, 0
         hard = is_hard_change(current, new)
-        if hard and (item.confidence or 0) < HARD_MIN_CONFIDENCE:
+        if hard and (item.confidence or 0) < self.hard_min_confidence:
             # para un cambio difícil, una lectura dudosa corta la racha
             track.streak = 0
             return
         track.streak += 1
-        if track.streak >= (HARD_READINGS if hard else NEIGHBOR_READINGS):
+        if track.streak >= (self.hard_readings if hard else self.neighbor_readings):
             track.accepted = _keep_box(item, track.accepted)
             track.candidate, track.streak = None, 0
 

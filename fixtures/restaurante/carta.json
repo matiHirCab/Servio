@@ -1,0 +1,37 @@
+{
+  "_nota": "Datos simulados: lo que daría el sistema del restaurante (carta, pedidos y mozos). Las respuestas típicas por plato son las opciones de los botones del aviso de plato lleno.",
+  "platos": {
+    "cookies": {
+      "nombre": "Cookies con chips de chocolate",
+      "respuestas": ["Está todo bien, come despacio", "No le gustaron", "Están duras", "Comanda equivocada"]
+    },
+    "donas": {
+      "nombre": "Donas glaseadas",
+      "respuestas": ["Está todo bien, las va a llevar", "No le gustaron", "Muy dulces", "Comanda equivocada"]
+    },
+    "lomo": {
+      "nombre": "Lomo con papas",
+      "respuestas": ["Está todo bien", "El punto de la carne", "Estaba frío", "Porción muy grande"]
+    },
+    "risotto": {
+      "nombre": "Risotto de hongos",
+      "respuestas": ["Está todo bien", "Estaba frío", "Muy salado", "No le gustó"]
+    },
+    "milanesa": {
+      "nombre": "Milanesa napolitana",
+      "respuestas": ["Está todo bien", "Estaba fría", "Porción muy grande", "No le gustó"]
+    },
+    "ensalada": {
+      "nombre": "Ensalada César",
+      "respuestas": ["Está todo bien", "Le faltaba aderezo", "Ingredientes no frescos", "No le gustó"]
+    },
+    "pasta": {
+      "nombre": "Sorrentinos con fileto",
+      "respuestas": ["Está todo bien", "Estaban fríos", "Pasados de cocción", "No le gustaron"]
+    },
+    "flan": {
+      "nombre": "Flan con dulce de leche",
+      "respuestas": ["Está todo bien", "No le gustó", "Muy dulce", "Comanda equivocada"]
+    }
+  }
+}

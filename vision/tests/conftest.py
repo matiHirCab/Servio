@@ -4,6 +4,7 @@ import os
 
 import pytest
 
+import main
 from servio_vision import alerts
 from servio_vision.alerts.notify import ConsoleNotifier
 
@@ -27,6 +28,9 @@ def alerts_sandbox(tmp_path, monkeypatch):
     monkeypatch.setattr(alerts, "DEFAULT_LOG", tmp_path / "eventos.jsonl")
     if not REAL_TELEGRAM:
         monkeypatch.setattr(alerts, "get_notifier", lambda *a, **k: ConsoleNotifier())
+        # el .env local (DEMO_MODE, ALERT_*) no tiene que cambiar el resultado de los tests
+        monkeypatch.setattr(main, "load_dotenv", lambda *a, **k: False)
+        monkeypatch.setattr(alerts, "load_dotenv", lambda *a, **k: False)
     monkeypatch.setattr(alerts, "_processor", None)
     yield
     if alerts._processor is not None:

@@ -26,7 +26,7 @@ from servio_vision.alerts.notify import (
 )
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-TEST_MESSAGE = "🍽️ Mesa 1 está terminando. (prueba de Servio)"
+TEST_MESSAGE = "🍽️ Juan · Mesa 1: terminó. (prueba de Servio)"
 
 
 def main() -> int:

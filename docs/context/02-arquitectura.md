@@ -17,7 +17,7 @@ Un solo programa en Python, corriendo en una laptop:
                                                    [Telegram: grupo "Mozos"]
 ```
 
-No hay backend web, base de datos ni dashboard. El estado vive en memoria y se guarda un log en `vision/out/eventos.jsonl`.
+No hay backend web ni dashboard. El estado vive en memoria; se guarda un log en `vision/out/eventos.jsonl` y, con los datos del restaurante (`fixtures/restaurante/`), una base SQLite relacional en `vision/out/servio.db` (ver `servio_vision/db.py`) para las métricas.
 
 ## Componentes
 

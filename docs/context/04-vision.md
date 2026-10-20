@@ -21,7 +21,7 @@ Por cada llamada a `classify(recorte_mesa, table_id, items_anteriores)`:
 
 ### Prompt de Claude (iterar con el video)
 
-El texto vigente está en `vision/servio_vision/prompt.py` (`SYSTEM_PROMPT`). En resumen, por plato:
+El texto vigente está en `vision/prompts/claude.txt` (Claude) y `vision/prompts/openai.json` (Decisions API de OpenAI, `CLAUDE_PROVIDER=openai`); `CLAUDE_PROMPT_FILE` / `OPENAI_PROMPT_FILE` del `.env` apuntan a otro archivo sin tocar el default. En resumen, por plato:
 
 - `fill_ratio`: fracción de la porción servida que queda, de 0 (vacío o restos) a 1 (intacto). Con referencia, la referencia vale 1 y se cuentan las piezas.
 - `confidence`: de 0 a 1.
@@ -77,7 +77,7 @@ Una sola cadencia: **se mira cada 30 s** (`--interval 30`, configurable). En cad
 frame (cada 30 s) → recorte por mesa → classify() → suavizado → observación → alerts
 ```
 
-1. **Zonas**: polígono por mesa en `config/zones.json`, dibujado con `tools/draw_zones.py`.
+1. **Mesas**: por defecto se **detectan solas** en cada lectura (`servio_vision/tables.py`): un YOLO de COCO (clase "dining table") encuentra la mesa y `TableTracker` le da un nombre estable ("Mesa 1") aunque se mueva; si se movió, las cajas de los platos se pasan al recorte nuevo. Si en una lectura no se ve, queda donde estaba; si nunca se vio ninguna, se usa el cuadro entero. Con `--zones config/zones.json` se usan zonas fijas (dibujadas con `tools/draw_zones.py`).
 2. **Recorte**: el rectángulo de la mesa desde el frame original, JPEG calidad 85.
 3. **Clasificador**: `--classifier fake|yolo|hybrid|claude`.
 4. **Suavizado** (abajo).
@@ -91,6 +91,8 @@ Por cada plato:
 - Cambio a un estado vecino: se acepta si aparece en **2 lecturas seguidas**.
 - Retroceso (`vacio → comiendo`) o salto de más de un estado (`lleno → vacio`): se acepta con **3 lecturas seguidas** con `confidence ≥ 0.8`.
 - Ausente en 1 lectura: se mantiene. Ausente en 2 seguidas: retirado (deja de venir en la observación).
+- Las cantidades de lecturas y la confianza se cambian en el `.env`: `SMOOTH_READINGS` (2), `SMOOTH_HARD_READINGS` (3) y `SMOOTH_MIN_CONFIDENCE` (0.8). Con la Decisions API de OpenAI conviene bajar la confianza (~0.6): da confianzas más bajas que Claude y, con 0.8, un salto como `lleno → por_terminar` puede no aceptarse nunca.
+- Plato terminado por tiempo: si queda en `por_terminar` durante `--finished-after` segundos de video (o `FINISHED_AFTER` en el `.env`; por defecto 6 min, y en demo 6 lecturas), pasa a `vacio` (son restos). Las lecturas `por_terminar` posteriores no lo devuelven atrás; solo un plato que se vuelve a servir sale de `vacio`.
 
 ## Estructura
 
@@ -115,7 +117,7 @@ vision/
     resumen.py               # tabla de lo que pasó, si sobra tiempo (Jessica)
   tests/
   data/ models/ out/         # ignorados por git
-  requirements.txt           # opencv-python, pydantic, httpx (anthropic solo si CLAUDE_PROVIDER=anthropic)
+  requirements.txt           # opencv-python, pydantic, httpx (anthropic u openai solo si CLAUDE_PROVIDER lo pide)
   requirements-yolo.txt      # ultralytics
 ```
 

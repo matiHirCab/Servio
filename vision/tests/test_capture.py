@@ -65,6 +65,25 @@ def test_invalid_interval(tmp_path):
         open_source(str(tmp_path), interval=0)
 
 
+def test_frame_seconds_uses_timestamp_and_falls_back_to_fps():
+    from servio_vision.capture import frame_seconds
+
+    class Cap:
+        def __init__(self, ms):
+            self.ms = ms
+
+        def get(self, prop):
+            return self.ms
+
+    assert (
+        frame_seconds(Cap(12_500), index=7, fps=1000) == 12.5
+    )  # fps falsos: manda la marca
+    assert frame_seconds(Cap(0), index=0, fps=25) == 0
+    assert (
+        frame_seconds(Cap(0), index=50, fps=25) == 2
+    )  # sin marca de tiempo: cuenta frames
+
+
 class _FakeCamera:
     """Cámara falsa: cada read() devuelve un frame cuyo valor es el número de frame.
     `fail_after`: después de tantos frames, read() falla siempre (se cortó).

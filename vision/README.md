@@ -27,7 +27,7 @@ Con [DroidCam](https://www.dev47apps.com/) (Android y iPhone) el celular sirve d
 
 - Dejá la app en primer plano, el celular enchufado y sin ahorro de batería para DroidCam.
 - La cámara se lee en un hilo aparte (si no, DroidCam corta la conexión mientras Claude clasifica) y, si se corta, se reconecta sola: se da por vencida si pasan 60 s sin un frame bueno. Una lectura por red que se cuelga (celular sin Wi-Fi) corta a los 5 s.
-- Para una sola mesa alcanza con un `config/zones.json` que ocupe todo el cuadro; las zonas se escalan si cambia la resolución.
+- **Mesas:** se detectan solas en cada lectura (YOLO de COCO, clase "dining table"; necesita `requirements-yolo.txt`) y se llaman "Mesa 1", "Mesa 2"… Si se mueven, el recuadro las sigue. Para zonas fijas, `--zones config/zones.json` (con `tools/draw_zones.py`).
 
 ## Tests
 
@@ -41,17 +41,57 @@ Los tests nunca escriben en el `out/eventos.jsonl` real: cada uno usa una carpet
 ## Vista de la demo (pantalla dividida)
 
 - **Izquierda:** `tools/vista_demo.py`, con los mismos flags que `main.py`. Muestra el video con cada mesa coloreada por estado y la caja de cada plato.
-- **Derecha:** el celular con el grupo de Telegram, espejado con [`scrcpy`](https://github.com/Genymobile/scrcpy) (Android).
+- **Derecha:** el grupo de Telegram: Telegram Desktop / web.telegram.org, o el celular espejado con [`scrcpy`](https://github.com/Genymobile/scrcpy).
 
 ```bash
-python tools/vista_demo.py --source data/videos/demo.mp4 --classifier hybrid --demo --interval 15
-python tools/vista_demo.py --source data/videos/demo.mp4 --classifier fake --record out/vista.mp4   # grabar (plan B)
+# en vivo con la cámara del celular (DroidCam): siempre en tiempo real
+python tools/vista_demo.py --source http://<IP>:4747/video --classifier hybrid --demo --interval 5
+# simulación con el video de 3 min de la demo, como si fuera la cámara
+python tools/vista_demo.py --source "<video>.mp4" --classifier hybrid --demo --interval 5 --realtime
+# grabar la vista sin ventana (plan B)
+python tools/vista_demo.py --source "<video>.mp4" --classifier hybrid --demo --interval 5 --realtime --no-window --record out/vista.mp4
 ```
+
+**`.env` para la demo** (además del token y el grupo de Telegram):
+
+```
+CLAUDE_PROVIDER=anthropic   # API de Anthropic: ~5 s por lectura (con claude -p, ~11 s)
+ANTHROPIC_API_KEY=...
+DEMO_MODE=true
+ALERT_T2=60                 # plato lleno a los 60 s (2 × interval lo dispararía en cada plato recién servido)
+ALERT_REMINDER=180          # recordatorios cada 3 min, para no llenar el grupo
+FINISHED_AFTER=20           # 20 s en "por terminar" → "vacío"
+```
+
+- **`--realtime`:** con un video, la vista se comporta como la cámara: el video nunca espera a la IA y, si está ocupada, esa lectura se saltea. Con la cámara es siempre así. Sin `--realtime`, el video espera cada lectura (todas las lecturas, pero se ve a los tirones).
+- **Sobre cada plato** se muestra solo el estado (sin id, % ni confianza), sin encabezado.
+- **`--yolo-conf`:** umbral del detector (por defecto 0,25). Para videos de baja calidad (cámaras de seguridad) YOLOE da confianzas de ~0,08: probar con 0,07.
 
 - **Teclas:** `q` sale, espacio pausa. Con `--no-window --record` graba sin abrir la ventana.
 - **`--speed`:** a diferencia de `main.py`, sin `--speed` la vista reproduce en tiempo real (es para mirar). Después de una pausa o de esperar al modelo, el video retoma su ritmo sin adelantarse.
 - **Grabar en vivo:** con la cámara, la grabación puede quedar más rápida que la realidad si el loop va más lento que los fps de la cámara. Para el plan B, grabar sobre el video.
 - **Colores de mesa:** gris libre · azul servida · verde comiendo · amarillo por terminar · rojo terminada. Los platos usan los mismos colores según su estado.
+
+## Datos del restaurante y respuestas de los mozos
+
+Con la comanda del restaurante, Servio sabe **qué plato es cada uno** y **qué mozo atiende cada mesa**. Para la demo esos datos son simulados (`fixtures/restaurante/carta.json` y `salon.json`): es lo que daría el sistema del restaurante si estuviéramos conectados.
+
+- **Qué plato es:** cuando aparece un plato en cámara, Claude mira su recorte y elige cuál de los platos del pedido de esa mesa es (una llamada chica por plato; sin `ANTHROPIC_API_KEY`, se usa el orden del pedido). Un "plato" que no corresponde a nada del pedido (una caja, una taza) no se tiene en cuenta.
+- **Los avisos** empiezan con el emoji, el mozo y la mesa ("🍽️ Juan · Mesa 1: terminó."). El de plato lleno nombra el plato y trae **botones** con las respuestas típicas de ese plato, más "✏️ Otra respuesta" (el bot pide que escriban y toma lo que respondan).
+- **Las respuestas** se escuchan en un hilo aparte (long polling: sin servidor ni webhook), se agregan al mensaje ("📝 Ana: Muy dulces") y quedan en el log (`alert_feedback`).
+
+## Base de datos (SQLite)
+
+Con datos del restaurante, todo queda también en una base relacional: `vision/out/servio.db` (SQLite, un archivo, sin servidor; en producción sería Postgres con el mismo esquema, ver `servio_vision/db.py`). Tablas: `mozos`, `mesas`, `platos`, `respuestas_tipicas`, `platos_servidos`, `avisos` y `respuestas`. En vivo se guardan los platos que aparecen (con el plato del pedido que son), los avisos que se abren y cierran, y las respuestas de los mozos (de botón o escritas). Se puede abrir con cualquier cliente de SQLite.
+
+## Métricas de platos y mozos
+
+```bash
+python tools/generar_historial.py              # historial simulado de 30 días (fixtures/restaurante/historial.jsonl)
+python tools/metricas.py --image out/metricas.png
+```
+
+En la demo, escribí **`/metricas`** en el grupo de Telegram y el bot responde con la imagen y un resumen (con el programa corriendo). Platos que vuelven llenos (% y motivo más común según los mozos), minutos hasta atender una mesa que terminó y segundos en responder el aviso, por mozo. Salen de consultas SQL a la base (`--sql` las muestra), que junta el historial simulado (se importa la primera vez) con lo que pasó en las demos.
 
 ## Tabla de lo que pasó (cierre de la demo)
 
@@ -70,7 +110,8 @@ No hay créditos de AWS, así que Claude va por el Claude Code logueado (`claude
 python -m servio_vision.classifiers.claude_plates mesa.jpg plato1.jpg plato2.jpg
 ```
 
-- `CLAUDE_PROVIDER=cli` (por defecto) o `anthropic` (necesita `ANTHROPIC_API_KEY` y `pip install anthropic`).
+- `CLAUDE_PROVIDER=cli` (por defecto), `anthropic` (necesita `ANTHROPIC_API_KEY` y `pip install anthropic`) u `openai` (Decisions API de OpenAI, modelo `gpt-6-luna` o el de `OPENAI_MODEL`, timeout de 14 s o el de `OPENAI_TIMEOUT_S`; necesita `OPENAI_API_KEY` y `pip install "openai>=3.26.0"`). Con `openai` no hay JSON libre: se hacen preguntas tipadas por plato (`prompt.decision_questions`) y se arma el mismo `PlatesReport`.
+- **Prompts:** están en `vision/prompts/` (`claude.txt` para Claude, `openai.json` para la Decisions API: instrucciones, preguntas con `{i}` = número de plato y los 5 niveles de comida). Para probar otro sin pisar el default, poné la ruta en `CLAUDE_PROMPT_FILE` / `OPENAI_PROMPT_FILE` del `.env`. Se leen en cada lectura y se validan al arrancar.
 - En Windows llama a `claude.exe` directo; si no está en el PATH, poner la ruta en `CLAUDE_CLI`.
 - Primera prueba (8 platos, video de IA): 6–8 s por mesa con `haiku`.
 

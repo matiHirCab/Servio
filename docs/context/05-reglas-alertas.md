@@ -6,17 +6,23 @@ Viven en `vision/servio_vision/alerts/` (Matías). Se evalúan cada vez que lleg
 
 | Aviso | Se abre cuando | Mensaje | Producción | Demo |
 |---|---|---|---|---|
-| `mesa_por_terminar` | El estado de la mesa **pasa a** `por_terminar` (ver «Estado de mesa») | "🍽️ Mesa 3 está terminando." | — | — |
-| `plato_vacio` | Un plato está en `vacio` hace ≥ T1 | "🧹 Mesa 3: hay platos vacíos para retirar." | T1 = 60 s | 2 × `interval` |
+| `mesa_terminada` | La mesa queda **terminada**: todos sus platos en `vacio` (ver «Estado de mesa»). Se cierra **solo** si retiran los platos (mesa `libre`) o sirven algo nuevo | "🍽️ Mesa 3: terminó." | — | — |
+| `plato_vacio` | Un plato está en `vacio` hace ≥ T1 **mientras el resto de la mesa sigue comiendo** (la mesa no está `terminada`). Ya abierto, se cierra cuando retiran ese plato | "🧹 Mesa 3: hay platos vacíos para retirar." | T1 = 60 s | 2 × `interval` |
 | `plato_lleno_mucho` | Un plato está en `lleno` hace ≥ T2 desde que apareció **y** `people_present` no es `false` | "❓ Mesa 3: un plato sigue lleno hace 12 min. ¿Está todo bien?" | T2 = 10 min | 2 × `interval` |
 
-## Sin respuesta del mozo: recordatorio y cierre
+## Plato y mozo en los avisos, y respuestas del mozo
+
+Con los datos del restaurante (`fixtures/restaurante/`, simulados para la demo; en producción, la comanda), los avisos empiezan con el emoji, el mozo y la mesa ("🍽️ Juan · Mesa 3: terminó.") y el de `plato_lleno_mucho` nombra el plato: "❓ Mesa 3 · Juan: Risotto de hongos sigue lleno hace 12 min. ¿Está todo bien? Pasá a preguntar y contanos qué pasó." Ese aviso trae botones con las respuestas típicas del plato y "✏️ Otra respuesta"; la respuesta se agrega al mensaje y queda en el log (`alert_feedback`, ver `03`). Un "plato" que no corresponde a nada del pedido de la mesa no cuenta para los avisos.
+
+## Recordatorio y cierre
 
 El mozo no responde, así que el antispam es por tiempo:
 
 - **Un aviso abierto por `(mesa, tipo)`.** Mientras esté abierto no se manda otro igual.
 - **Recordatorio:** si la condición sigue después de R minutos, se manda un recordatorio ("Mesa 3: los platos vacíos siguen sin retirar hace 4 min"). Producción R = 3 min, demo 2 × `interval`. Máximo 2 recordatorios.
-- **Cierre:** cuando la condición deja de cumplirse (retiraron el plato, la mesa dejó de estar por terminar), el aviso pasa a `resuelta` y se edita el mensaje original con "✅ ya resuelto".
+- **Cierre:** cuando la condición deja de cumplirse (retiraron el plato, retiraron los platos de la mesa terminada, sirvieron algo nuevo), el aviso pasa a `resuelta` y se edita el mensaje original con "✅ ya resuelto". Que la mesa pase de `por_terminar` a `terminada` **no** cierra nada: no es que alguien hizo algo.
+- **Mesa terminada y platos retirados:** cuando la mesa queda `libre`, el mensaje "terminó" se edita a "✅ Juan retiró los platos 1 min 20 s después de que terminó la mesa." (en vez de "ya resuelto"). En la base queda `avisos.motivo_cierre` = `retirados` (o `servido` si llegó comida nueva), y `/metricas` promedia por mozo solo los retiros.
+- **`por_terminar` no avisa:** es solo el color de la mesa en la vista. El mozo no va mientras todavía comen; va cuando la mesa terminó (`mesa_terminada`), y en un solo viaje retira y ofrece postre, café o la cuenta.
 - **Agrupar:** si en la misma evaluación se abren varios avisos de la misma mesa, se manda un solo mensaje con todo.
 
 ## Umbrales configurables

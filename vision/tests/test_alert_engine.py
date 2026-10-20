@@ -104,12 +104,15 @@ def test_replay_matches_expected(name: str):
 # --- casos sueltos ---
 
 VACIO = ("T1-p1", "vacio", "centro")
+# otro plato que se sigue comiendo: con él, un plato vacío es plato_vacio (sin él, la
+# mesa entera terminó y avisa mesa_terminada)
+COMIENDO = ("T1-p9", "comiendo", "izquierda")
 LLENO = ("T1-p1", "lleno", "centro")
 
 
 def test_one_alert_per_table_and_type():
     # Un plato vacío 5 min: un solo aviso abierto (más sus recordatorios), sin duplicar.
-    events = replay(every(0, 300, VACIO))
+    events = replay(every(0, 300, VACIO, COMIENDO))
     opened = [
         (e["at_seconds"], e["type"]) for e in events if e["event"] == "alert_opened"
     ]
@@ -118,7 +121,7 @@ def test_one_alert_per_table_and_type():
 
 def test_reminders_at_r_and_2r_and_no_more():
     # plato vacío desde 0 s: abre a los 60 s, recuerda a 240 s y 420 s, y no más.
-    events = replay(every(0, 1200, VACIO))
+    events = replay(every(0, 1200, VACIO, COMIENDO))
     vacio = [
         (e["at_seconds"], e["event"]) for e in events if e["type"] == "plato_vacio"
     ]
@@ -135,7 +138,7 @@ def test_full_plate_does_not_open_without_people():
 
 
 def test_empty_plate_opens_without_people():
-    events = replay(every(0, 90, VACIO, people=False))
+    events = replay(every(0, 90, VACIO, COMIENDO, people=False))
     assert ("plato_vacio", "alert_opened") in [(e["type"], e["event"]) for e in events]
 
 
@@ -178,7 +181,7 @@ def test_demo_thresholds_open_earlier():
 
 def test_evaluate_does_not_modify_inputs():
     state = empty_table("T1")
-    for o in every(0, 120, VACIO):
+    for o in every(0, 120, VACIO, COMIENDO):
         state = update_table(state, o)
     alert = evaluate(state, at(60), PROD, []).opened[0]
     snapshot = (alert.model_dump(), dict(state.plates))
@@ -189,7 +192,7 @@ def test_evaluate_does_not_modify_inputs():
 
 def test_ignores_open_alerts_of_other_tables():
     state = empty_table("T1")
-    for o in every(0, 60, VACIO):
+    for o in every(0, 60, VACIO, COMIENDO):
         state = update_table(state, o)
     other = (
         evaluate(state, at(60), PROD, [])
@@ -211,3 +214,49 @@ def test_messages():
     )
     assert table_name("T12") == "Mesa 12"
     assert table_name("barra") == "barra"
+
+
+# --- mesa_terminada (reemplaza a mesa_por_terminar) ---
+
+POR_TERMINAR = ("T1-p1", "por_terminar", "centro")
+OTRO_VACIO = ("T1-p9", "vacio", "izquierda")
+
+
+def test_por_terminar_does_not_alert():
+    events = replay(every(0, 600, POR_TERMINAR, COMIENDO))
+    assert events == []
+
+
+def test_table_finished_opens_once_and_closes_only_when_plates_are_removed():
+    readings = (
+        every(0, 60, POR_TERMINAR, COMIENDO)
+        + every(90, 300, VACIO, OTRO_VACIO)  # la mesa terminó a los 90 s
+        + every(330, 390)  # retiraron los platos (2 lecturas sin platos: libre)
+    )
+    events = [(e["at_seconds"], e["event"], e["type"]) for e in replay(readings)]
+    assert events[0] == (90, "alert_opened", "mesa_terminada")
+    assert ("alert_resolved", "mesa_terminada") in [(e, t) for _, e, t in events]
+    resolved_at = next(s for s, e, _ in events if e == "alert_resolved")
+    assert resolved_at >= 330  # no se cierra mientras los platos siguen en la mesa
+    assert not [
+        t for _, _, t in events if t == "plato_vacio"
+    ]  # avisa la mesa, no el plato
+
+
+def test_new_dish_closes_table_finished():
+    readings = every(0, 60, VACIO) + every(90, 150, ("T1-p2", "lleno", "centro"))
+    events = [(e["at_seconds"], e["event"], e["type"]) for e in replay(readings)]
+    assert events[:2] == [
+        (0, "alert_opened", "mesa_terminada"),
+        (90, "alert_resolved", "mesa_terminada"),
+    ]
+
+
+def test_empty_plate_alert_stays_open_when_the_rest_finishes():
+    # un plato vacío con otro comiendo → plato_vacio; después termina el otro: se suma
+    # mesa_terminada, y plato_vacio no se "resuelve" solo porque la mesa terminó.
+    readings = every(0, 90, VACIO, COMIENDO) + every(120, 180, VACIO, OTRO_VACIO)
+    events = [(e["at_seconds"], e["event"], e["type"]) for e in replay(readings)]
+    assert (60, "alert_opened", "plato_vacio") in events
+    assert (120, "alert_opened", "mesa_terminada") in events
+    assert not [e for e in events if e[1] == "alert_resolved"]

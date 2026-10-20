@@ -180,3 +180,33 @@ def test_failing_pipeline_still_closes_the_recording(tmp_path, monkeypatch, capl
         recorded.get(cv2.CAP_PROP_FRAME_COUNT) > 0
     )  # el video quedó cerrado y legible
     recorded.release()
+
+
+def test_realtime_skips_readings_while_the_ai_is_busy(tmp_path, monkeypatch, caplog):
+    import time as _time
+
+    original = vista_demo.Pipeline.process_frame
+
+    def slow(self, frame, ts):
+        _time.sleep(
+            0.6
+        )  # la IA tarda más que una lectura (5 s de video a 20x = 0,25 s)
+        return original(self, frame, ts)
+
+    monkeypatch.setattr(vista_demo.Pipeline, "process_frame", slow)
+    video = _video(tmp_path)  # 65 s → 3 lecturas si se esperara a la IA
+    code = _run(
+        tmp_path,
+        monkeypatch,
+        caplog,
+        video,
+        "--realtime",
+        "--interval",
+        "5",
+        "--speed",
+        "20",
+    )
+    assert code == 0
+    # con --interval 5 serían 13 lecturas esperando; en tiempo real se saltean
+    readings = int(caplog.text.split(" lecturas")[0].rsplit(" ", 1)[-1])
+    assert 1 <= readings < 13

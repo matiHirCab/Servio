@@ -3,32 +3,116 @@
 Base en docs/context/04-vision.md («Prompt de Claude»). Iterar acá con el video.
 """
 
-SYSTEM_PROMPT = """\
-Sos el sistema de visión de un restaurante. La primera imagen es una vista desde arriba de una mesa.
-Las siguientes son recortes de cada plato de esa mesa, numerados desde 1 en el mismo orden.
-Algunos platos traen antes una referencia: ese mismo plato recién servido, intacto.
-Para cada plato estimá:
-- fill_ratio: qué fracción de la porción servida queda, de 0 (vacío o solo restos) a 1
-  (recién servido, intacto).
-  Si el plato trae referencia, la referencia vale 1: compará cuánta comida hay ahora contra
-  ella y contá las piezas (si había 3 galletitas y queda 1 entera, es 0.33 aunque esa esté
-  intacta). La referencia manda sobre cómo se ve la comida que queda.
-  Sin referencia: es respecto de lo que se sirvió, no del tamaño del plato; un plato recién
-  servido con la comida en el centro y el borde libre vale 1. Si no hay señales de que se
-  comió (huecos en la porción, comida corrida o desparramada, salsa embarrada, restos
-  sueltos), está intacto: 0.9 a 1.
-  Guía: 0.9–1 intacto · 0.5–0.8 se comió una parte · 0.1–0.3 quedan restos · 0–0.05 vacío.
-- confidence: de 0 a 1.
-- visible: false solo si una mano, un brazo o un cubierto agarrado está encima de la comida o
-  agarrando comida del plato: así no se puede medir bien. Cubiertos apoyados (también cruzados
-  encima del plato), una servilleta o una mano en el borde no cuentan: visible true, estimá con
-  lo que se ve. Un plato con los cubiertos apoyados y sin comida a la vista está vacío (0).
-- same_plate: si el plato trae referencia, false cuando la referencia muestra otra comida
-  que la de ahora (entonces ignorá la referencia y estimá sin ella). Sin referencia, true.
-Indicá también si hay personas sentadas en la mesa (people_present).
-Respondé solo con el JSON pedido, un elemento por plato."""
+"""Prompts y esquema de respuesta por plato (TOM-3).
 
-# Esquema JSON de la respuesta (report_plates). Lo usan los dos proveedores.
+Los textos están en archivos para cambiarlos sin tocar código (`vision/prompts/`):
+- `claude.txt`: instrucciones para Claude (`CLAUDE_PROVIDER=cli` o `anthropic`).
+- `openai.json`: instrucciones, preguntas y niveles para la Decisions API de OpenAI
+  (`CLAUDE_PROVIDER=openai`).
+
+Para probar otro prompt sin pisar el default: `CLAUDE_PROMPT_FILE` / `OPENAI_PROMPT_FILE`
+en el `.env`, con la ruta a otro archivo (relativa a la raíz del repo, o absoluta). Se
+leen en cada llamada: editar el archivo cambia la lectura siguiente.
+
+Base en docs/context/04-vision.md («Prompt de Claude»).
+"""
+
+import json
+import os
+from pathlib import Path
+
+PROMPTS_DIR = Path(__file__).resolve().parents[1] / "prompts"
+REPO_DIR = PROMPTS_DIR.parents[1]
+DEFAULT_CLAUDE_PROMPT = PROMPTS_DIR / "claude.txt"
+DEFAULT_OPENAI_PROMPT = PROMPTS_DIR / "openai.json"
+
+# fill_ratio de cada nivel de la Decisions API (mismo orden que `levels` de
+# openai.json, de menos a más), uno por estado de schemas.py: vacio, por_terminar,
+# comiendo, comiendo, lleno. Va en código: a la API solo le llegan label y description.
+FILL_RATIOS: list[float] = [0.0, 0.15, 0.45, 0.65, 1.0]
+OPENAI_QUESTIONS = ("fill", "visible", "same_plate", "people_present")
+
+
+class PromptError(ValueError):
+    """El archivo de prompt no existe o no tiene la forma esperada."""
+
+
+def _path(env_var: str, default: Path) -> Path:
+    value = (os.environ.get(env_var) or "").strip()
+    if not value:
+        return default
+    path = Path(value)
+    return path if path.is_absolute() else REPO_DIR / path
+
+
+def _read(path: Path) -> str:
+    try:
+        return path.read_text(encoding="utf-8")
+    except OSError as e:
+        raise PromptError(f"No se pudo leer el prompt {path}: {e}") from e
+
+
+def instructions() -> str:
+    """Instrucciones para Claude (`claude.txt` o `CLAUDE_PROMPT_FILE`)."""
+    return _read(_path("CLAUDE_PROMPT_FILE", DEFAULT_CLAUDE_PROMPT)).strip()
+
+
+def system_prompt() -> str:
+    """cli y anthropic piden un JSON libre: las instrucciones más el pedido de JSON."""
+    return instructions() + "\nRespondé solo con el JSON pedido, un elemento por plato."
+
+
+def openai_prompt() -> dict:
+    """`openai.json` (o `OPENAI_PROMPT_FILE`), validado."""
+    path = _path("OPENAI_PROMPT_FILE", DEFAULT_OPENAI_PROMPT)
+    try:
+        cfg = json.loads(_read(path))
+    except json.JSONDecodeError as e:
+        raise PromptError(f"{path} no es un JSON válido: {e}") from e
+    questions = cfg.get("questions", {})
+    missing = [q for q in OPENAI_QUESTIONS if not questions.get(q)]
+    if not cfg.get("instructions") or missing:
+        raise PromptError(f"{path}: faltan instructions o las preguntas {missing}")
+    levels = cfg.get("levels", [])
+    if len(levels) != len(FILL_RATIOS) or not all(
+        lv.get("label") and lv.get("description") for lv in levels
+    ):
+        raise PromptError(
+            f"{path}: levels tiene que tener {len(FILL_RATIOS)} niveles con label y "
+            "description, de menos a más comida"
+        )
+    return cfg
+
+
+def prompt_file(provider: str) -> Path:
+    """Archivo de prompt que usa ese proveedor."""
+    if provider == "openai":
+        return _path("OPENAI_PROMPT_FILE", DEFAULT_OPENAI_PROMPT)
+    return _path("CLAUDE_PROMPT_FILE", DEFAULT_CLAUDE_PROMPT)
+
+
+def check(provider: str) -> None:
+    """Lee y valida el prompt de ese proveedor; `PromptError` si está mal."""
+    if provider == "openai":
+        openai_prompt()
+    elif not instructions():
+        raise PromptError(f"{prompt_file(provider)} está vacío")
+
+
+def openai_instructions() -> str:
+    text = openai_prompt()["instructions"]
+    return "\n".join(text) if isinstance(text, list) else str(text)
+
+
+def fill_levels() -> list[dict]:
+    """Niveles de comida para la pregunta `fill` (sin campos de más)."""
+    return [
+        {"label": lv["label"], "description": lv["description"]}
+        for lv in openai_prompt()["levels"]
+    ]
+
+
+# Esquema JSON de la respuesta (report_plates). Lo usan cli y anthropic.
 REPORT_PLATES_SCHEMA: dict = {
     "type": "object",
     "properties": {
@@ -58,6 +142,47 @@ REPORT_PLATES_SCHEMA: dict = {
     "required": ["plates", "people_present"],
     "additionalProperties": False,
 }
+
+
+def decision_questions(has_reference: list[bool]) -> list[dict]:
+    """Preguntas para la Decisions API: por plato fill, visible y (con referencia)
+    same_plate; más people_present para la mesa. Textos de `openai.json`."""
+    cfg = openai_prompt()
+    texts = cfg["questions"]
+    levels = fill_levels()
+    questions: list[dict] = []
+    for i, ref in enumerate(has_reference, start=1):
+        questions.append(
+            {
+                "type": "score",
+                "name": f"fill_{i}",
+                "instructions": texts["fill"].format(i=i),
+                "levels": levels,
+            }
+        )
+        questions.append(
+            {
+                "type": "predicate",
+                "name": f"visible_{i}",
+                "instructions": texts["visible"].format(i=i),
+            }
+        )
+        if ref:
+            questions.append(
+                {
+                    "type": "predicate",
+                    "name": f"same_plate_{i}",
+                    "instructions": texts["same_plate"].format(i=i),
+                }
+            )
+    questions.append(
+        {
+            "type": "predicate",
+            "name": "people_present",
+            "instructions": texts["people_present"],
+        }
+    )
+    return questions
 
 
 def table_caption(table_id: str) -> str:

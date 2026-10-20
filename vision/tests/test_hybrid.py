@@ -431,3 +431,16 @@ def test_hybrid_reference_saved_after_prepare_is_not_dropped(claude):
     clf.finish(b, _one(0.9, same_plate=False), [])
     c = clf.prepare(_jpeg(), "T1", b.seen_items)
     assert c.references[0] is not None
+
+
+def test_hybrid_empty_plate_that_yolo_stops_seeing_is_gone(claude):
+    """Plato vacío que YOLO deja de ver: lo retiraron. No se le pregunta a Claude
+    (leería el hueco como "plato vacío") y deja de venir enseguida."""
+    clf = HybridClassifier(detector=FakeDetector(PLATES))
+    claude.answer = _answer(True, True, fill=0.0)
+    first = clf.classify(_jpeg(), "T1", [])
+    clf.detector = FakeDetector([PLATES[0]])  # sacaron p2
+    claude.answer = _answer(True, fill=0.0)
+    second = clf.classify(_jpeg(), "T1", first.items)
+    assert len(claude.calls[1]) == 1  # solo el plato que se ve
+    assert [i.id for i in second.items] == ["p1"]

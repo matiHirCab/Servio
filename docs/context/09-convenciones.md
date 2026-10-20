@@ -22,7 +22,7 @@
 | `vision/servio_vision/classifiers/` (salvo `fake.py`), `tracking.py`, `prompt.py`, `tools/{build_eval_set,eval}.py`, `tools/train_yolo.ipynb` | Tomás |
 | `vision/servio_vision/schemas.py`, `classifier.py` | Tomás (contrato con Jessica: cambios con su revisión) |
 | `vision/servio_vision/alerts/`, `tools/replay.py`, `fixtures/` | Matías |
-| `vision/main.py`, `servio_vision/{capture,zones,smoothing}.py`, `classifiers/fake.py`, `tools/draw_zones.py`, `tools/{vista_demo,resumen}.py`, `config/` | Jessica |
+| `vision/main.py`, `servio_vision/{capture,zones,smoothing,tables}.py`, `classifiers/fake.py`, `tools/draw_zones.py`, `tools/{vista_demo,resumen}.py`, `config/` | Jessica |
 | `docs/` | Todos, por PR |
 
 ## Código
@@ -41,7 +41,7 @@
 
 ## Variables de entorno
 
-Ver `.env.example`: `CLAUDE_PROVIDER`, `CLAUDE_MODEL`, `CLAUDE_TIMEOUT_S`, `CLAUDE_CLI`, `ANTHROPIC_API_KEY`, `YOLO_WEIGHTS`, `TELEGRAM_BOT_TOKEN`, `TELEGRAM_GROUP_CHAT_ID`, `DEMO_MODE`.
+Ver `.env.example`: `CLAUDE_PROVIDER`, `CLAUDE_MODEL`, `OPENAI_MODEL`, `CLAUDE_TIMEOUT_S`, `OPENAI_TIMEOUT_S`, `CLAUDE_CLI`, `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `CLAUDE_PROMPT_FILE`, `OPENAI_PROMPT_FILE`, `SMOOTH_READINGS`, `SMOOTH_HARD_READINGS`, `SMOOTH_MIN_CONFIDENCE`, `YOLO_WEIGHTS`, `TELEGRAM_BOT_TOKEN`, `TELEGRAM_GROUP_CHAT_ID`, `DEMO_MODE`.
 
 ## Privacidad y datos
 
