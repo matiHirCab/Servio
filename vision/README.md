@@ -119,7 +119,7 @@ python -m servio_vision.classifiers.claude_plates mesa.jpg plato1.jpg plato2.jpg
 
 `--classifier hybrid` es el de la demo: YOLO encuentra los platos, se mantienen los ids por posición y Claude estima cuánto queda en cada uno.
 
-- Sin `YOLO_WEIGHTS` usa YOLOE preentrenado con los prompts `plate` y `bowl` (`imgsz=1280`, lo que funcionó en las pruebas: 11/11 platos en el video de IA). Encuentra los platos pero no su estado, así que sin Claude la lectura se descarta.
+- Sin `YOLO_WEIGHTS` usa YOLOE preentrenado con los prompts `plate` y `bowl` (`imgsz=1280`, lo que funcionó en las pruebas: 11/11 platos en el video de IA). 1280 es el tope: un recorte más chico va a su tamaño, porque agrandado YOLOE deja de ver los platos (en un video de 640×480 no encontraba ninguno). Encuentra los platos pero no su estado, así que sin Claude la lectura se descarta.
 - Con `YOLO_WEIGHTS` (el `yolov8n` entrenado con `food` / `finished_food`), si Claude falla usa el estado de YOLO con confianza más baja. Es también lo que usa `--classifier yolo`.
 - Si YOLO deja de encontrar un plato que ya conocía, el `hybrid` igual le manda a Claude el recorte de su última caja, hasta 3 lecturas seguidas. Si Claude lo ve, sigue con su id y su lectura; si tampoco lo ve, muestra la última lectura y después deja de mostrarlo.
 - Probar sobre un video (un frame cada 0,5 s, el frame entero como una mesa):
