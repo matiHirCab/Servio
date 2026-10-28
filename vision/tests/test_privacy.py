@@ -388,7 +388,7 @@ def test_frame_recorder_writes_non_ascii_paths(tmp_path):
     path = recorder.save(
         noise(), datetime(2026, 10, 28, 20, 30, 15, 250000, tzinfo=UTC)
     )
-    assert path.name == "20261028T203015.250Z.jpg"
+    assert path.name == "20261028T203015.250000Z.jpg"
     assert cv2.imdecode(np.fromfile(path, np.uint8), cv2.IMREAD_COLOR).shape == (
         100,
         200,
@@ -402,3 +402,32 @@ def test_frame_recorder_writes_non_ascii_paths(tmp_path):
 def test_yunet_runs_on_a_frame_without_faces():
     detector = privacy.YuNetDetector(privacy.MODEL_PATH)
     assert detector.detect(np.zeros((360, 640, 3), np.uint8)) == []
+
+
+def test_face_blur_reuse_expires_by_time(monkeypatch):
+    """Si la cámara descartó frames y pasó mucho entre dos entregas, las cajas
+    viejas no sirven: se vuelve a detectar aunque no toque por cantidad."""
+    detector = FixedFaces([(10, 10, 20, 20)])
+    blur = FaceBlur(detector, every=3)
+    clock = iter([0.0, 0.01, 0.5])  # el tercer frame llega medio segundo después
+    monkeypatch.setattr(privacy.time, "monotonic", lambda: next(clock))
+    for seed in range(3):
+        blur(noise(seed=seed))
+    assert detector.calls == 2  # frames 0 y 2 (por tiempo), no el 1
+
+
+def test_main_keeps_alerting_when_recording_fails(tmp_path, caplog):
+    """Grabar es auxiliar: un disco lleno no corta los avisos a los mozos."""
+    from datetime import UTC, datetime
+
+    import main as loop
+    from servio_vision.recording import FrameRecorder
+
+    class Broken(FrameRecorder):
+        def save(self, frame, ts):
+            raise OSError("disco lleno")
+
+    caplog.set_level("ERROR")
+    recorder = Broken(tmp_path / "rec")
+    assert loop._record(recorder, noise(), datetime.now(UTC)) is None
+    assert "sigo sin grabar" in caplog.text

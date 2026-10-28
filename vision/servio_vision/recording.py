@@ -10,7 +10,7 @@ B-1 suma a esta carpeta el log de eventos y `servio replay DIR`.
 """
 
 import logging
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 
 import numpy as np
@@ -39,5 +39,6 @@ class FrameRecorder:
 
 
 def frame_name(ts: datetime) -> str:
-    """`ts` UTC → `20261028T203015.250Z.jpg` (ordena bien y no repite en la lectura)."""
-    return ts.strftime("%Y%m%dT%H%M%S.%f")[:-3] + "Z.jpg"
+    """`ts` → `20261028T203015.250000Z.jpg`, en UTC y con microsegundos: ordena bien y
+    dos lecturas no caen en el mismo nombre."""
+    return ts.astimezone(UTC).strftime("%Y%m%dT%H%M%S.%f") + "Z.jpg"

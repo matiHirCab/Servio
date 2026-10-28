@@ -16,11 +16,13 @@ Prueba manual:
 
 import argparse
 import hashlib
+import http.client
 import logging
 import os
 import shutil
 import sys
 import tempfile
+import time
 import urllib.request
 from collections.abc import Callable, Sequence
 from pathlib import Path
@@ -173,7 +175,7 @@ def ensure_model(path: Path = MODEL_PATH) -> Path:
     partial = Path(name)
     try:
         _download(MODEL_URL, partial)
-    except OSError as e:
+    except (OSError, http.client.HTTPException) as e:  # IncompleteRead no es OSError
         partial.unlink(missing_ok=True)
         if damaged:
             raise PrivacyError(
@@ -233,9 +235,14 @@ class FaceBlur:
 
     `every`: detectar cada tantos frames y, en los del medio, pixelar las últimas
     cajas. Solo para una vista fluida (`vista_demo`, 25–30 fps): las caras se
-    mueven poco en 2 frames y el margen las sigue tapando. Las lecturas del pipeline
-    y las grabaciones de `main.py` van con 1: cada frame se detecta.
+    mueven poco en 2 frames y el margen las sigue tapando. Si entre frames pasó
+    más de `MAX_REUSE_S` (la cámara descartó frames porque el loop iba lento), se
+    vuelve a detectar igual: las cajas caducan por tiempo, no solo por cantidad.
+    Las lecturas del pipeline y las grabaciones de `main.py` van con 1: cada frame
+    se detecta.
     """
+
+    MAX_REUSE_S = 0.15  # más que esto sin detectar y una cara que camina se escapa
 
     def __init__(self, detector: FaceDetector, every: int = 1) -> None:
         if every < 1:
@@ -246,11 +253,16 @@ class FaceBlur:
         self._frames = 0
         self._boxes: list[Box] = []
         self._detected_last = False  # el último frame tuvo detección propia
+        self._detected_at = 0.0
 
     def __call__(self, frame: np.ndarray) -> np.ndarray:
-        self._detected_last = self._frames % self.every == 0
+        now = time.monotonic()
+        self._detected_last = (
+            self._frames % self.every == 0 or now - self._detected_at > self.MAX_REUSE_S
+        )
         if self._detected_last:
             self._boxes = self.detector.detect(frame)
+            self._detected_at = now
             if self._boxes:
                 self.faces += len(self._boxes)
                 logger.debug("%d cara(s) difuminada(s)", len(self._boxes))
@@ -290,9 +302,9 @@ def main(argv: list[str] | None = None) -> int:
     logging.basicConfig(level=logging.INFO, format="%(message)s")
 
     try:
+        recorder = FrameRecorder(args.out)  # antes de abrir la cámara
         blur = default_anonymizer()
         frames = open_source(args.source, anonymize=blur)  # falla acá si no hay modelo
-        recorder = FrameRecorder(args.out)
         seen = 0
         for n, (frame, ts) in enumerate(frames, 1):
             out = recorder.save(frame, ts)

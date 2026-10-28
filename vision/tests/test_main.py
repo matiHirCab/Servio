@@ -189,7 +189,7 @@ def test_cli_record_saves_one_blurred_frame_per_reading(tmp_path, monkeypatch):
 
 def test_cli_explains_when_the_face_model_is_missing(tmp_path, monkeypatch, caplog):
     def no_model():
-        raise loop.PrivacyError("No se pudo bajar el detector de caras")
+        raise privacy.PrivacyError("No se pudo bajar el detector de caras")
 
     monkeypatch.setattr(privacy, "load_detector", no_model)
     assert _cli(tmp_path, monkeypatch)[0] == 2

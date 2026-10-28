@@ -33,7 +33,6 @@ from servio_vision.alerts.models import TableObservation
 from servio_vision.capture import open_source
 from servio_vision.classifier import Classifier, available_classifiers, get_classifier
 from servio_vision.dish_match import DishMatcher
-from servio_vision.privacy import PrivacyError
 from servio_vision.recording import FrameRecorder
 from servio_vision.restaurant import DEFAULT_DIR as RESTAURANT_DIR
 from servio_vision.restaurant import Restaurant, plate_order
@@ -486,6 +485,19 @@ def build_pipeline(args: argparse.Namespace) -> Pipeline | None:
     )
 
 
+def _record(
+    recorder: FrameRecorder, frame: np.ndarray, ts: datetime
+) -> FrameRecorder | None:
+    """Guarda el frame; si el disco o el share fallan, avisa y deja de grabar. Los
+    avisos a los mozos siguen: grabar es auxiliar."""
+    try:
+        recorder.save(frame, ts)
+        return recorder
+    except OSError as e:
+        logger.error("No se pudo grabar el frame, sigo sin grabar: %s", e)
+        return None
+
+
 def main(argv: list[str] | None = None) -> int:
     args = add_record_flag(build_parser()).parse_args(argv)
     setup_logging(args.verbose)
@@ -494,30 +506,22 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     readings = 0
     try:
-        try:
-            # las caras salen difuminadas de open_source (C-3): nada de lo que
-            # sigue, tampoco la grabación, ve una cara. La fuente y el modelo de
-            # caras se abren acá: si fallan, fallan acá.
-            # la carpeta de grabación primero: si no se puede crear, la cámara
-            # todavía no se abrió y no queda un hilo leyéndola
-            recorder = FrameRecorder(args.record) if args.record else None
-            frames = open_source(args.source, args.interval, args.speed)
-        except OSError as e:  # --record, fuente que no existe o no abre, PrivacyError
-            logger.error("%s", e)
-            return 2
+        # La carpeta de grabación primero: si no se puede crear, la cámara todavía
+        # no se abrió. Después la fuente, que sale de open_source con las caras
+        # difuminadas (C-3): nada de lo que sigue, tampoco la grabación, ve una cara.
+        recorder = FrameRecorder(args.record) if args.record else None
+        frames = open_source(args.source, args.interval, args.speed)
         logger.info("Privacidad: caras difuminadas en la captura")
         for frame, ts in frames:
             if recorder is not None:
-                try:
-                    recorder.save(frame, ts)
-                except OSError as e:
-                    logger.error("No se pudo grabar el frame: %s", e)
-                    return 2
+                recorder = _record(recorder, frame, ts)
             pipeline.process_frame(frame, ts)
             readings += 1
             if args.limit is not None and readings >= args.limit:
                 break
-    except PrivacyError as e:  # el detector falló a mitad de camino
+    except OSError as e:
+        # --record que no se puede crear, fuente que no existe o no abre, modelo de
+        # caras que falta o falla (PrivacyError): sin frames no hay nada que hacer
         logger.error("%s", e)
         return 2
     except KeyboardInterrupt:

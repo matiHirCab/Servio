@@ -21,6 +21,7 @@ import logging
 import sys
 import threading
 import time
+import weakref
 from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -182,7 +183,11 @@ def read_image(path: Path, start: datetime) -> Iterator[Frame]:
 def read_camera(source: int | str, interval: float) -> Iterator[Frame]:
     reader = CameraReader(source)
     reader.start()  # OSError si no abre
-    return _camera_frames(reader, interval)
+    frames = _camera_frames(reader, interval)
+    # si nadie llega a iterar (falló algo entre abrir y el primer frame), el hilo de
+    # la cámara se para igual cuando el generador se descarta
+    weakref.finalize(frames, reader.stop)
+    return frames
 
 
 def _camera_frames(reader: "CameraReader", interval: float) -> Iterator[Frame]:
