@@ -112,18 +112,26 @@ def compute(db: Database) -> dict:
     }
 
 
-def print_report(m: dict) -> None:
+# Métricas de roles.py que muestra este reporte (los roles filtran por estas).
+REPORT_METRICS = ("platos_que_vuelven", "tiempo_respuesta")
+
+
+def print_report(m: dict, metrics: set[str] | None = None) -> None:
+    """Reporte en la terminal. `metrics`: ids de roles.py a mostrar (None = todas)."""
+    show = set(REPORT_METRICS) if metrics is None else metrics
     print(f"Servio · últimos {m['days']} días · {m['alerts']} respuestas de mozos")
-    print("\nPlatos que vuelven llenos (% de las veces que se sirvieron)")
-    for dish, rate, reason in m["dishes"]:
-        print(f"  {dish:34} {rate * 100:5.1f} %   motivo más común: {reason}")
-    print("\nMinutos hasta retirar los platos de una mesa que terminó")
-    for waiter, v in m["attend"]:
-        print(f"  {waiter:10} {v:5.1f} min")
-    print("\nSegundos en responder el aviso")
-    for waiter, v in m["answer"]:
-        print(f"  {waiter:10} {v:5.0f} s")
-    if m["problems"]:
+    if "platos_que_vuelven" in show:
+        print("\nPlatos que vuelven llenos (% de las veces que se sirvieron)")
+        for dish, rate, reason in m["dishes"]:
+            print(f"  {dish:34} {rate * 100:5.1f} %   motivo más común: {reason}")
+    if "tiempo_respuesta" in show:
+        print("\nMinutos hasta retirar los platos de una mesa que terminó")
+        for waiter, v in m["attend"]:
+            print(f"  {waiter:10} {v:5.1f} min")
+        print("\nSegundos en responder el aviso")
+        for waiter, v in m["answer"]:
+            print(f"  {waiter:10} {v:5.0f} s")
+    if m["problems"] and "platos_que_vuelven" in show:
         print("\nProblemas por plato (% de las respuestas de los mozos)")
         for dish, _, _ in m["dishes"]:
             if dish in m["problems"]:
