@@ -49,7 +49,7 @@ from servio_vision.capture import (
     declared_fps,
     frame_seconds,
 )
-from servio_vision.cli import build_parser, settings_from_args
+from servio_vision.cli import build_parser, load_settings
 from servio_vision.pipeline import Pipeline
 from servio_vision.schemas import Item
 from servio_vision.zones import Zones, scaled_polygon, table_rect
@@ -351,17 +351,12 @@ class _Recorder:
 
 
 def run(args) -> int:
-    try:
-        cfg = settings_from_args(args)  # flags > --config > .env
-    except (OSError, ValueError) as e:
-        logger.error("Configuración: %s", e)
-        return 2
-    if cfg.source is None:
-        logger.error("Falta la fuente: --source, o `source` en el toml de --config")
+    cfg = load_settings(args)  # flags > --config > .env; loguea qué falta
+    if cfg is None:
         return 2
     try:
         # grabando, se detectan caras en todos los frames; solo mirando, cada 3
-        detect_every = 1 if args.record else FACE_DETECT_EVERY
+        detect_every = 1 if args.record_video else FACE_DETECT_EVERY
         source = open_view_source(cfg.source, cfg.interval, detect_every)
     except OSError as e:  # también PrivacyError
         logger.error("%s", e)
@@ -375,7 +370,7 @@ def run(args) -> int:
     realtime = source.live or args.realtime
     state = DemoState(pipeline.zones)
     worker = ThreadPoolExecutor(max_workers=1)
-    recorder = _Recorder(args.record, source.fps, live=source.live)
+    recorder = _Recorder(args.record_video, source.fps, live=source.live)
     pending: Future | None = None
     pending_ts: datetime | None = None
     start = datetime.now(UTC)
@@ -473,7 +468,12 @@ def run(args) -> int:
 
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser("Servio: vista de la demo.")
-    parser.add_argument("--record", type=Path, help="guardar la vista en un video .mp4")
+    parser.add_argument(
+        "--record",
+        dest="record_video",  # distinto del --record DIR de main.py (frames sueltos)
+        type=Path,
+        help="guardar la vista en un video .mp4",
+    )
     parser.add_argument(
         "--realtime",
         action="store_true",

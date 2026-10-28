@@ -13,11 +13,11 @@ import sys
 import warnings
 
 from servio_vision import alerts, prompt
-from servio_vision.alerts.config import AlertConfig, load_config
+from servio_vision.alerts.config import load_config
 from servio_vision.capture import open_source
 from servio_vision.classifier import get_classifier
 from servio_vision.dish_match import DishMatcher
-from servio_vision.pipeline import ObservationHandler, Pipeline
+from servio_vision.pipeline import Pipeline
 from servio_vision.recording import FrameRecorder
 from servio_vision.restaurant import DEFAULT_DIR as RESTAURANT_DIR
 from servio_vision.restaurant import Restaurant
@@ -31,16 +31,6 @@ logger = logging.getLogger("servio")
 # Plato en por_terminar tanto tiempo → vacio (quedan restos). Producción: 6 min.
 PROD_FINISHED_AFTER = 6 * 60
 DEMO_FINISHED_READINGS = 6  # en demo, 6 lecturas (30 s con --interval 5)
-
-
-def observation_handler(
-    config: AlertConfig, no_telegram: bool, restaurant: Restaurant | None = None
-) -> ObservationHandler:
-    """`alerts.process`, ya configurado con los umbrales resueltos, con Telegram o
-    consola según `no_telegram` y, si hay, con los datos del restaurante (plato y
-    mozo en los avisos, y respuestas de los mozos)."""
-    alerts.configure(config, telegram=not no_telegram, restaurant=restaurant)
-    return alerts.process
 
 
 def load_restaurant(directory) -> Restaurant | None:

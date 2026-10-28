@@ -16,37 +16,17 @@ y el pipeline en servio_vision/pipeline.py.
     python main.py --source data/videos/demo.mp4 --classifier hybrid --demo --speed 10
 """
 
-import logging
 import sys
 
-from servio_vision import alerts  # noqa: F401 — tests y herramientas lo toman de acá
-from servio_vision.alerts.config import load_config  # noqa: F401
-from servio_vision.app import (  # noqa: F401
-    _record,
-    build_pipeline,
-    observation_handler,
-    run,
-    setup_logging,
-)
-from servio_vision.cli import add_record_flag, build_parser, settings_from_args
-from servio_vision.pipeline import Pipeline  # noqa: F401
-
-logger = logging.getLogger("servio")
+from servio_vision.app import run, setup_logging
+from servio_vision.cli import add_record_flag, build_parser, load_settings
 
 
 def main(argv: list[str] | None = None) -> int:
     args = add_record_flag(build_parser()).parse_args(argv)
     setup_logging(args.verbose)
-    try:
-        settings = settings_from_args(args)
-    except (
-        OSError,
-        ValueError,
-    ) as e:  # toml que no existe o inválido, valor fuera de rango
-        logger.error("Configuración: %s", e)
-        return 2
-    if settings.source is None:
-        logger.error("Falta la fuente: --source, o `source` en el toml de --config")
+    settings = load_settings(args)
+    if settings is None:
         return 2
     return run(settings, limit=args.limit)
 

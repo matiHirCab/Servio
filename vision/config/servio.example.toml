@@ -5,12 +5,14 @@
 # Las claves son las mismas que las variables del .env, en minúscula. Las tablas
 # ([camara], [modelo]…) son solo para agrupar: se aplanan al leer.
 # Los secretos (tokens, API keys) van en el .env, no acá.
+# Rutas relativas: zones, record, restaurante, fixture y un source que sea archivo cuentan
+# desde la carpeta de este toml; yolo_weights, face_model y los prompts, desde la raíz del repo.
 
 [camara]
 source = "http://192.168.0.5:4747/video"   # DroidCam / IP Webcam, 0 para la webcam, o un video
 interval = 30                               # segundos entre lecturas
-# zones = "config/zones.json"               # zonas fijas; sin esto las mesas se detectan solas
-# record = "out/sesiones/casa-jessica"      # guardar los frames procesados (B-1)
+# zones = "zones.json"                      # zonas fijas (al lado de este toml); sin esto se detectan solas
+# record = "../out/sesiones/casa-jessica"   # guardar los frames procesados (B-1)
 
 [modelo]
 classifier = "hybrid"                       # fake | yolo | hybrid
@@ -20,7 +22,7 @@ claude_provider = "anthropic"               # cli | anthropic | openai
 # yolo_conf = 0.25
 
 [restaurante]
-# restaurante = "fixtures/restaurante"      # carta.json y salon.json
+# restaurante = "../../fixtures/restaurante"  # carta.json y salon.json
 
 [avisos]
 demo = false

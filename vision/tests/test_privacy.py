@@ -418,7 +418,7 @@ def test_main_keeps_alerting_when_recording_fails(tmp_path, caplog):
     """Grabar es auxiliar: un disco lleno no corta los avisos a los mozos."""
     from datetime import UTC, datetime
 
-    import main as loop
+    from servio_vision import app
     from servio_vision.recording import FrameRecorder
 
     class Broken(FrameRecorder):
@@ -427,5 +427,5 @@ def test_main_keeps_alerting_when_recording_fails(tmp_path, caplog):
 
     caplog.set_level("ERROR")
     recorder = Broken(tmp_path / "rec")
-    assert loop._record(recorder, noise(), datetime.now(UTC)) is None
+    assert app._record(recorder, noise(), datetime.now(UTC)) is None
     assert "sigo sin grabar" in caplog.text

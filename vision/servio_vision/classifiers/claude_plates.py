@@ -458,20 +458,15 @@ def estimate_plates(
     """
     if not plate_jpegs:
         return PlatesReport(plates=[], people_present=True)
-    if provider is None or model is None or timeout_s is None:
-        # lo que no vino por parámetro (app.py lo pasa todo) sale de la configuración
-        cfg = settings.current()
-        provider = provider or cfg.claude_provider
-        if provider not in _BACKENDS:
-            raise ValueError(
-                f"CLAUDE_PROVIDER desconocido: {provider!r}. Opciones: {sorted(_BACKENDS)}"
-            )
-        model = model or cfg.model_for(provider)
-        timeout_s = cfg.timeout_for(provider) if timeout_s is None else timeout_s
+    # lo que no vino por parámetro (app.py lo pasa todo) sale de la configuración
+    cfg = settings.current() if None in (provider, model, timeout_s) else None
+    provider = provider or cfg.claude_provider
     if provider not in _BACKENDS:
         raise ValueError(
             f"CLAUDE_PROVIDER desconocido: {provider!r}. Opciones: {sorted(_BACKENDS)}"
         )
+    model = model or cfg.model_for(provider)
+    timeout_s = cfg.timeout_for(provider) if timeout_s is None else timeout_s
     # Una sola vez y fuera del loop: las imágenes no se recodifican en cada intento, y un
     # `references` de otro largo es un bug del que llama (ValueError), no un fallo de Claude.
     # `references` se normaliza acá y lo usan igual las imágenes y las preguntas.

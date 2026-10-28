@@ -2,14 +2,17 @@
 
 Los flags solo **pisan** valores: todos arrancan en `None` y lo que no se pasa sale
 del `servio.toml` (`--config`), del `.env` o de los defaults de `settings.py`.
-`main.py` y `tools/vista_demo.py` comparten este parser.
+`main.py` y `tools/vista_demo.py` comparten este parser y `load_settings`.
 """
 
 import argparse
+import logging
 from pathlib import Path
 
 from servio_vision.classifier import available_classifiers
-from servio_vision.settings import Settings
+from servio_vision.settings import Settings, activate
+
+logger = logging.getLogger("servio")
 
 
 def interval_seconds(raw: str) -> float:
@@ -77,7 +80,7 @@ def build_parser(
 
 def add_record_flag(parser: argparse.ArgumentParser) -> argparse.ArgumentParser:
     """`--record DIR` del loop. Aparte de `build_parser` porque `vista_demo` usa el
-    mismo parser con su propio `--record` (la vista en un .mp4)."""
+    mismo parser con su propio `--record` (la vista en un .mp4, `dest=record_video`)."""
     parser.add_argument(
         "--record",
         type=Path,
@@ -104,11 +107,20 @@ def settings_from_args(args: argparse.Namespace) -> Settings:
         finished_after=args.finished_after,
         restaurante=args.restaurante,
         yolo_conf=args.yolo_conf,
-        record=getattr(args, "record", None) if _records_frames(args) else None,
+        record=getattr(args, "record", None),  # solo main.py lo agrega
     )
 
 
-def _records_frames(args: argparse.Namespace) -> bool:
-    """Solo el `--record DIR` de main.py va a Settings; el de vista_demo es un .mp4."""
-    record = getattr(args, "record", None)
-    return record is not None and not str(record).lower().endswith(".mp4")
+def load_settings(args: argparse.Namespace) -> Settings | None:
+    """La configuración para arrancar, ya activa para todo el proceso; `None` (con
+    el error logueado) si el toml no existe o está mal, un valor está fuera de rango
+    o no hay fuente."""
+    try:
+        settings = settings_from_args(args)
+    except (OSError, ValueError) as e:
+        logger.error("Configuración: %s", e)
+        return None
+    if settings.source is None:
+        logger.error("Falta la fuente: --source, o `source` en el toml de --config")
+        return None
+    return activate(settings)

@@ -30,6 +30,8 @@ def alerts_sandbox(tmp_path, monkeypatch):
         # el .env local (DEMO_MODE, ALERT_*…) no tiene que cambiar el resultado de los
         # tests: la configuración se arma solo del entorno del proceso
         monkeypatch.setattr(settings, "ENV_FILE", None)
+    # ninguna configuración activa de un test anterior (cli.load_settings la deja)
+    monkeypatch.setattr(settings, "_active", None)
     monkeypatch.setattr(alerts, "_processor", None)
     yield
     if alerts._processor is not None:

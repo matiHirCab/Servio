@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 
 import main as loop
+from servio_vision import alerts, settings
 from servio_vision.cli import build_parser, settings_from_args
 from servio_vision.settings import REPO_DIR, Settings
 from servio_vision.zones import TableZone, Zones, save_zones
@@ -38,7 +39,9 @@ def test_env_file_is_loaded_and_does_not_override_the_environment(
 ):
     env = tmp_path / ".env"
     env.write_text("ALERT_T2=120\nCLAUDE_PROVIDER=anthropic\n", encoding="utf-8")
-    monkeypatch.delenv("ALERT_T2", raising=False)
+    # load_dotenv deja ALERT_T2 en os.environ: que monkeypatch lo saque al terminar
+    monkeypatch.setenv("ALERT_T2", "")
+    monkeypatch.delenv("ALERT_T2")
     monkeypatch.setenv("CLAUDE_PROVIDER", "cli")
     cfg = Settings.load(env_file=env)
     assert cfg.alert_t2 == 120
@@ -147,10 +150,10 @@ def test_main_runs_from_a_toml_without_other_flags(tmp_path, monkeypatch, caplog
         encoding="utf-8",
     )
     log = tmp_path / "eventos.jsonl"
-    monkeypatch.setattr(loop.alerts, "DEFAULT_LOG", log)
+    monkeypatch.setattr(alerts, "DEFAULT_LOG", log)
     caplog.set_level("INFO")
     assert loop.main(["--config", str(toml)]) == 0
-    loop.alerts._processor.close()
+    alerts._processor.close()
     assert "2 lecturas" in caplog.text  # a los 0 y 30 s
 
 
@@ -160,3 +163,52 @@ def test_main_explains_missing_source_and_bad_config(tmp_path, caplog):
     assert "Falta la fuente" in caplog.text
     assert loop.main(["--config", str(tmp_path / "no.toml")]) == 2
     assert "No existe la configuración" in caplog.text
+
+
+def test_env_example_documents_every_setting():
+    """Hecho cuando: `.env.example` documenta todo. Las claves de la casa van con su
+    prefijo `SERVIO_`; `demo` es `DEMO_MODE`."""
+    text = (REPO_DIR / ".env.example").read_text(encoding="utf-8")
+    missing = []
+    for name in Settings.model_fields:
+        env_name = "DEMO_MODE" if name == "demo" else settings._alias(name).upper()
+        if env_name not in text:
+            missing.append(env_name)
+    assert missing == []
+
+
+def test_toml_paths_are_relative_to_the_toml_and_unknown_keys_fail(tmp_path):
+    casa = tmp_path / "casa"
+    casa.mkdir()
+    toml = casa / "casa.toml"
+    absolute = tmp_path / "rest"  # una absoluta queda como está
+    toml.write_text(
+        f'source = "salon.mp4"\nzones = "zones.json"\nrestaurante = {absolute.as_posix()!r}\n',
+        encoding="utf-8",
+    )
+    cfg = Settings.load(toml)
+    assert cfg.source == str(casa / "salon.mp4")
+    assert cfg.zones == casa / "zones.json"
+    assert cfg.restaurante == absolute
+    toml.write_text('source = "0"\nintervall = 10\n', encoding="utf-8")
+    with pytest.raises(ValueError, match="intervall"):
+        Settings.load(toml)
+    toml.write_text('source = "http://cam/video"\nclassifier = "hibrid"\n', "utf-8")
+    with pytest.raises(ValueError, match="classifier"):
+        Settings.load(toml)
+    assert Settings.load(source="0").source == "0"  # una cámara no es una ruta
+
+
+def test_current_returns_the_active_settings(tmp_path, monkeypatch):
+    """Lo que viene del toml también llega a los módulos que toman `current()`
+    (prompt, claude_cli, face_model): `load_settings` activa la configuración."""
+    from servio_vision.cli import load_settings
+
+    monkeypatch.delenv("CLAUDE_CLI", raising=False)
+    toml = tmp_path / "casa.toml"
+    toml.write_text('source = "0"\nclaude_cli = "C:/x/claude.exe"\n', "utf-8")
+    assert settings.current().claude_cli is None
+    cfg = load_settings(build_parser().parse_args(["--config", str(toml)]))
+    assert cfg is not None and settings.current() is cfg
+    assert settings.current().claude_cli == "C:/x/claude.exe"
+    assert load_settings(build_parser().parse_args([])) is None  # sin fuente

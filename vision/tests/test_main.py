@@ -7,10 +7,12 @@ import cv2
 import numpy as np
 
 import main as loop
-from servio_vision import privacy, settings
+from servio_vision import alerts, privacy, settings
+from servio_vision.app import build_pipeline
 from servio_vision.capture import IMAGE_SUFFIXES
 from servio_vision.classifiers.fake import FakeClassifier
-from servio_vision.cli import settings_from_args
+from servio_vision.cli import build_parser, settings_from_args
+from servio_vision.pipeline import Pipeline
 from servio_vision.schemas import TableReport
 from servio_vision.zones import TableZone, Zones, save_zones
 
@@ -27,7 +29,7 @@ FRAME = np.zeros((100, 200, 3), np.uint8)
 T0 = datetime(2026, 10, 17, 20, 0, tzinfo=UTC)
 
 
-def run(pipeline: loop.Pipeline, readings: int):
+def run(pipeline: Pipeline, readings: int):
     out = []
     for n in range(readings):
         out.append(pipeline.process_frame(FRAME, T0 + timedelta(seconds=30 * n)))
@@ -37,7 +39,7 @@ def run(pipeline: loop.Pipeline, readings: int):
 
 def test_one_observation_per_table_with_contract_shape():
     received = []
-    pipeline = loop.Pipeline(FakeClassifier(), ZONES, received.append)
+    pipeline = Pipeline(FakeClassifier(), ZONES, received.append)
     [observations] = run(pipeline, 1)
     assert [o.table_id for o in observations] == ["T1", "T2"]
     assert received == observations
@@ -48,7 +50,7 @@ def test_one_observation_per_table_with_contract_shape():
 
 def test_observations_are_smoothed():
     script = [("lleno", 1), ("comiendo", 3)]
-    pipeline = loop.Pipeline(FakeClassifier(script=script), ZONES, lambda o: None)
+    pipeline = Pipeline(FakeClassifier(script=script), ZONES, lambda o: None)
     states = [r[0].items[0].state for r in run(pipeline, 3)]
     # el falso dice "comiendo" desde la 2.ª lectura; el suavizado lo acepta en la 3.ª
     assert states == ["lleno", "lleno", "comiendo"]
@@ -65,7 +67,7 @@ class FlakyClassifier:
 
 def test_failed_readings_send_nothing():
     received = []
-    pipeline = loop.Pipeline(FlakyClassifier(), ZONES, received.append)
+    pipeline = Pipeline(FlakyClassifier(), ZONES, received.append)
     assert run(pipeline, 1) == [[]]
     assert received == []
 
@@ -91,7 +93,7 @@ class RecordingClassifier:
 def test_previous_items_are_the_smoothed_plates():
     classifier = RecordingClassifier()
     zones = Zones(frame_size=(200, 100), tables=ZONES.tables[:1])
-    run(loop.Pipeline(classifier, zones, lambda o: None), 2)
+    run(Pipeline(classifier, zones, lambda o: None), 2)
     assert classifier.previous == [[], ["p1"]]
 
 
@@ -107,13 +109,13 @@ def test_cli_logs_observations(tmp_path, monkeypatch):
     save_zones(ZONES, zones_path)
     monkeypatch.delenv("DEMO_MODE", raising=False)
     log = tmp_path / "eventos.jsonl"
-    monkeypatch.setattr(loop.alerts, "DEFAULT_LOG", log)
-    monkeypatch.setattr(loop.alerts, "_processor", None)
+    monkeypatch.setattr(alerts, "DEFAULT_LOG", log)
+    monkeypatch.setattr(alerts, "_processor", None)
 
     code = loop.main(
         ["--source", str(video), "--zones", str(zones_path), "--no-telegram"]
     )
-    loop.alerts._processor.close()
+    alerts._processor.close()
 
     assert code == 0
     events = [json.loads(line) for line in log.read_text("utf-8").splitlines()]
@@ -153,8 +155,8 @@ def _cli(tmp_path, monkeypatch, *extra) -> tuple[int, np.ndarray]:
     zones_path = tmp_path / "zones.json"
     save_zones(ZONES, zones_path)
     monkeypatch.delenv("DEMO_MODE", raising=False)
-    monkeypatch.setattr(loop.alerts, "DEFAULT_LOG", tmp_path / "eventos.jsonl")
-    monkeypatch.setattr(loop.alerts, "_processor", None)
+    monkeypatch.setattr(alerts, "DEFAULT_LOG", tmp_path / "eventos.jsonl")
+    monkeypatch.setattr(alerts, "_processor", None)
     monkeypatch.chdir(tmp_path)  # cualquier out/ relativo cae acá
     video, frame = _noisy_video(tmp_path)
     args = ["--source", str(video), "--zones", str(zones_path), "--no-telegram"]
@@ -164,7 +166,7 @@ def _cli(tmp_path, monkeypatch, *extra) -> tuple[int, np.ndarray]:
 def test_cli_saves_no_images_without_record(tmp_path, monkeypatch):
     """C-3: sin --record no queda ninguna imagen en disco."""
     code, _ = _cli(tmp_path, monkeypatch)
-    loop.alerts._processor.close()
+    alerts._processor.close()
     assert code == 0
     assert _images_under(tmp_path) == []
 
@@ -176,7 +178,7 @@ def test_cli_record_saves_one_blurred_frame_per_reading(tmp_path, monkeypatch):
         tmp_path, monkeypatch, "--record", str(record), "--limit", "3"
     )
     assert code == 0
-    loop.alerts._processor.close()
+    alerts._processor.close()
     saved = sorted(record.iterdir())
     assert [p.suffix for p in saved] == [".jpg"] * 3
     assert all(p.name.endswith("Z.jpg") for p in saved)
@@ -216,7 +218,7 @@ def test_one_bad_table_does_not_stop_the_others():
             ),
         ],
     )
-    [observations] = run(loop.Pipeline(FakeClassifier(), zones, lambda o: None), 1)
+    [observations] = run(Pipeline(FakeClassifier(), zones, lambda o: None), 1)
     assert [o.table_id for o in observations] == ["T1", "T2"]
 
 
@@ -224,7 +226,7 @@ def test_alerts_error_does_not_stop_the_loop():
     def broken_alerts(observation):
         raise RuntimeError("Telegram caído")
 
-    [observations] = run(loop.Pipeline(FakeClassifier(), ZONES, broken_alerts), 1)
+    [observations] = run(Pipeline(FakeClassifier(), ZONES, broken_alerts), 1)
     assert len(observations) == 2
 
 
@@ -240,19 +242,27 @@ def test_invalid_interval_explains_and_exits(tmp_path, caplog, monkeypatch):
     assert "Umbrales de aviso inválidos" in caplog.text
 
 
-def test_config_reaches_alerts(monkeypatch):
+def test_config_reaches_alerts(tmp_path, monkeypatch):
+    """`build_pipeline` configura alerts con los umbrales resueltos, Telegram o
+    consola según la configuración, y el token y el grupo que vienen con ella."""
+    zones_path = tmp_path / "zones.json"
+    save_zones(ZONES, zones_path)
+    monkeypatch.delenv("DEMO_MODE", raising=False)
     calls = []
-    monkeypatch.setattr(loop.alerts, "process", calls.append, raising=False)
     monkeypatch.setattr(
-        loop.alerts,
+        alerts,
         "configure",
-        lambda config, telegram, restaurant=None: calls.append((config.t1, telegram)),
-        raising=False,
+        lambda config, telegram, restaurant=None, env=None: calls.append(
+            (config.t1, telegram, env["TELEGRAM_GROUP_CHAT_ID"])
+        ),
     )
-    config = loop.load_config(30, demo=True, env={})
-    handler = loop.observation_handler(config, no_telegram=True)
-    assert calls == [(60, False)]
-    assert handler == calls.append
+    monkeypatch.setattr(alerts, "process", lambda o: [], raising=False)
+    args = build_parser().parse_args(
+        ["--source", "0", "--zones", str(zones_path), "--demo", "--no-telegram"]
+    )
+    cfg = settings_from_args(args).model_copy(update={"telegram_group_chat_id": "-42"})
+    assert build_pipeline(cfg) is not None
+    assert calls == [(60, False, "-42")]
 
 
 def test_env_file_thresholds_apply(tmp_path, monkeypatch):
@@ -263,16 +273,16 @@ def test_env_file_thresholds_apply(tmp_path, monkeypatch):
     monkeypatch.delenv("DEMO_MODE", raising=False)
     zones_path = tmp_path / "zones.json"
     save_zones(ZONES, zones_path)
-    args = loop.build_parser().parse_args(
+    args = build_parser().parse_args(
         ["--source", str(tmp_path), "--zones", str(zones_path), "--demo"]
     )
     configured = []
     monkeypatch.setattr(
-        loop.alerts,
+        alerts,
         "configure",
         lambda config, telegram, restaurant=None, **kw: configured.append(config),
     )
-    monkeypatch.setattr(loop.alerts, "process", lambda o: [], raising=False)
-    assert loop.build_pipeline(settings_from_args(args)) is not None
+    monkeypatch.setattr(alerts, "process", lambda o: [], raising=False)
+    assert build_pipeline(settings_from_args(args)) is not None
     assert configured[0].t2 == 120  # del .env, no 2 × interval
     monkeypatch.delenv("ALERT_T2")
