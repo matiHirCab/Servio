@@ -18,6 +18,7 @@ import argparse
 import hashlib
 import logging
 import os
+import shutil
 import sys
 import urllib.request
 from collections.abc import Callable, Sequence
@@ -26,6 +27,7 @@ from typing import Protocol
 
 import cv2
 import numpy as np
+from dotenv import load_dotenv
 
 logger = logging.getLogger(__name__)
 
@@ -38,6 +40,8 @@ MODEL_URL = (
 )
 MODEL_SHA256 = "8f2383e4dd3cfbb4553ea8718107fc0423210dc964f9f4280604804ed2552fa4"
 MODEL_ENV = "FACE_MODEL"
+DOWNLOAD_TIMEOUT_S = 30  # una red con portal cautivo no tiene que colgar el arranque
+ENV_FILE = VISION_DIR.parent / ".env"
 
 # El detector corre sobre el frame llevado a este ancho (se agranda o se achica).
 # Desde una cámara en alto las caras miden 10–20 px en un frame de 640: YuNet no las
@@ -52,7 +56,6 @@ NMS_THRESHOLD = 0.3
 MAX_FACE_FRACTION = 0.2
 MARGIN = 0.35  # la caja se agranda esto de cada lado: pelo, orejas, mentón
 BLOCKS = 6  # mosaico: la cara queda en ~6×6 bloques, irreconocible
-PHOTO_SUFFIXES = {".jpg", ".jpeg", ".png", ".webp", ".bmp"}
 
 Box = tuple[int, int, int, int]  # x, y, ancho, alto, en píxeles del frame
 Anonymizer = Callable[[np.ndarray], np.ndarray]
@@ -87,6 +90,8 @@ class YuNetDetector:
 
     def detect(self, frame: np.ndarray) -> list[Box]:
         height, width = frame.shape[:2]
+        if height == 0 or width == 0:
+            return []  # frame vacío (cámara que se cortó): no hay nada que tapar
         scale = self.detect_width / width
         resized = (
             cv2.resize(frame, (self.detect_width, max(1, round(height * scale))))
@@ -94,10 +99,14 @@ class YuNetDetector:
             else frame
         )
         size = (resized.shape[1], resized.shape[0])
-        if size != self._size:
-            self._net.setInputSize(size)
-            self._size = size
-        _, faces = self._net.detect(resized)
+        try:
+            if size != self._size:
+                self._net.setInputSize(size)
+                self._size = size
+            _, faces = self._net.detect(resized)
+        except cv2.error as e:
+            # que se note que falló el detector, no la cámara
+            raise PrivacyError(f"El detector de caras falló: {e}") from e
         if faces is None:
             return []
         max_height = height * MAX_FACE_FRACTION
@@ -118,6 +127,14 @@ def _sha256(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+def _download(url: str, destination: Path, timeout: float = DOWNLOAD_TIMEOUT_S) -> None:
+    with (
+        urllib.request.urlopen(url, timeout=timeout) as response,
+        destination.open("wb") as file,
+    ):
+        shutil.copyfileobj(response, file)
+
+
 def ensure_model(path: Path = MODEL_PATH) -> Path:
     """Devuelve la ruta del modelo; si no está, lo baja y verifica el hash."""
     if path.exists():
@@ -128,7 +145,7 @@ def ensure_model(path: Path = MODEL_PATH) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     partial = path.with_suffix(".part")
     try:
-        urllib.request.urlretrieve(MODEL_URL, partial)
+        _download(MODEL_URL, partial)
     except OSError as e:
         partial.unlink(missing_ok=True)
         raise PrivacyError(
@@ -146,6 +163,9 @@ def ensure_model(path: Path = MODEL_PATH) -> Path:
 
 
 def load_detector() -> FaceDetector:
+    # FACE_MODEL del .env también para las herramientas, que no pasan por main.py
+    # (A-1 lo lleva a Settings). No pisa variables ya puestas.
+    load_dotenv(ENV_FILE)
     return YuNetDetector(ensure_model(model_path()))
 
 
@@ -208,7 +228,7 @@ def default_anonymizer(every: int = 1) -> FaceBlur:
 
 
 def main(argv: list[str] | None = None) -> int:
-    from servio_vision.capture import open_source
+    from servio_vision.capture import IMAGE_SUFFIXES, open_source
 
     parser = argparse.ArgumentParser(description="Muestra qué caras se difuminan.")
     parser.add_argument("--source", required=True, help="foto, video, carpeta, 0 o URL")
@@ -219,7 +239,7 @@ def main(argv: list[str] | None = None) -> int:
 
     blur = default_anonymizer()
     path = Path(args.source)
-    if path.is_file() and path.suffix.lower() in PHOTO_SUFFIXES:
+    if path.is_file() and path.suffix.lower() in IMAGE_SUFFIXES:
         frames = iter([blur(cv2.imread(str(path)))])  # una foto suelta
     else:
         frames = (frame for frame, _ in open_source(args.source, anonymize=blur))

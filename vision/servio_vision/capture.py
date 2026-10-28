@@ -103,10 +103,12 @@ def read_video(
     start: datetime,
     anonymize: Anonymizer | None = None,
 ) -> Iterator[Frame]:
+    anonymize = (
+        anonymize or privacy.default_anonymizer()
+    )  # antes de abrir: puede fallar
     cap = cv2.VideoCapture(str(path))
     if not cap.isOpened():
         raise OSError(f"No se pudo abrir el video: {path}")
-    anonymize = anonymize or privacy.default_anonymizer()
     fps = declared_fps(cap)
     pacer = _Pacer(speed)
     next_reading = 0.0  # segundo del video de la próxima lectura
@@ -179,8 +181,13 @@ class CameraReader:
     Webcam) corta la conexión. Un fallo suelto de lectura se reintenta; con
     `READ_FAILURES_TO_RECONNECT` seguidos, reabre la cámara. Se da por vencida si
     pasan `CAMERA_RECONNECT_S` sin un frame bueno, aunque abra y se vuelva a cortar.
-    Lo usan `read_camera` y `tools/vista_demo.py`. Los frames salen del hilo ya
-    anonimizados (`anonymize`; por defecto, caras difuminadas).
+    Lo usan `read_camera` y `tools/vista_demo.py`.
+
+    Privacidad: `latest()` entrega cada frame anonimizado (`anonymize`; por defecto,
+    caras difuminadas). Se hace al entregar y no en el hilo: detectar caras tarda
+    ~120 ms y a 30 fps el hilo no daría abasto, el buffer se llenaría y los frames
+    saldrían viejos (lo que este hilo existe para evitar). Hasta que se entrega, el
+    frame es privado de esta clase.
     """
 
     def __init__(self, source: int | str, anonymize: Anonymizer | None = None) -> None:
@@ -231,7 +238,9 @@ class CameraReader:
             if self._seq <= self._taken:
                 return None
             self._taken = self._seq
-            return self._frame
+            frame = self._frame
+        # fuera del lock: el hilo sigue leyendo mientras se detectan las caras
+        return self.anonymize(frame)
 
     def _open(self) -> cv2.VideoCapture | None:
         if isinstance(self.source, str):
@@ -269,7 +278,6 @@ class CameraReader:
                 if ok:
                     failures = 0
                     down_since = None
-                    frame = self.anonymize(frame)  # antes de que nadie lo vea
                     with self._cond:
                         self._frame = frame
                         self._seq += 1

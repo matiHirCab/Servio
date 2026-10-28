@@ -196,13 +196,14 @@ def open_view_source(source: str, interval: float) -> ViewSource:
         frames = ((frame, time.monotonic() - t0) for frame in reader.frames())
         return ViewSource(frames, live=True, fps=reader.fps)
     path = Path(source)
-    # como en capture.py: caras difuminadas apenas se lee, antes de mostrar o grabar;
-    # detecta cada FACE_DETECT_EVERY frames para que el video siga fluido
-    anonymize = privacy.default_anonymizer(every=FACE_DETECT_EVERY)
+    # como en capture.py: caras difuminadas apenas se lee, antes de mostrar o grabar
     if path.is_dir():
         files = sorted(p for p in path.iterdir() if p.suffix.lower() in IMAGE_SUFFIXES)
         if not files:
             raise FileNotFoundError(f"No hay imágenes en {path}")
+        # fotos distintas: las caras de una no dicen nada de la siguiente, detectar
+        # en todas
+        anonymize = privacy.default_anonymizer()
         images = (cv2.imread(str(f)) for f in files)
         frames = (
             (anonymize(image), i * interval)
@@ -215,6 +216,8 @@ def open_view_source(source: str, interval: float) -> ViewSource:
         if not cap.isOpened():
             raise OSError(f"No se pudo abrir el video: {path}")
         fps = declared_fps(cap)
+        # frames seguidos: detecta cada FACE_DETECT_EVERY para que el video siga fluido
+        anonymize = privacy.default_anonymizer(every=FACE_DETECT_EVERY)
         frames = (
             (anonymize(frame), frame_seconds(cap, i, fps))
             for i, frame in enumerate(_read_all(cap))

@@ -8,6 +8,7 @@ import numpy as np
 
 import main as loop
 from servio_vision import privacy
+from servio_vision.capture import IMAGE_SUFFIXES
 from servio_vision.classifiers.fake import FakeClassifier
 from servio_vision.schemas import TableReport
 from servio_vision.zones import TableZone, Zones, save_zones
@@ -120,11 +121,8 @@ def test_cli_logs_observations(tmp_path, monkeypatch):
     assert lines[0]["table_id"] == "T1" and lines[0]["ts"].endswith("Z")
 
 
-IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png", ".bmp", ".webp"}
-
-
 def _images_under(root) -> list:
-    return [p for p in root.rglob("*") if p.suffix.lower() in IMAGE_SUFFIXES]
+    return sorted(p for p in root.rglob("*") if p.suffix.lower() in IMAGE_SUFFIXES)
 
 
 class _OneFace:

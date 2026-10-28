@@ -143,9 +143,9 @@ class _NoisyCamera:
         pass
 
 
-def test_camera_reader_blurs_in_its_thread(monkeypatch):
-    """Los frames de la cámara salen del hilo ya pixelados: `latest()` nunca ve una
-    cara (tampoco `vista_demo`, que usa `CameraReader` directo)."""
+def test_camera_reader_blurs_what_it_delivers(monkeypatch):
+    """`latest()` nunca entrega una cara (tampoco a `vista_demo`, que usa
+    `CameraReader` directo). Se difumina al entregar, no en el hilo de lectura."""
     from servio_vision import capture
 
     monkeypatch.setattr(capture, "CAMERA_WARMUP_S", 0)
@@ -172,22 +172,20 @@ def test_ensure_model_downloads_and_checks_the_hash(tmp_path, monkeypatch):
         assert url == privacy.MODEL_URL
         Path(destination).write_bytes(payload)
 
-    monkeypatch.setattr(privacy.urllib.request, "urlretrieve", fake_download)
+    monkeypatch.setattr(privacy, "_download", fake_download)
     path = privacy.ensure_model(privacy.MODEL_PATH)
     assert path.read_bytes() == payload
     assert not path.with_suffix(".part").exists()
 
     # la segunda vez no baja nada
-    monkeypatch.setattr(privacy.urllib.request, "urlretrieve", None)
+    monkeypatch.setattr(privacy, "_download", None)
     assert privacy.ensure_model(privacy.MODEL_PATH) == path
 
 
 def test_ensure_model_rejects_a_wrong_hash(tmp_path, monkeypatch):
     monkeypatch.setattr(privacy, "MODEL_PATH", tmp_path / "yunet.onnx")
     monkeypatch.setattr(
-        privacy.urllib.request,
-        "urlretrieve",
-        lambda url, dst: Path(dst).write_bytes(b"otra cosa"),
+        privacy, "_download", lambda url, dst: Path(dst).write_bytes(b"otra cosa")
     )
     with pytest.raises(PrivacyError, match="sha256"):
         privacy.ensure_model(privacy.MODEL_PATH)
@@ -200,9 +198,61 @@ def test_ensure_model_explains_when_offline(tmp_path, monkeypatch):
     def offline(url, dst):
         raise OSError("sin red")
 
-    monkeypatch.setattr(privacy.urllib.request, "urlretrieve", offline)
+    monkeypatch.setattr(privacy, "_download", offline)
     with pytest.raises(PrivacyError, match="Sin internet"):
         privacy.ensure_model(privacy.MODEL_PATH)
+
+
+def test_download_has_a_timeout(tmp_path, monkeypatch):
+    """Una red con portal cautivo no tiene que colgar el arranque."""
+    seen = {}
+
+    class Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def read(self, size=-1):
+            return b""
+
+    def fake_urlopen(url, timeout=None):
+        seen["timeout"] = timeout
+        return Response()
+
+    monkeypatch.setattr(privacy.urllib.request, "urlopen", fake_urlopen)
+    privacy._download("http://x", tmp_path / "m.onnx")
+    assert seen["timeout"] == privacy.DOWNLOAD_TIMEOUT_S
+
+
+def test_detector_handles_an_empty_frame(monkeypatch):
+    """Una cámara que se cortó puede dar un frame de 0×0: no es un error del detector."""
+
+    class Net:
+        def setInputSize(self, size):
+            pass
+
+        def detect(self, frame):
+            raise AssertionError("no tendría que llamar al detector")
+
+    detector = privacy.YuNetDetector.__new__(privacy.YuNetDetector)
+    detector._net, detector._size, detector.detect_width = Net(), None, 1280
+    assert detector.detect(np.zeros((0, 0, 3), np.uint8)) == []
+
+
+def test_detector_failure_is_a_privacy_error():
+    class BrokenNet:
+        def setInputSize(self, size):
+            pass
+
+        def detect(self, frame):
+            raise cv2.error("roto")
+
+    detector = privacy.YuNetDetector.__new__(privacy.YuNetDetector)
+    detector._net, detector._size, detector.detect_width = BrokenNet(), None, 1280
+    with pytest.raises(PrivacyError, match="detector de caras"):
+        detector.detect(np.zeros((10, 10, 3), np.uint8))
 
 
 def test_model_path_from_env(tmp_path):
