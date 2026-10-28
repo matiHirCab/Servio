@@ -62,11 +62,14 @@ def open_source(
     lo más rápido posible.
     `start`: ts del primer frame de un video o carpeta (por defecto, ahora).
     `anonymize`: se aplica a cada frame apenas se lee; por defecto, las caras
-    difuminadas (`privacy.default_anonymizer()`, que puede tirar `PrivacyError`).
+    difuminadas (`privacy.default_anonymizer()`). Se resuelve acá, antes de
+    devolver el iterador: si falta el modelo (`PrivacyError`, un `OSError`) se
+    sabe al abrir la fuente, no en el primer frame.
     """
     if interval <= 0:
         raise ValueError("interval tiene que ser mayor a 0")
     start = start or datetime.now(UTC)
+    anonymize = anonymize or privacy.default_anonymizer()
     if source.isdigit() or source.startswith(STREAM_PREFIXES):
         camera = int(source) if source.isdigit() else source
         return read_camera(camera, interval, anonymize)
@@ -103,11 +106,8 @@ def read_video(
     interval: float,
     speed: float | None,
     start: datetime,
-    anonymize: Anonymizer | None = None,
+    anonymize: Anonymizer,
 ) -> Iterator[Frame]:
-    anonymize = (
-        anonymize or privacy.default_anonymizer()
-    )  # antes de abrir: puede fallar
     cap = cv2.VideoCapture(str(path))
     if not cap.isOpened():
         raise OSError(f"No se pudo abrir el video: {path}")
@@ -140,12 +140,11 @@ def read_folder(
     interval: float,
     speed: float | None,
     start: datetime,
-    anonymize: Anonymizer | None = None,
+    anonymize: Anonymizer,
 ) -> Iterator[Frame]:
     files = sorted(p for p in path.iterdir() if p.suffix.lower() in IMAGE_SUFFIXES)
     if not files:
         raise FileNotFoundError(f"No hay imágenes en {path}")
-    anonymize = anonymize or privacy.default_anonymizer()
     pacer = _Pacer(speed)
     for i, file in enumerate(files):
         frame = cv2.imread(str(file))
@@ -157,10 +156,7 @@ def read_folder(
         yield anonymize(frame), start + timedelta(seconds=seconds)
 
 
-def read_image(
-    path: Path, start: datetime, anonymize: Anonymizer | None = None
-) -> Iterator[Frame]:
-    anonymize = anonymize or privacy.default_anonymizer()
+def read_image(path: Path, start: datetime, anonymize: Anonymizer) -> Iterator[Frame]:
     frame = cv2.imread(str(path))
     if frame is None:
         raise OSError(f"No se pudo leer la imagen: {path}")
@@ -168,9 +164,8 @@ def read_image(
 
 
 def read_camera(
-    source: int | str, interval: float, anonymize: Anonymizer | None = None
+    source: int | str, interval: float, anonymize: Anonymizer
 ) -> Iterator[Frame]:
-    anonymize = anonymize or privacy.default_anonymizer()
     # El lector entrega tal cual y se anonimiza solo el frame que se usa: detectar
     # caras en los ~30 fps que se descartan entre lecturas gastaría la CPU al vicio.
     reader = CameraReader(source, _as_is)
@@ -368,7 +363,7 @@ def main(argv: list[str] | None = None) -> int:
             count += 1
             if args.limit is not None and count >= args.limit:
                 break
-    except (OSError, privacy.PrivacyError) as e:
+    except OSError as e:  # también PrivacyError
         print(e, file=sys.stderr)
         return 2
     print(f"{count} frames", file=sys.stderr)

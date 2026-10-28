@@ -27,7 +27,7 @@ from pathlib import Path
 import numpy as np
 from dotenv import load_dotenv
 
-from servio_vision import alerts, prompt
+from servio_vision import ENV_FILE, alerts, prompt
 from servio_vision.alerts.config import DEFAULT_INTERVAL, AlertConfig, load_config
 from servio_vision.alerts.models import TableObservation
 from servio_vision.capture import open_source
@@ -408,9 +408,6 @@ def setup_logging(verbose: bool = False) -> None:
     warnings.filterwarnings("ignore", category=FutureWarning)
 
 
-ENV_FILE = alerts.VISION_DIR.parent / ".env"
-
-
 def build_pipeline(args: argparse.Namespace) -> Pipeline | None:
     """Zonas, umbrales y clasificador según los flags. `None` si algo falta (ya logueado)."""
     # antes de calcular los umbrales: si no, ALERT_T1/T2/REMINDER y DEMO_MODE del
@@ -495,25 +492,30 @@ def main(argv: list[str] | None = None) -> int:
     pipeline = build_pipeline(args)
     if pipeline is None:
         return 2
-    recorder: FrameRecorder | None = None
-    readings = 0
     try:
         # las caras salen difuminadas de open_source (C-3): nada de lo que sigue,
-        # tampoco la grabación, ve una cara
-        for frame, ts in open_source(args.source, args.interval, args.speed):
-            if readings == 0:
-                # recién acá: si la fuente o el detector fallan, no queda una
-                # carpeta vacía ni un log que diga que se difuminó algo
-                logger.info("Privacidad: caras difuminadas en la captura")
-                if args.record:
-                    recorder = FrameRecorder(args.record)
+        # tampoco la grabación, ve una cara. Si falta el modelo, falla acá.
+        frames = open_source(args.source, args.interval, args.speed)
+    except OSError as e:  # fuente que no existe o no abre, PrivacyError
+        logger.error("%s", e)
+        pipeline.close()
+        return 2
+    logger.info("Privacidad: caras difuminadas en la captura")
+    recorder = FrameRecorder(args.record) if args.record else None
+    readings = 0
+    try:
+        for frame, ts in frames:
             if recorder is not None:
-                recorder.save(frame, ts)
+                try:
+                    recorder.save(frame, ts)
+                except OSError as e:
+                    logger.error("No se pudo grabar el frame: %s", e)
+                    return 2
             pipeline.process_frame(frame, ts)
             readings += 1
             if args.limit is not None and readings >= args.limit:
                 break
-    except (PrivacyError, OSError) as e:
+    except PrivacyError as e:  # el detector falló a mitad de camino
         logger.error("%s", e)
         return 2
     except KeyboardInterrupt:

@@ -175,6 +175,7 @@ class ViewSource:
     frames: Iterator[tuple[np.ndarray, float]]
     live: bool  # cámara o stream: tiempo real, sin esperar entre frames
     fps: float  # para grabar
+    faces: privacy.FaceBlur  # el que difumina estos frames (C-3)
 
 
 def open_view_source(source: str, interval: float, detect_every: int = 1) -> ViewSource:
@@ -191,14 +192,12 @@ def open_view_source(source: str, interval: float, detect_every: int = 1) -> Vie
     if source.isdigit() or source.startswith(STREAM_PREFIXES):
         # el mismo lector que main.py: descarta los frames negros del arranque,
         # se reconecta si el celular se corta y difumina las caras
-        reader = CameraReader(
-            int(source) if source.isdigit() else source,
-            privacy.default_anonymizer(every=detect_every),
-        )
+        faces = privacy.default_anonymizer(every=detect_every)
+        reader = CameraReader(int(source) if source.isdigit() else source, faces)
         reader.start()
         t0 = time.monotonic()
         frames = ((frame, time.monotonic() - t0) for frame in reader.frames())
-        return ViewSource(frames, live=True, fps=reader.fps)
+        return ViewSource(frames, live=True, fps=reader.fps, faces=faces)
     path = Path(source)
     # como en capture.py: caras difuminadas apenas se lee, antes de mostrar o grabar
     if path.is_dir():
@@ -207,30 +206,30 @@ def open_view_source(source: str, interval: float, detect_every: int = 1) -> Vie
             raise FileNotFoundError(f"No hay imágenes en {path}")
         # fotos distintas: las caras de una no dicen nada de la siguiente, detectar
         # en todas
-        anonymize = privacy.default_anonymizer()
+        faces = privacy.default_anonymizer()
         images = (cv2.imread(str(f)) for f in files)
         frames = (
-            (anonymize(image), i * interval)
+            (faces(image), i * interval)
             for i, image in enumerate(images)
             if image is not None
         )
-        return ViewSource(frames, live=False, fps=1 / interval)
+        return ViewSource(frames, live=False, fps=1 / interval, faces=faces)
     if path.is_file():
         # frames seguidos: detectar cada `detect_every` mantiene el video fluido.
         # Antes de abrir el video: si falla, no queda el VideoCapture sin cerrar.
-        anonymize = privacy.default_anonymizer(every=detect_every)
+        faces = privacy.default_anonymizer(every=detect_every)
         cap = cv2.VideoCapture(str(path))
         if not cap.isOpened():
             raise OSError(f"No se pudo abrir el video: {path}")
         fps = declared_fps(cap)
         frames = (
-            (anonymize(frame), frame_seconds(cap, i, fps))
+            (faces(frame), frame_seconds(cap, i, fps))
             for i, frame in enumerate(_read_all(cap))
         )
         if fps > MAX_PLAUSIBLE_FPS:  # fps falsos (cámaras de seguridad): para grabar
             logger.warning("El video declara %g fps; grabo a %d", fps, FALLBACK_FPS)
             fps = FALLBACK_FPS
-        return ViewSource(frames, live=False, fps=fps)
+        return ViewSource(frames, live=False, fps=fps, faces=faces)
     raise FileNotFoundError(f"No existe la fuente: {source}")
 
 
@@ -376,7 +375,11 @@ def run(args) -> int:
                     # el pipeline va atrasado: el video espera y después retoma su ritmo
                     finish_pending()
                     ref_clock, ref_s = time.monotonic(), video_s
-                pending = worker.submit(pipeline.process_frame, frame.copy(), ts)
+                # este frame sale de la máquina (recortes al modelo): detectar caras
+                # sí o sí, aunque para mirar se detecte cada FACE_DETECT_EVERY
+                pending = worker.submit(
+                    pipeline.process_frame, source.faces.refresh(frame.copy()), ts
+                )
                 pending_ts = ts
                 submitted += 1
                 # en tiempo real, la próxima lectura cuenta desde ahora: si el modelo

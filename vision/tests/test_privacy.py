@@ -65,6 +65,25 @@ def test_face_blur_counts_faces_and_reuses_boxes_between_detections():
     assert blur.faces == 4
 
 
+def test_face_blur_refresh_detects_now_even_between_detections():
+    """El frame que va al modelo se detecta siempre, aunque `every` > 1."""
+    detector = FixedFaces([(10, 10, 20, 20)])
+    blur = FaceBlur(detector, every=3)
+    blur(noise(seed=1))  # frame 0: detecta
+    detector.boxes = [(100, 40, 20, 20)]  # "aparece" otra cara
+    frame = noise(seed=2)
+    original = frame.copy()
+    blur.refresh(frame)
+    assert detector.calls == 2
+    assert not np.array_equal(frame[40:60, 100:120], original[40:60, 100:120])
+
+
+def test_privacy_error_is_an_os_error():
+    """Quien abre una fuente lo ataja con el mismo `except OSError` que una cámara
+    que no abre: sin difuminar no se lee nada."""
+    assert issubclass(PrivacyError, OSError)
+
+
 def test_face_blur_without_faces_leaves_the_frame_alone():
     frame = noise()
     original = frame.copy()
@@ -175,7 +194,7 @@ def test_ensure_model_downloads_and_checks_the_hash(tmp_path, monkeypatch):
     monkeypatch.setattr(privacy, "_download", fake_download)
     path = privacy.ensure_model(privacy.MODEL_PATH)
     assert path.read_bytes() == payload
-    assert not path.with_suffix(".part").exists()
+    assert sorted(path.parent.iterdir()) == [path]  # sin .part ni temporales
 
     # la segunda vez no baja nada
     monkeypatch.setattr(privacy, "_download", None)
@@ -289,8 +308,7 @@ def test_read_camera_detects_only_on_delivered_frames(monkeypatch):
     monkeypatch.setattr(capture, "CAMERA_WARMUP_S", 0)
     monkeypatch.setattr(capture.cv2, "VideoCapture", _NoisyCamera)
     detector = FixedFaces([(5, 5, 20, 20)])
-    monkeypatch.setattr(privacy, "load_detector", lambda: detector)
-    frames = capture.read_camera(0, interval=60)
+    frames = capture.read_camera(0, interval=60, anonymize=FaceBlur(detector))
     frame, _ = next(frames)
     import time
 

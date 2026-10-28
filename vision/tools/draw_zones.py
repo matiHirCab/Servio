@@ -24,7 +24,6 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from servio_vision import privacy
 from servio_vision.capture import open_source
 from servio_vision.zones import (
     DEFAULT_ZONES,
@@ -104,11 +103,16 @@ def render(frame: np.ndarray, editor: ZoneEditor) -> np.ndarray:
 
 
 def first_frame(source: str, at: float) -> np.ndarray:
-    # también una foto suelta: open_source la lee (y difumina las caras, C-3)
-    for i, (frame, _) in enumerate(open_source(source, interval=at or 1.0)):
-        if at == 0 or i == 1:
-            return frame
-    raise OSError(f"La fuente {source} no tiene un frame en el segundo {at}")
+    """El frame del segundo `at` (el primero con 0). Una foto suelta también vale:
+    `open_source` la lee (y difumina las caras, C-3) y es su único frame."""
+    frames = open_source(source, interval=at or 1.0)
+    first = next(frames, None)
+    if first is None:
+        raise OSError(f"La fuente {source} no tiene frames")
+    if at == 0:
+        return first[0]
+    second = next(frames, None)
+    return (second or first)[0]  # una foto no tiene segundo `at`: va la foto
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -120,7 +124,7 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         frame = first_frame(args.source, args.at)
-    except (OSError, privacy.PrivacyError) as e:
+    except OSError as e:  # también PrivacyError: sin el modelo no se lee nada
         print(e, file=sys.stderr)
         return 2
     height, width = frame.shape[:2]

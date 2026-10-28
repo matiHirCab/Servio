@@ -147,36 +147,40 @@ def _noisy_video(tmp_path, seconds=65):
     return video, frame
 
 
-def _cli(tmp_path, monkeypatch, *extra) -> int:
+def _cli(tmp_path, monkeypatch, *extra) -> tuple[int, np.ndarray]:
+    """Corre main.py sobre el video sintético; devuelve (código, frame original)."""
     zones_path = tmp_path / "zones.json"
     save_zones(ZONES, zones_path)
     monkeypatch.delenv("DEMO_MODE", raising=False)
     monkeypatch.setattr(loop.alerts, "DEFAULT_LOG", tmp_path / "eventos.jsonl")
     monkeypatch.setattr(loop.alerts, "_processor", None)
     monkeypatch.chdir(tmp_path)  # cualquier out/ relativo cae acá
-    video, _ = _noisy_video(tmp_path)
+    video, frame = _noisy_video(tmp_path)
     args = ["--source", str(video), "--zones", str(zones_path), "--no-telegram"]
-    return loop.main([*args, *extra])
+    return loop.main([*args, *extra]), frame
 
 
 def test_cli_saves_no_images_without_record(tmp_path, monkeypatch):
     """C-3: sin --record no queda ninguna imagen en disco."""
-    assert _cli(tmp_path, monkeypatch) == 0
+    code, _ = _cli(tmp_path, monkeypatch)
     loop.alerts._processor.close()
+    assert code == 0
     assert _images_under(tmp_path) == []
 
 
 def test_cli_record_saves_one_blurred_frame_per_reading(tmp_path, monkeypatch):
     monkeypatch.setattr(privacy, "load_detector", _OneFace)
     record = tmp_path / "grabacion"
-    assert _cli(tmp_path, monkeypatch, "--record", str(record), "--limit", "3") == 0
+    code, original = _cli(
+        tmp_path, monkeypatch, "--record", str(record), "--limit", "3"
+    )
+    assert code == 0
     loop.alerts._processor.close()
     saved = sorted(record.iterdir())
     assert [p.suffix for p in saved] == [".jpg"] * 3
     assert all(p.name.endswith("Z.jpg") for p in saved)
     assert _images_under(tmp_path) == saved  # y en ningún otro lado
     # la cara (20..50) está pixelada; el resto del frame es el original (JPEG mediante)
-    _, original = _noisy_video(tmp_path)
     image = cv2.imread(str(saved[0]))
     face_diff = np.abs(image[20:50, 20:50].astype(int) - original[20:50, 20:50]).mean()
     rest_diff = np.abs(image[70:100, 100:200].astype(int) - original[70:100, 100:200])
@@ -188,7 +192,7 @@ def test_cli_explains_when_the_face_model_is_missing(tmp_path, monkeypatch, capl
         raise loop.PrivacyError("No se pudo bajar el detector de caras")
 
     monkeypatch.setattr(privacy, "load_detector", no_model)
-    assert _cli(tmp_path, monkeypatch) == 2
+    assert _cli(tmp_path, monkeypatch)[0] == 2
     assert "detector de caras" in caplog.text
 
 

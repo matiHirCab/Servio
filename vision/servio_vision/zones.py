@@ -133,7 +133,6 @@ def crop_tables(frame: np.ndarray, zones: Zones) -> dict[str, bytes]:
 
 def main(argv: list[str] | None = None) -> int:
     from servio_vision.capture import open_source
-    from servio_vision.privacy import PrivacyError
 
     parser = argparse.ArgumentParser(description="Guarda un recorte por mesa.")
     parser.add_argument("--source", required=True, help="video, carpeta, 0 o URL")
@@ -155,7 +154,7 @@ def main(argv: list[str] | None = None) -> int:
             count += 1
             if count >= args.limit:
                 break
-    except (OSError, PrivacyError) as e:
+    except OSError as e:  # también PrivacyError: sin difuminar no se lee nada
         print(e, file=sys.stderr)
         return 2
     return 0 if count else 1

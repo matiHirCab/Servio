@@ -20,6 +20,7 @@ import logging
 import os
 import shutil
 import sys
+import tempfile
 import urllib.request
 from collections.abc import Callable, Sequence
 from pathlib import Path
@@ -62,8 +63,12 @@ Box = tuple[int, int, int, int]  # x, y, ancho, alto, en píxeles del frame
 Anonymizer = Callable[[np.ndarray], np.ndarray]
 
 
-class PrivacyError(RuntimeError):
-    """No se puede difuminar: falta el modelo o el OpenCV instalado no lo soporta."""
+class PrivacyError(OSError):
+    """No se puede difuminar: falta el modelo o el OpenCV instalado no lo soporta.
+
+    Es un `OSError`: sin difuminar no se lee ningún frame, así que para quien abre
+    una fuente es lo mismo que una cámara que no abre, y lo ataja el mismo `except`.
+    """
 
 
 class FaceDetector(Protocol):
@@ -149,7 +154,11 @@ def ensure_model(path: Path = MODEL_PATH) -> Path:
         raise PrivacyError(f"No existe el modelo de caras {MODEL_ENV}={path}")
     logger.info("Bajando el detector de caras a %s", path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    partial = path.with_suffix(".part")
+    # A un nombre propio de este proceso y recién al final `replace` (atómico): dos
+    # programas arrancando a la vez (main.py y vista_demo) no se pisan el archivo.
+    fd, name = tempfile.mkstemp(prefix=path.stem + ".", suffix=".part", dir=path.parent)
+    os.close(fd)
+    partial = Path(name)
     try:
         _download(MODEL_URL, partial)
     except OSError as e:
@@ -164,6 +173,9 @@ def ensure_model(path: Path = MODEL_PATH) -> Path:
         raise PrivacyError(
             f"El detector de caras bajado no es el esperado (sha256 {digest})"
         )
+    if path.exists():  # el otro proceso llegó primero: el suyo ya está verificado
+        partial.unlink()
+        return path
     partial.replace(path)
     return path
 
@@ -218,14 +230,25 @@ class FaceBlur:
 
     def __call__(self, frame: np.ndarray) -> np.ndarray:
         if self._frames % self.every == 0:
-            self._boxes = self.detector.detect(frame)
-            if self._boxes:
-                self.faces += len(self._boxes)
-                logger.debug("%d cara(s) difuminada(s)", len(self._boxes))
+            self._detect(frame)
         self._frames += 1
         if self._boxes:
             pixelate(frame, self._boxes)
         return frame
+
+    def refresh(self, frame: np.ndarray) -> np.ndarray:
+        """Detecta en este frame sí o sí y lo pixela. Para un frame que sale de la
+        máquina (al modelo) aunque `every` > 1: las cajas viejas no alcanzan."""
+        self._detect(frame)
+        if self._boxes:
+            pixelate(frame, self._boxes)
+        return frame
+
+    def _detect(self, frame: np.ndarray) -> None:
+        self._boxes = self.detector.detect(frame)
+        if self._boxes:
+            self.faces += len(self._boxes)
+            logger.debug("%d cara(s) difuminada(s)", len(self._boxes))
 
 
 def default_anonymizer(every: int = 1) -> FaceBlur:
@@ -235,6 +258,7 @@ def default_anonymizer(every: int = 1) -> FaceBlur:
 
 def main(argv: list[str] | None = None) -> int:
     from servio_vision.capture import open_source
+    from servio_vision.recording import FrameRecorder
 
     parser = argparse.ArgumentParser(description="Muestra qué caras se difuminan.")
     parser.add_argument("--source", required=True, help="foto, video, carpeta, 0 o URL")
@@ -245,17 +269,16 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         blur = default_anonymizer()
-        frames = open_source(args.source, anonymize=blur)
-        args.out.mkdir(parents=True, exist_ok=True)
+        frames = open_source(args.source, anonymize=blur)  # falla acá si no hay modelo
+        recorder = FrameRecorder(args.out)
         seen = 0
-        for n, (frame, _) in enumerate(frames, 1):
-            out = args.out / f"frame_{n:03d}.jpg"
-            cv2.imencode(".jpg", frame)[1].tofile(str(out))
+        for n, (frame, ts) in enumerate(frames, 1):
+            out = recorder.save(frame, ts)
             print(f"{out}: {blur.faces - seen} cara(s)")
             seen = blur.faces
             if n >= args.limit:
                 break
-    except (OSError, PrivacyError) as e:
+    except OSError as e:  # también PrivacyError
         logger.error("%s", e)
         return 2
     return 0

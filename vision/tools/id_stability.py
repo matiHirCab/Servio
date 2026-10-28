@@ -103,11 +103,9 @@ def main() -> None:
     if a.fuente.endswith(".json"):
         frames = ids_from_timeline(Path(a.fuente))
     else:
-        from servio_vision.privacy import PrivacyError
-
         try:
             frames = ids_from_video(a.fuente, a.cada, a.max_frames)
-        except PrivacyError as e:  # sin el detector de caras no se lee un frame (C-3)
+        except OSError as e:  # fuente que no abre o sin detector de caras (C-3)
             raise SystemExit(f"{e}") from e
     m = stability(frames)
     print(json.dumps(m, indent=2, ensure_ascii=False))
