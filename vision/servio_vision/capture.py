@@ -73,6 +73,8 @@ def open_source(
     path = Path(source)
     if path.is_dir():
         return read_folder(path, interval, speed, start, anonymize)
+    if path.is_file() and path.suffix.lower() in IMAGE_SUFFIXES:
+        return read_image(path, start, anonymize)  # una foto suelta: un solo frame
     if path.is_file():
         return read_video(path, interval, speed, start, anonymize)
     raise FileNotFoundError(f"No existe la fuente: {source}")
@@ -155,10 +157,23 @@ def read_folder(
         yield anonymize(frame), start + timedelta(seconds=seconds)
 
 
+def read_image(
+    path: Path, start: datetime, anonymize: Anonymizer | None = None
+) -> Iterator[Frame]:
+    anonymize = anonymize or privacy.default_anonymizer()
+    frame = cv2.imread(str(path))
+    if frame is None:
+        raise OSError(f"No se pudo leer la imagen: {path}")
+    yield anonymize(frame), start
+
+
 def read_camera(
     source: int | str, interval: float, anonymize: Anonymizer | None = None
 ) -> Iterator[Frame]:
-    reader = CameraReader(source, anonymize)
+    anonymize = anonymize or privacy.default_anonymizer()
+    # El lector entrega tal cual y se anonimiza solo el frame que se usa: detectar
+    # caras en los ~30 fps que se descartan entre lecturas gastaría la CPU al vicio.
+    reader = CameraReader(source, _as_is)
     reader.start()
     last = -interval
     try:
@@ -168,9 +183,13 @@ def read_camera(
             now = time.monotonic()
             if now - last >= interval:
                 last = now
-                yield frame, datetime.now(UTC)
+                yield anonymize(frame), datetime.now(UTC)
     finally:
         reader.stop()
+
+
+def _as_is(frame: np.ndarray) -> np.ndarray:
+    return frame
 
 
 class CameraReader:
@@ -187,7 +206,8 @@ class CameraReader:
     caras difuminadas). Se hace al entregar y no en el hilo: detectar caras tarda
     ~120 ms y a 30 fps el hilo no daría abasto, el buffer se llenaría y los frames
     saldrían viejos (lo que este hilo existe para evitar). Hasta que se entrega, el
-    frame es privado de esta clase.
+    frame es privado de esta clase. `read_camera` pasa `_as_is` y anonimiza solo el
+    frame de cada lectura.
     """
 
     def __init__(self, source: int | str, anonymize: Anonymizer | None = None) -> None:
@@ -341,12 +361,16 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     count = 0
-    for frame, ts in open_source(args.source, args.interval, args.speed):
-        height, width = frame.shape[:2]
-        print(f"{ts.isoformat(timespec='milliseconds')}  {width}x{height}")
-        count += 1
-        if args.limit is not None and count >= args.limit:
-            break
+    try:
+        for frame, ts in open_source(args.source, args.interval, args.speed):
+            height, width = frame.shape[:2]
+            print(f"{ts.isoformat(timespec='milliseconds')}  {width}x{height}")
+            count += 1
+            if args.limit is not None and count >= args.limit:
+                break
+    except (OSError, privacy.PrivacyError) as e:
+        print(e, file=sys.stderr)
+        return 2
     print(f"{count} frames", file=sys.stderr)
     return 0 if count else 1
 

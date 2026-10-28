@@ -57,7 +57,7 @@ logger = logging.getLogger("servio.vista")
 WINDOW = "Servio"
 MAX_PLAUSIBLE_FPS = 120
 FALLBACK_FPS = 25
-FACE_DETECT_EVERY = 3  # ~120 ms por detección en 1080p: cada 3 frames mantiene ~25 fps
+FACE_DETECT_EVERY = 3  # solo mirando: ~120 ms por detección en 1080p, cada 3 da ~25 fps
 
 # colores BGR, por estado de mesa y de plato
 TABLE_COLORS = {
@@ -177,19 +177,23 @@ class ViewSource:
     fps: float  # para grabar
 
 
-def open_view_source(source: str, interval: float) -> ViewSource:
+def open_view_source(source: str, interval: float, detect_every: int = 1) -> ViewSource:
     """Abre la fuente con las mismas reglas que `capture.open_source`.
 
     A diferencia de `capture`, devuelve **todos** los frames (para que el video
     se vea fluido), no uno por intervalo. Una carpeta de fotos muestra cada foto
     durante `interval` segundos. Tira `OSError`/`FileNotFoundError` si no abre.
+
+    `detect_every`: cada cuántos frames seguidos (cámara o video) se detectan las
+    caras; en los del medio se pixelan las últimas cajas. Más de 1 solo para mirar:
+    con `--record` va 1, una cara que aparece entre detecciones quedaría grabada.
     """
     if source.isdigit() or source.startswith(STREAM_PREFIXES):
         # el mismo lector que main.py: descarta los frames negros del arranque,
         # se reconecta si el celular se corta y difumina las caras
         reader = CameraReader(
             int(source) if source.isdigit() else source,
-            privacy.default_anonymizer(every=FACE_DETECT_EVERY),
+            privacy.default_anonymizer(every=detect_every),
         )
         reader.start()
         t0 = time.monotonic()
@@ -212,12 +216,13 @@ def open_view_source(source: str, interval: float) -> ViewSource:
         )
         return ViewSource(frames, live=False, fps=1 / interval)
     if path.is_file():
+        # frames seguidos: detectar cada `detect_every` mantiene el video fluido.
+        # Antes de abrir el video: si falla, no queda el VideoCapture sin cerrar.
+        anonymize = privacy.default_anonymizer(every=detect_every)
         cap = cv2.VideoCapture(str(path))
         if not cap.isOpened():
             raise OSError(f"No se pudo abrir el video: {path}")
         fps = declared_fps(cap)
-        # frames seguidos: detecta cada FACE_DETECT_EVERY para que el video siga fluido
-        anonymize = privacy.default_anonymizer(every=FACE_DETECT_EVERY)
         frames = (
             (anonymize(frame), frame_seconds(cap, i, fps))
             for i, frame in enumerate(_read_all(cap))
@@ -315,7 +320,9 @@ class _Recorder:
 
 def run(args) -> int:
     try:
-        source = open_view_source(args.source, args.interval)
+        # grabando, se detectan caras en todos los frames; solo mirando, cada 3
+        detect_every = 1 if args.record else FACE_DETECT_EVERY
+        source = open_view_source(args.source, args.interval, detect_every)
     except (OSError, privacy.PrivacyError) as e:
         logger.error("%s", e)
         return 2
@@ -396,6 +403,10 @@ def run(args) -> int:
                 ref_clock, ref_s = time.monotonic(), video_s
             if args.limit is not None and submitted >= args.limit and pending is None:
                 break
+    except privacy.PrivacyError as e:
+        # el detector falló a mitad de camino: antes que mostrar caras, cortar
+        logger.error("%s", e)
+        failed = True
     except KeyboardInterrupt:
         interrupted = True
         logger.info("Cortado a mano")

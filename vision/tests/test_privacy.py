@@ -260,15 +260,90 @@ def test_model_path_from_env(tmp_path):
     assert privacy.model_path({privacy.MODEL_ENV: str(tmp_path / "m.onnx")}) == (
         tmp_path / "m.onnx"
     )
+    # relativa: desde la raíz del repo (como YOLO_WEIGHTS en .env.example), no del cwd
+    assert privacy.model_path({privacy.MODEL_ENV: "vision/models/m.onnx"}) == (
+        privacy.VISION_DIR.parent / "vision" / "models" / "m.onnx"
+    )
     with pytest.raises(PrivacyError, match="FACE_MODEL"):
         privacy.ensure_model(tmp_path / "no_existe.onnx")
+
+
+def test_open_source_reads_a_single_photo_blurred(tmp_path, monkeypatch):
+    """Una foto suelta también es una fuente: un frame, con las caras pixeladas (así
+    draw_zones y la prueba manual no necesitan un camino propio)."""
+    monkeypatch.setattr(privacy, "load_detector", lambda: FixedFaces([(0, 0, 40, 40)]))
+    frame = noise()
+    cv2.imwrite(str(tmp_path / "salon.png"), frame)
+    frames = list(open_source(str(tmp_path / "salon.png")))
+    assert len(frames) == 1
+    read, _ = frames[0]
+    assert not np.array_equal(read[0:40, 0:40], frame[0:40, 0:40])
+    assert np.array_equal(read[60:100, 100:200], frame[60:100, 100:200])
+
+
+def test_read_camera_detects_only_on_delivered_frames(monkeypatch):
+    """La cámara da ~30 fps y el loop usa uno cada `interval`: el detector corre solo
+    sobre el que se entrega, no sobre los que se descartan."""
+    from servio_vision import capture
+
+    monkeypatch.setattr(capture, "CAMERA_WARMUP_S", 0)
+    monkeypatch.setattr(capture.cv2, "VideoCapture", _NoisyCamera)
+    detector = FixedFaces([(5, 5, 20, 20)])
+    monkeypatch.setattr(privacy, "load_detector", lambda: detector)
+    frames = capture.read_camera(0, interval=60)
+    frame, _ = next(frames)
+    import time
+
+    time.sleep(0.05)  # la cámara sigue produciendo frames que nadie pide
+    frames.close()
+    assert detector.calls == 1
+    assert not np.array_equal(frame[5:25, 5:25], _NoisyCamera.frame[5:25, 5:25])
+
+
+def test_detector_keeps_big_faces_and_drops_only_giant_boxes():
+    """Alguien parado debajo de la cámara tiene una cara grande: se pixela igual.
+    Solo se descarta lo que ocupa más de la mitad del frame (un torso, una mesa)."""
+
+    class Net:
+        def __init__(self, faces):
+            self.faces = faces
+
+        def setInputSize(self, size):
+            pass
+
+        def detect(self, frame):
+            return 1, np.array(self.faces, np.float32)
+
+    detector = privacy.YuNetDetector.__new__(privacy.YuNetDetector)
+    detector.detect_width, detector._size = 1280, None
+    # frame 1280×720: una cara de 200 px (28 %) pasa; una "cara" de 400 px (56 %) no
+    detector._net = Net([[100, 100, 150, 200, 0.9], [600, 100, 300, 400, 0.9]])
+    boxes = detector.detect(np.zeros((720, 1280, 3), np.uint8))
+    assert [b[3] for b in boxes] == [201]
+
+
+def test_frame_recorder_writes_non_ascii_paths(tmp_path):
+    """En Windows, cv2.imwrite no escribe rutas con tildes: `out/grabación` tiene que
+    funcionar igual."""
+    from datetime import UTC, datetime
+
+    from servio_vision.recording import FrameRecorder
+
+    recorder = FrameRecorder(tmp_path / "grabación")
+    path = recorder.save(
+        noise(), datetime(2026, 10, 28, 20, 30, 15, 250000, tzinfo=UTC)
+    )
+    assert path.name == "20261028T203015.250Z.jpg"
+    assert cv2.imdecode(np.fromfile(path, np.uint8), cv2.IMREAD_COLOR).shape == (
+        100,
+        200,
+        3,
+    )
 
 
 @pytest.mark.skipif(
     not privacy.MODEL_PATH.exists(), reason="sin el modelo de YuNet en vision/models/"
 )
-def test_yunet_runs_and_filters_giant_boxes():
-    """Con el modelo real: corre sobre un frame sin caras y la caja gigante no pasa."""
+def test_yunet_runs_on_a_frame_without_faces():
     detector = privacy.YuNetDetector(privacy.MODEL_PATH)
     assert detector.detect(np.zeros((360, 640, 3), np.uint8)) == []
-    assert detector.detect(np.zeros((1080, 1920, 3), np.uint8)) == []

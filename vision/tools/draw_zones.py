@@ -25,7 +25,7 @@ import numpy as np
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from servio_vision import privacy
-from servio_vision.capture import IMAGE_SUFFIXES, open_source
+from servio_vision.capture import open_source
 from servio_vision.zones import (
     DEFAULT_ZONES,
     TableZone,
@@ -104,12 +104,7 @@ def render(frame: np.ndarray, editor: ZoneEditor) -> np.ndarray:
 
 
 def first_frame(source: str, at: float) -> np.ndarray:
-    if Path(source).is_file() and Path(source).suffix.lower() in IMAGE_SUFFIXES:
-        frame = cv2.imread(source)
-        if frame is None:
-            raise OSError(f"No se pudo leer {source}")
-        # una foto suelta no pasa por open_source: difuminar acá (C-3)
-        return privacy.default_anonymizer()(frame)
+    # también una foto suelta: open_source la lee (y difumina las caras, C-3)
     for i, (frame, _) in enumerate(open_source(source, interval=at or 1.0)):
         if at == 0 or i == 1:
             return frame
@@ -123,7 +118,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--out", type=Path, default=DEFAULT_ZONES)
     args = parser.parse_args(argv)
 
-    frame = first_frame(args.source, args.at)
+    try:
+        frame = first_frame(args.source, args.at)
+    except (OSError, privacy.PrivacyError) as e:
+        print(e, file=sys.stderr)
+        return 2
     height, width = frame.shape[:2]
     editor = ZoneEditor((width, height))
 

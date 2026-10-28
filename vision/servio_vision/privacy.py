@@ -29,9 +29,10 @@ import cv2
 import numpy as np
 from dotenv import load_dotenv
 
+from servio_vision import ENV_FILE, VISION_DIR
+
 logger = logging.getLogger(__name__)
 
-VISION_DIR = Path(__file__).resolve().parents[1]
 MODEL_NAME = "face_detection_yunet_2023mar.onnx"
 MODEL_PATH = VISION_DIR / "models" / MODEL_NAME
 MODEL_URL = (
@@ -41,7 +42,6 @@ MODEL_URL = (
 MODEL_SHA256 = "8f2383e4dd3cfbb4553ea8718107fc0423210dc964f9f4280604804ed2552fa4"
 MODEL_ENV = "FACE_MODEL"
 DOWNLOAD_TIMEOUT_S = 30  # una red con portal cautivo no tiene que colgar el arranque
-ENV_FILE = VISION_DIR.parent / ".env"
 
 # El detector corre sobre el frame llevado a este ancho (se agranda o se achica).
 # Desde una cámara en alto las caras miden 10–20 px en un frame de 640: YuNet no las
@@ -51,9 +51,10 @@ DETECT_WIDTH = 1280
 SCORE_THRESHOLD = 0.4  # bajo: caras chicas, de costado o desde arriba; un falso
 # positivo chico solo pixela un pedacito de pared
 NMS_THRESHOLD = 0.3
-# Una "cara" más alta que esto (fracción del alto del frame) no es una cara desde una
-# cámara en alto: es un torso o una mesa, y pixelarla taparía platos.
-MAX_FACE_FRACTION = 0.2
+# Una "cara" más alta que la mitad del frame no es una cara ni con alguien parado
+# debajo de la cámara: es un torso o una mesa, y pixelarla taparía platos. Es lo
+# único que se descarta: ante la duda, la privacidad gana y se pixela de más.
+MAX_FACE_FRACTION = 0.5
 MARGIN = 0.35  # la caja se agranda esto de cada lado: pelo, orejas, mentón
 BLOCKS = 6  # mosaico: la cara queda en ~6×6 bloques, irreconocible
 
@@ -118,9 +119,14 @@ class YuNetDetector:
 
 
 def model_path(env: dict[str, str] | None = None) -> Path:
+    """`FACE_MODEL` del entorno o el default. Una ruta relativa cuenta desde la raíz
+    del repo, como `YOLO_WEIGHTS` en `.env.example`, no desde donde se corre."""
     env = os.environ if env is None else env
     raw = (env.get(MODEL_ENV) or "").strip()
-    return Path(raw) if raw else MODEL_PATH
+    if not raw:
+        return MODEL_PATH
+    path = Path(raw)
+    return path if path.is_absolute() else VISION_DIR.parent / path
 
 
 def _sha256(path: Path) -> str:
@@ -228,7 +234,7 @@ def default_anonymizer(every: int = 1) -> FaceBlur:
 
 
 def main(argv: list[str] | None = None) -> int:
-    from servio_vision.capture import IMAGE_SUFFIXES, open_source
+    from servio_vision.capture import open_source
 
     parser = argparse.ArgumentParser(description="Muestra qué caras se difuminan.")
     parser.add_argument("--source", required=True, help="foto, video, carpeta, 0 o URL")
@@ -237,21 +243,21 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(message)s")
 
-    blur = default_anonymizer()
-    path = Path(args.source)
-    if path.is_file() and path.suffix.lower() in IMAGE_SUFFIXES:
-        frames = iter([blur(cv2.imread(str(path)))])  # una foto suelta
-    else:
-        frames = (frame for frame, _ in open_source(args.source, anonymize=blur))
-    args.out.mkdir(parents=True, exist_ok=True)
-    seen = 0
-    for n, frame in enumerate(frames, 1):
-        out = args.out / f"frame_{n:03d}.jpg"
-        cv2.imwrite(str(out), frame)
-        print(f"{out}: {blur.faces - seen} cara(s)")
-        seen = blur.faces
-        if n >= args.limit:
-            break
+    try:
+        blur = default_anonymizer()
+        frames = open_source(args.source, anonymize=blur)
+        args.out.mkdir(parents=True, exist_ok=True)
+        seen = 0
+        for n, (frame, _) in enumerate(frames, 1):
+            out = args.out / f"frame_{n:03d}.jpg"
+            cv2.imencode(".jpg", frame)[1].tofile(str(out))
+            print(f"{out}: {blur.faces - seen} cara(s)")
+            seen = blur.faces
+            if n >= args.limit:
+                break
+    except (OSError, PrivacyError) as e:
+        logger.error("%s", e)
+        return 2
     return 0
 
 

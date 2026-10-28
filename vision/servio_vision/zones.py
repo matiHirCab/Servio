@@ -133,6 +133,7 @@ def crop_tables(frame: np.ndarray, zones: Zones) -> dict[str, bytes]:
 
 def main(argv: list[str] | None = None) -> int:
     from servio_vision.capture import open_source
+    from servio_vision.privacy import PrivacyError
 
     parser = argparse.ArgumentParser(description="Guarda un recorte por mesa.")
     parser.add_argument("--source", required=True, help="video, carpeta, 0 o URL")
@@ -145,14 +146,18 @@ def main(argv: list[str] | None = None) -> int:
     zones = load_zones(args.zones)
     args.out.mkdir(parents=True, exist_ok=True)
     count = 0
-    for frame, ts in open_source(args.source, args.interval):
-        for table_id, jpeg in crop_tables(frame, zones).items():
-            name = f"{ts:%H%M%S}_{table_id}.jpg"
-            (args.out / name).write_bytes(jpeg)
-            print(args.out / name)
-        count += 1
-        if count >= args.limit:
-            break
+    try:
+        for frame, ts in open_source(args.source, args.interval):
+            for table_id, jpeg in crop_tables(frame, zones).items():
+                name = f"{ts:%H%M%S}_{table_id}.jpg"
+                (args.out / name).write_bytes(jpeg)
+                print(args.out / name)
+            count += 1
+            if count >= args.limit:
+                break
+    except (OSError, PrivacyError) as e:
+        print(e, file=sys.stderr)
+        return 2
     return 0 if count else 1
 
 

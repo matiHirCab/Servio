@@ -495,21 +495,25 @@ def main(argv: list[str] | None = None) -> int:
     pipeline = build_pipeline(args)
     if pipeline is None:
         return 2
-    recorder = FrameRecorder(args.record) if args.record else None
+    recorder: FrameRecorder | None = None
     readings = 0
     try:
         # las caras salen difuminadas de open_source (C-3): nada de lo que sigue,
         # tampoco la grabación, ve una cara
-        frames = open_source(args.source, args.interval, args.speed)
-        logger.info("Privacidad: caras difuminadas en la captura")
-        for frame, ts in frames:
+        for frame, ts in open_source(args.source, args.interval, args.speed):
+            if readings == 0:
+                # recién acá: si la fuente o el detector fallan, no queda una
+                # carpeta vacía ni un log que diga que se difuminó algo
+                logger.info("Privacidad: caras difuminadas en la captura")
+                if args.record:
+                    recorder = FrameRecorder(args.record)
             if recorder is not None:
                 recorder.save(frame, ts)
             pipeline.process_frame(frame, ts)
             readings += 1
             if args.limit is not None and readings >= args.limit:
                 break
-    except PrivacyError as e:
+    except (PrivacyError, OSError) as e:
         logger.error("%s", e)
         return 2
     except KeyboardInterrupt:

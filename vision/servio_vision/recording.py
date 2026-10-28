@@ -30,8 +30,12 @@ class FrameRecorder:
 
     def save(self, frame: np.ndarray, ts: datetime) -> Path:
         path = self.directory / frame_name(ts)
-        if not cv2.imwrite(str(path), frame, [cv2.IMWRITE_JPEG_QUALITY, JPEG_QUALITY]):
-            raise OSError(f"No se pudo guardar {path}")
+        # imencode + write_bytes y no imwrite: en Windows, imwrite no escribe rutas
+        # con tildes o eñes (`out/grabación`)
+        ok, jpeg = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, JPEG_QUALITY])
+        if not ok:
+            raise OSError(f"No se pudo codificar el frame para {path}")
+        path.write_bytes(jpeg.tobytes())
         self.saved += 1
         return path
 
