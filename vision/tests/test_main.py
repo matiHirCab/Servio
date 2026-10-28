@@ -7,6 +7,7 @@ import cv2
 import numpy as np
 
 import main as loop
+from servio_vision import privacy
 from servio_vision.classifiers.fake import FakeClassifier
 from servio_vision.schemas import TableReport
 from servio_vision.zones import TableZone, Zones, save_zones
@@ -117,6 +118,80 @@ def test_cli_logs_observations(tmp_path, monkeypatch):
     lines = [e for e in events if e["event"] == "observation"]
     assert len(lines) == 2 * 4  # 2 mesas × lecturas a los 0, 30, 60 y 90 s
     assert lines[0]["table_id"] == "T1" and lines[0]["ts"].endswith("Z")
+
+
+IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png", ".bmp", ".webp"}
+
+
+def _images_under(root) -> list:
+    return [p for p in root.rglob("*") if p.suffix.lower() in IMAGE_SUFFIXES]
+
+
+class _OneFace:
+    def detect(self, frame):
+        return [(20, 20, 30, 30)]
+
+
+def _noisy_video(tmp_path, seconds=65):
+    """Video de un gradiente liso (el códec casi no lo toca) con un damero fino donde
+    el detector falso ve la cara (20..50): pixelado queda gris, muy distinto."""
+    frame = np.zeros((100, 200, 3), np.uint8)
+    frame[:] = np.linspace(0, 255, 200, dtype=np.uint8)[None, :, None]
+    checker = (np.indices((30, 30)).sum(axis=0) // 3 % 2 * 255).astype(np.uint8)
+    frame[20:50, 20:50] = checker[:, :, None]
+    video = tmp_path / "salon.avi"
+    writer = cv2.VideoWriter(
+        str(video), cv2.VideoWriter_fourcc(*"MJPG"), 10, (200, 100)
+    )
+    for _ in range(10 * seconds):
+        writer.write(frame)
+    writer.release()
+    return video, frame
+
+
+def _cli(tmp_path, monkeypatch, *extra) -> int:
+    zones_path = tmp_path / "zones.json"
+    save_zones(ZONES, zones_path)
+    monkeypatch.delenv("DEMO_MODE", raising=False)
+    monkeypatch.setattr(loop.alerts, "DEFAULT_LOG", tmp_path / "eventos.jsonl")
+    monkeypatch.setattr(loop.alerts, "_processor", None)
+    monkeypatch.chdir(tmp_path)  # cualquier out/ relativo cae acá
+    video, _ = _noisy_video(tmp_path)
+    args = ["--source", str(video), "--zones", str(zones_path), "--no-telegram"]
+    return loop.main([*args, *extra])
+
+
+def test_cli_saves_no_images_without_record(tmp_path, monkeypatch):
+    """C-3: sin --record no queda ninguna imagen en disco."""
+    assert _cli(tmp_path, monkeypatch) == 0
+    loop.alerts._processor.close()
+    assert _images_under(tmp_path) == []
+
+
+def test_cli_record_saves_one_blurred_frame_per_reading(tmp_path, monkeypatch):
+    monkeypatch.setattr(privacy, "load_detector", _OneFace)
+    record = tmp_path / "grabacion"
+    assert _cli(tmp_path, monkeypatch, "--record", str(record), "--limit", "3") == 0
+    loop.alerts._processor.close()
+    saved = sorted(record.iterdir())
+    assert [p.suffix for p in saved] == [".jpg"] * 3
+    assert all(p.name.endswith("Z.jpg") for p in saved)
+    assert _images_under(tmp_path) == saved  # y en ningún otro lado
+    # la cara (20..50) está pixelada; el resto del frame es el original (JPEG mediante)
+    _, original = _noisy_video(tmp_path)
+    image = cv2.imread(str(saved[0]))
+    face_diff = np.abs(image[20:50, 20:50].astype(int) - original[20:50, 20:50]).mean()
+    rest_diff = np.abs(image[70:100, 100:200].astype(int) - original[70:100, 100:200])
+    assert face_diff > 3 * rest_diff.mean()
+
+
+def test_cli_explains_when_the_face_model_is_missing(tmp_path, monkeypatch, caplog):
+    def no_model():
+        raise loop.PrivacyError("No se pudo bajar el detector de caras")
+
+    monkeypatch.setattr(privacy, "load_detector", no_model)
+    assert _cli(tmp_path, monkeypatch) == 2
+    assert "detector de caras" in caplog.text
 
 
 def test_cli_without_zones_explains_what_to_do(tmp_path, caplog):

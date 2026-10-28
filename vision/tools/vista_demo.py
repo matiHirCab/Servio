@@ -40,6 +40,7 @@ import numpy as np
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from main import Pipeline, build_parser, build_pipeline, setup_logging
+from servio_vision import privacy
 from servio_vision.alerts.state import table_status
 from servio_vision.capture import (
     IMAGE_SUFFIXES,
@@ -56,6 +57,7 @@ logger = logging.getLogger("servio.vista")
 WINDOW = "Servio"
 MAX_PLAUSIBLE_FPS = 120
 FALLBACK_FPS = 25
+FACE_DETECT_EVERY = 3  # ~120 ms por detección en 1080p: cada 3 frames mantiene ~25 fps
 
 # colores BGR, por estado de mesa y de plato
 TABLE_COLORS = {
@@ -183,21 +185,29 @@ def open_view_source(source: str, interval: float) -> ViewSource:
     durante `interval` segundos. Tira `OSError`/`FileNotFoundError` si no abre.
     """
     if source.isdigit() or source.startswith(STREAM_PREFIXES):
-        # el mismo lector que main.py: descarta los frames negros del arranque
-        # y se reconecta si el celular se corta
-        reader = CameraReader(int(source) if source.isdigit() else source)
+        # el mismo lector que main.py: descarta los frames negros del arranque,
+        # se reconecta si el celular se corta y difumina las caras
+        reader = CameraReader(
+            int(source) if source.isdigit() else source,
+            privacy.default_anonymizer(every=FACE_DETECT_EVERY),
+        )
         reader.start()
         t0 = time.monotonic()
         frames = ((frame, time.monotonic() - t0) for frame in reader.frames())
         return ViewSource(frames, live=True, fps=reader.fps)
     path = Path(source)
+    # como en capture.py: caras difuminadas apenas se lee, antes de mostrar o grabar;
+    # detecta cada FACE_DETECT_EVERY frames para que el video siga fluido
+    anonymize = privacy.default_anonymizer(every=FACE_DETECT_EVERY)
     if path.is_dir():
         files = sorted(p for p in path.iterdir() if p.suffix.lower() in IMAGE_SUFFIXES)
         if not files:
             raise FileNotFoundError(f"No hay imágenes en {path}")
         images = (cv2.imread(str(f)) for f in files)
         frames = (
-            (image, i * interval) for i, image in enumerate(images) if image is not None
+            (anonymize(image), i * interval)
+            for i, image in enumerate(images)
+            if image is not None
         )
         return ViewSource(frames, live=False, fps=1 / interval)
     if path.is_file():
@@ -206,7 +216,7 @@ def open_view_source(source: str, interval: float) -> ViewSource:
             raise OSError(f"No se pudo abrir el video: {path}")
         fps = declared_fps(cap)
         frames = (
-            (frame, frame_seconds(cap, i, fps))
+            (anonymize(frame), frame_seconds(cap, i, fps))
             for i, frame in enumerate(_read_all(cap))
         )
         if fps > MAX_PLAUSIBLE_FPS:  # fps falsos (cámaras de seguridad): para grabar
@@ -303,7 +313,7 @@ class _Recorder:
 def run(args) -> int:
     try:
         source = open_view_source(args.source, args.interval)
-    except OSError as e:
+    except (OSError, privacy.PrivacyError) as e:
         logger.error("%s", e)
         return 2
     pipeline = build_pipeline(args)

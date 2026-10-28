@@ -74,9 +74,10 @@ Una sola cadencia: **se mira cada 30 s** (`--interval 30`, configurable). En cad
 ## Pipeline
 
 ```
-frame (cada 30 s) → recorte por mesa → classify() → suavizado → observación → alerts
+frame (cada 30 s) → caras difuminadas → recorte por mesa → classify() → suavizado → observación → alerts
 ```
 
+0. **Privacidad** (`servio_vision/privacy.py`, C-3): apenas se lee el frame, en `capture.py`, un detector de caras local (YuNet, el de OpenCV; el modelo se baja una vez a `vision/models/`) pixela cada cara. Es el único lugar: la vista de demo, `probar_video`, `draw_zones`, las grabaciones (`main.py --record DIR`) y cualquier imagen de `out/` ya no tienen caras. El detector corre a 1280 px de ancho (desde una cámara en alto las caras miden 10–20 px y por debajo no las ve), con umbral bajo, y descarta cajas más altas que el 20 % del frame (un torso, no una cara: taparía platos). En la vista en vivo detecta cada 3 frames y reusa las cajas para mantener los fps. Sin el modelo y sin internet, el programa no arranca. **No se guarda ningún frame salvo con `--record`**, y esos también salen difuminados. Falta la otra mitad de C-3 (Tomás): manos y personas difuminadas en los recortes de plato que van al modelo (`hybrid.py`).
 1. **Mesas**: por defecto se **detectan solas** en cada lectura (`servio_vision/tables.py`): un YOLO de COCO (clase "dining table") encuentra la mesa y `TableTracker` le da un nombre estable ("Mesa 1") aunque se mueva; si se movió, las cajas de los platos se pasan al recorte nuevo. Si en una lectura no se ve, queda donde estaba; si nunca se vio ninguna, se usa el cuadro entero. Con `--zones config/zones.json` se usan zonas fijas (dibujadas con `tools/draw_zones.py`).
 2. **Recorte**: el rectángulo de la mesa desde el frame original, JPEG calidad 85.
 3. **Clasificador**: `--classifier fake|yolo|hybrid|claude`.

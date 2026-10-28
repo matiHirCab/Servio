@@ -41,10 +41,12 @@
 
 ## Variables de entorno
 
-Ver `.env.example`: `CLAUDE_PROVIDER`, `CLAUDE_MODEL`, `OPENAI_MODEL`, `CLAUDE_TIMEOUT_S`, `OPENAI_TIMEOUT_S`, `CLAUDE_CLI`, `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `CLAUDE_PROMPT_FILE`, `OPENAI_PROMPT_FILE`, `SMOOTH_READINGS`, `SMOOTH_HARD_READINGS`, `SMOOTH_MIN_CONFIDENCE`, `YOLO_WEIGHTS`, `TELEGRAM_BOT_TOKEN`, `TELEGRAM_GROUP_CHAT_ID`, `DEMO_MODE`.
+Ver `.env.example`: `CLAUDE_PROVIDER`, `CLAUDE_MODEL`, `OPENAI_MODEL`, `CLAUDE_TIMEOUT_S`, `OPENAI_TIMEOUT_S`, `CLAUDE_CLI`, `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `CLAUDE_PROMPT_FILE`, `OPENAI_PROMPT_FILE`, `SMOOTH_READINGS`, `SMOOTH_HARD_READINGS`, `SMOOTH_MIN_CONFIDENCE`, `YOLO_WEIGHTS`, `FACE_MODEL`, `TELEGRAM_BOT_TOKEN`, `TELEGRAM_GROUP_CHAT_ID`, `DEMO_MODE`.
 
 ## Privacidad y datos
 
+- **Caras difuminadas apenas se lee el frame** (`servio_vision/privacy.py`, enganchado en `capture.py`): nada de lo que viene después (pipeline, vista de demo, grabaciones, `out/`) ve una cara. Si agregás una forma nueva de leer frames, tiene que pasar por `privacy.default_anonymizer()` (o por `CameraReader`, que ya lo hace). El modelo de YuNet se baja a `vision/models/` (ignorado); `FACE_MODEL` apunta a otra ruta.
+- **No se guardan frames** salvo con `main.py --record DIR`, y esos también salen difuminados. Una herramienta que escribe imágenes en `out/` tiene que leerlas con `capture.open_source`.
 - A Claude solo se mandan recortes de mesas y platos, no el salón entero.
 - Datasets, pesos e imágenes nunca se suben al repo (`vision/data/`, `vision/models/` y `vision/out/` están en `.gitignore`):
   - Video de la demo grabado por el equipo: carpeta compartida del equipo.

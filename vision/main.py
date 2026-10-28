@@ -33,6 +33,8 @@ from servio_vision.alerts.models import TableObservation
 from servio_vision.capture import open_source
 from servio_vision.classifier import Classifier, available_classifiers, get_classifier
 from servio_vision.dish_match import DishMatcher
+from servio_vision.privacy import PrivacyError
+from servio_vision.recording import FrameRecorder
 from servio_vision.restaurant import DEFAULT_DIR as RESTAURANT_DIR
 from servio_vision.restaurant import Restaurant, plate_order
 from servio_vision.schemas import Item, TableReport
@@ -353,6 +355,18 @@ def build_parser(
     return parser
 
 
+def add_record_flag(parser: argparse.ArgumentParser) -> argparse.ArgumentParser:
+    """`--record DIR` del loop. Aparte de `build_parser` porque `vista_demo` usa el
+    mismo parser con su propio `--record` (la vista en un .mp4)."""
+    parser.add_argument(
+        "--record",
+        type=Path,
+        help="guardar cada frame procesado (caras difuminadas) en esta carpeta; "
+        "sin esto no se guarda ninguna imagen",
+    )
+    return parser
+
+
 # Librerías que llenan la terminal: solo sus advertencias y errores.
 NOISY_LOGGERS = (
     "httpx",
@@ -476,18 +490,28 @@ def build_pipeline(args: argparse.Namespace) -> Pipeline | None:
 
 
 def main(argv: list[str] | None = None) -> int:
-    args = build_parser().parse_args(argv)
+    args = add_record_flag(build_parser()).parse_args(argv)
     setup_logging(args.verbose)
     pipeline = build_pipeline(args)
     if pipeline is None:
         return 2
+    recorder = FrameRecorder(args.record) if args.record else None
     readings = 0
     try:
-        for frame, ts in open_source(args.source, args.interval, args.speed):
+        # las caras salen difuminadas de open_source (C-3): nada de lo que sigue,
+        # tampoco la grabación, ve una cara
+        frames = open_source(args.source, args.interval, args.speed)
+        logger.info("Privacidad: caras difuminadas en la captura")
+        for frame, ts in frames:
+            if recorder is not None:
+                recorder.save(frame, ts)
             pipeline.process_frame(frame, ts)
             readings += 1
             if args.limit is not None and readings >= args.limit:
                 break
+    except PrivacyError as e:
+        logger.error("%s", e)
+        return 2
     except KeyboardInterrupt:
         logger.info("Cortado a mano")
     finally:
