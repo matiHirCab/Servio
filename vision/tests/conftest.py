@@ -4,8 +4,7 @@ import os
 
 import pytest
 
-import main
-from servio_vision import alerts, privacy
+from servio_vision import alerts, privacy, settings
 from servio_vision.alerts.notify import ConsoleNotifier
 
 # SERVIO_TEST_TELEGRAM=1 pytest → los tests que pasan por alerts mandan al grupo de verdad
@@ -28,9 +27,9 @@ def alerts_sandbox(tmp_path, monkeypatch):
     monkeypatch.setattr(alerts, "DEFAULT_LOG", tmp_path / "eventos.jsonl")
     if not REAL_TELEGRAM:
         monkeypatch.setattr(alerts, "get_notifier", lambda *a, **k: ConsoleNotifier())
-        # el .env local (DEMO_MODE, ALERT_*) no tiene que cambiar el resultado de los tests
-        monkeypatch.setattr(main, "load_dotenv", lambda *a, **k: False)
-        monkeypatch.setattr(alerts, "load_dotenv", lambda *a, **k: False)
+        # el .env local (DEMO_MODE, ALERT_*…) no tiene que cambiar el resultado de los
+        # tests: la configuración se arma solo del entorno del proceso
+        monkeypatch.setattr(settings, "ENV_FILE", None)
     monkeypatch.setattr(alerts, "_processor", None)
     yield
     if alerts._processor is not None:
@@ -49,4 +48,4 @@ def no_face_model(monkeypatch):
     """`capture.open_source` y `CameraReader` difuminan caras por defecto (C-3); sin
     esto cada test que lee un video intentaría bajar el detector. Un test que quiera
     ver caras pixeladas pone su propio detector con `monkeypatch`."""
-    monkeypatch.setattr(privacy, "load_detector", NoFaces)
+    monkeypatch.setattr(privacy, "load_detector", lambda *a, **k: NoFaces())

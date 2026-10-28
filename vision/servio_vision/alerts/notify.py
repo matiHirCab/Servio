@@ -8,13 +8,14 @@ El agrupado por mesa y guardar el `message_id` en el `Alert` son de `processor.p
 """
 
 import logging
-import os
 import sys
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any, Protocol
 
 import httpx
+
+from servio_vision import settings
 
 logger = logging.getLogger(__name__)
 # httpx loguea cada request en INFO con la URL completa, y la URL trae el token.
@@ -60,7 +61,13 @@ class TelegramNotifier:
 
     @classmethod
     def from_env(cls, env: Mapping[str, str] | None = None) -> "TelegramNotifier":
-        env = os.environ if env is None else env
+        """Token y grupo de `env`; sin `env`, de la configuración (settings.py)."""
+        if env is None:
+            cfg = settings.current()
+            env = {
+                "TELEGRAM_BOT_TOKEN": cfg.telegram_bot_token,
+                "TELEGRAM_GROUP_CHAT_ID": cfg.telegram_group_chat_id,
+            }
         token = env.get("TELEGRAM_BOT_TOKEN", "").strip()
         chat_id = env.get("TELEGRAM_GROUP_CHAT_ID", "").strip()
         missing = [

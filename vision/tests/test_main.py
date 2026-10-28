@@ -7,9 +7,10 @@ import cv2
 import numpy as np
 
 import main as loop
-from servio_vision import privacy
+from servio_vision import privacy, settings
 from servio_vision.capture import IMAGE_SUFFIXES
 from servio_vision.classifiers.fake import FakeClassifier
+from servio_vision.cli import settings_from_args
 from servio_vision.schemas import TableReport
 from servio_vision.zones import TableZone, Zones, save_zones
 
@@ -169,7 +170,7 @@ def test_cli_saves_no_images_without_record(tmp_path, monkeypatch):
 
 
 def test_cli_record_saves_one_blurred_frame_per_reading(tmp_path, monkeypatch):
-    monkeypatch.setattr(privacy, "load_detector", _OneFace)
+    monkeypatch.setattr(privacy, "load_detector", lambda *a, **k: _OneFace())
     record = tmp_path / "grabacion"
     code, original = _cli(
         tmp_path, monkeypatch, "--record", str(record), "--limit", "3"
@@ -188,7 +189,7 @@ def test_cli_record_saves_one_blurred_frame_per_reading(tmp_path, monkeypatch):
 
 
 def test_cli_explains_when_the_face_model_is_missing(tmp_path, monkeypatch, caplog):
-    def no_model():
+    def no_model(*args, **kwargs):
         raise privacy.PrivacyError("No se pudo bajar el detector de caras")
 
     monkeypatch.setattr(privacy, "load_detector", no_model)
@@ -257,8 +258,7 @@ def test_config_reaches_alerts(monkeypatch):
 def test_env_file_thresholds_apply(tmp_path, monkeypatch):
     env = tmp_path / ".env"
     env.write_text("ALERT_T2=120\n", encoding="utf-8")
-    monkeypatch.setattr(loop, "load_dotenv", __import__("dotenv").load_dotenv)
-    monkeypatch.setattr(loop, "ENV_FILE", env)
+    monkeypatch.setattr(settings, "ENV_FILE", env)
     monkeypatch.delenv("ALERT_T2", raising=False)
     monkeypatch.delenv("DEMO_MODE", raising=False)
     zones_path = tmp_path / "zones.json"
@@ -270,9 +270,9 @@ def test_env_file_thresholds_apply(tmp_path, monkeypatch):
     monkeypatch.setattr(
         loop.alerts,
         "configure",
-        lambda config, telegram, restaurant=None: configured.append(config),
+        lambda config, telegram, restaurant=None, **kw: configured.append(config),
     )
     monkeypatch.setattr(loop.alerts, "process", lambda o: [], raising=False)
-    assert loop.build_pipeline(args) is not None
+    assert loop.build_pipeline(settings_from_args(args)) is not None
     assert configured[0].t2 == 120  # del .env, no 2 × interval
     monkeypatch.delenv("ALERT_T2")

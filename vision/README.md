@@ -9,10 +9,12 @@ python3.11 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
 pip install -r requirements-yolo.txt          # para --classifier yolo o hybrid
 python main.py --source data/videos/demo.mp4 --classifier fake --no-telegram
+python main.py --config config/casa-jessica.toml          # todo lo de la casa en un archivo
 ```
 
+- **Configuración en un solo lugar** (`servio_vision/settings.py`): un `servio.toml` por casa con la cámara, la cadencia, el clasificador, las zonas, el restaurante y los umbrales (`config/servio.example.toml` es el modelo; `config/casa-*.toml` está ignorado por git), más el `.env` para los secretos y lo de la máquina (`.env.example` documenta todo). Prioridad: flags > toml > `.env` > defaults. Los flags solo pisan valores puntuales.
 - `--classifier fake|yolo|hybrid|claude`: `fake` no usa modelo; `hybrid` (YOLO + Claude) es el de la demo; `yolo` es el plan B sin internet.
-- `--demo` (o `DEMO_MODE=true`): umbrales de demo (la cadencia es siempre `--interval`, 30 s). El flag le gana a la variable.
+- `--demo` (o `DEMO_MODE=true`, o `demo = true` en el toml): umbrales de demo (la cadencia es siempre `--interval`, 30 s). El flag le gana a la variable.
 - `--no-telegram`: imprime los avisos en vez de mandarlos.
 - **Privacidad:** las caras se difuminan apenas se lee el frame, con un detector local (YuNet, de OpenCV). La primera vez baja el modelo (~230 KB) a `models/`; sin internet, copialo de la carpeta del equipo o apuntá `FACE_MODEL` a él (una ruta relativa cuenta desde la raíz del repo). Nada de lo que se muestra o se guarda tiene caras. `python -m servio_vision.privacy --source <foto o video>` guarda en `out/privacidad/` cómo quedan.
 - `--record DIR`: guarda cada frame procesado (ya difuminado) como JPEG con su hora. **Sin este flag no se guarda ninguna imagen.** Las grabaciones van a la carpeta compartida del equipo, nunca al repo.

@@ -10,13 +10,11 @@ Claude no está disponible (sin API key o falla), se usa el orden del pedido.
 import base64
 import json
 import logging
-import os
 
+from servio_vision import settings
 from servio_vision.restaurant import Dish
 
 logger = logging.getLogger(__name__)
-
-DEFAULT_MODEL = "claude-haiku-5-5"
 PROMPT = (
     "La imagen es un plato servido en un restaurante, visto desde arriba. "
     "¿Cuál de estos platos del pedido de la mesa es? Opciones:\n{options}\n"
@@ -27,13 +25,21 @@ PROMPT = (
 class DishMatcher:
     """Elige, mirando el recorte del plato, cuál de las opciones del pedido es."""
 
-    def __init__(self, model: str | None = None) -> None:
-        self.model = model or os.getenv("CLAUDE_MODEL") or DEFAULT_MODEL
+    def __init__(self, model: str | None = None, api_key: str | None = None) -> None:
+        """`model` y `api_key` de la configuración (los pasa `app.py`); sin ellos,
+        los del entorno."""
+        if model is None or api_key is None:
+            cfg = settings.current()
+            model = model or cfg.model_for("anthropic")
+            api_key = api_key or cfg.anthropic_api_key
+        self.model = model
         self._client = None
-        if os.getenv("ANTHROPIC_API_KEY"):
+        if api_key:
             import anthropic
 
-            self._client = anthropic.Anthropic(timeout=10.0, max_retries=1)
+            self._client = anthropic.Anthropic(
+                api_key=api_key, timeout=10.0, max_retries=1
+            )
         else:
             logger.info(
                 "Sin ANTHROPIC_API_KEY: los platos se asignan por orden de pedido"

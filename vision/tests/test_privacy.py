@@ -123,7 +123,7 @@ def _write_video(path: Path, frame: np.ndarray, seconds: int = 3, fps: int = 10)
 def test_open_source_blurs_faces_by_default(tmp_path, monkeypatch):
     """La captura usa el detector por defecto (acá uno falso) sin que nadie lo pida."""
     box = (60, 20, 30, 30)
-    monkeypatch.setattr(privacy, "load_detector", lambda: FixedFaces([box]))
+    monkeypatch.setattr(privacy, "load_detector", lambda *a, **k: FixedFaces([box]))
     frame = np.zeros((100, 200, 3), np.uint8)
     frame[20:50, 60:90] = (40, 160, 240)  # una "cara" de un color, el resto negro
     frame[20:35, 60:75] = (240, 40, 40)  # con dos mitades para que el mosaico cambie
@@ -182,7 +182,9 @@ def test_camera_source_blurs_what_it_delivers(monkeypatch):
 
     monkeypatch.setattr(capture, "CAMERA_WARMUP_S", 0)
     monkeypatch.setattr(capture.cv2, "VideoCapture", _NoisyCamera)
-    monkeypatch.setattr(privacy, "load_detector", lambda: FixedFaces([(5, 5, 20, 20)]))
+    monkeypatch.setattr(
+        privacy, "load_detector", lambda *a, **k: FixedFaces([(5, 5, 20, 20)])
+    )
     frames = open_source("0", interval=60)
     frame, _ = next(frames)
     frames.close()
@@ -311,15 +313,9 @@ def test_detector_failure_is_a_privacy_error():
         detector.detect(np.zeros((10, 10, 3), np.uint8))
 
 
-def test_model_path_from_env(tmp_path):
-    assert privacy.model_path({}) == privacy.MODEL_PATH
-    assert privacy.model_path({privacy.MODEL_ENV: str(tmp_path / "m.onnx")}) == (
-        tmp_path / "m.onnx"
-    )
-    # relativa: desde la raíz del repo (como YOLO_WEIGHTS en .env.example), no del cwd
-    assert privacy.model_path({privacy.MODEL_ENV: "vision/models/m.onnx"}) == (
-        privacy.VISION_DIR.parent / "vision" / "models" / "m.onnx"
-    )
+def test_model_path(tmp_path):
+    assert privacy.model_path(None) == privacy.MODEL_PATH
+    assert privacy.model_path(tmp_path / "m.onnx") == tmp_path / "m.onnx"
     with pytest.raises(PrivacyError, match="FACE_MODEL"):
         privacy.ensure_model(tmp_path / "no_existe.onnx")
 
@@ -327,7 +323,9 @@ def test_model_path_from_env(tmp_path):
 def test_open_source_reads_a_single_photo_blurred(tmp_path, monkeypatch):
     """Una foto suelta también es una fuente: un frame, con las caras pixeladas (así
     draw_zones y la prueba manual no necesitan un camino propio)."""
-    monkeypatch.setattr(privacy, "load_detector", lambda: FixedFaces([(0, 0, 40, 40)]))
+    monkeypatch.setattr(
+        privacy, "load_detector", lambda *a, **k: FixedFaces([(0, 0, 40, 40)])
+    )
     frame = noise()
     cv2.imwrite(str(tmp_path / "salon.png"), frame)
     frames = list(open_source(str(tmp_path / "salon.png")))

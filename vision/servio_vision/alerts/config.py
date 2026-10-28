@@ -5,9 +5,10 @@ Prioridad: flag de CLI > variable de entorno (`ALERT_T1`, `ALERT_T2`, `ALERT_REM
 > valor por defecto (producción, o `2 × interval` con `--demo`).
 """
 
-import os
 from collections.abc import Mapping
 from dataclasses import dataclass
+
+from servio_vision import settings
 
 # Producción (05-reglas-alertas.md).
 PROD_T1 = 60  # plato_vacio: plato en `vacio` hace ≥ T1
@@ -73,8 +74,18 @@ def load_config(
     reminder: int | None = None,
     env: Mapping[str, str] | None = None,
 ) -> AlertConfig:
-    """Arma la config de avisos. `demo` ya resuelto por el llamador (--demo le gana a DEMO_MODE)."""
-    env = os.environ if env is None else env
+    """Arma la config de avisos. `demo` ya resuelto por el llamador (--demo le gana a
+    DEMO_MODE). Sin `env`, los umbrales salen de la configuración (settings.py)."""
+    if env is None:
+        cfg = settings.current()
+        env = {
+            name: "" if value is None else str(value)
+            for name, value in (
+                ("ALERT_T1", cfg.alert_t1),
+                ("ALERT_T2", cfg.alert_t2),
+                ("ALERT_REMINDER", cfg.alert_reminder),
+            )
+        }
     flags = {"t1": t1, "t2": t2, "reminder": reminder}
     if demo:
         defaults = dict.fromkeys(flags, MIN_READINGS * interval)

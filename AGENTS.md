@@ -29,6 +29,6 @@ Contexto: MVP de hackathon, 24 horas, equipo de 3 personas (Tomás, Matías, Jes
 2. **Trabajá solo en tus carpetas** según la tabla «Dueños por carpeta» de [09-convenciones.md](docs/context/09-convenciones.md), salvo que la tarea diga otra cosa.
 3. **Primero que funcione, después que sea lindo.** Es una hackathon: preferí lo simple y demostrable.
 4. **Siempre con mock.** Cada parte tiene que poder correr sola: el pipeline con `--classifier fake`, las reglas con `fixtures/` y `--no-telegram`, el clasificador con fotos sueltas.
-5. **Nada de secretos en el repo.** Tokens y claves van en `.env` (ignorado) y se documentan en `.env.example`.
+5. **Nada de secretos en el repo.** Tokens y claves van en `.env` (ignorado) y se documentan en `.env.example`. Toda la configuración se lee en un solo lugar, `servio_vision/settings.py` (ver «Configuración» en [09-convenciones.md](docs/context/09-convenciones.md)); no agregues `os.getenv` en otro archivo.
 6. **No subas imágenes, videos, datasets ni pesos al repo.** Ver «Privacidad y datos» en [09-convenciones.md](docs/context/09-convenciones.md).
 7. Escribí docs y comentarios en español; código (nombres de variables, funciones) en inglés.
