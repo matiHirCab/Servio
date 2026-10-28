@@ -8,7 +8,7 @@ import numpy as np
 import pytest
 
 from servio_vision import privacy
-from servio_vision.capture import CameraReader, open_source
+from servio_vision.capture import open_source
 from servio_vision.privacy import FaceBlur, PrivacyError, pixelate
 
 
@@ -65,17 +65,31 @@ def test_face_blur_counts_faces_and_reuses_boxes_between_detections():
     assert blur.faces == 4
 
 
-def test_face_blur_refresh_detects_now_even_between_detections():
-    """El frame que va al modelo se detecta siempre, aunque `every` > 1."""
+def test_face_blur_refresh_finds_new_faces_without_touching_the_boxes():
+    """El frame que va al modelo: entre detecciones se pixeló con cajas viejas; una
+    cara que apareció después también se pixela, pero las cajas guardadas y el
+    contador no cambian (el frame ya está pixelado: detectar ahí no dice nada)."""
     detector = FixedFaces([(10, 10, 20, 20)])
     blur = FaceBlur(detector, every=3)
-    blur(noise(seed=1))  # frame 0: detecta
-    detector.boxes = [(100, 40, 20, 20)]  # "aparece" otra cara
-    frame = noise(seed=2)
-    original = frame.copy()
+    blur(noise(seed=1))  # frame 0: detecta la primera cara
+    frame = blur(noise(seed=2))  # frame 1: cajas viejas
+    detector.boxes = [(100, 40, 20, 20)]  # "apareció" otra
+    before = frame.copy()
     blur.refresh(frame)
     assert detector.calls == 2
-    assert not np.array_equal(frame[40:60, 100:120], original[40:60, 100:120])
+    assert not np.array_equal(frame[40:60, 100:120], before[40:60, 100:120])
+    assert blur.faces == 1 and blur._boxes == [(10, 10, 20, 20)]
+    # el frame 2 sigue pixelando la cara original con las cajas guardadas
+    frame = blur(noise(seed=3))
+    assert len(np.unique(frame[10:30, 10:30].reshape(-1, 3), axis=0)) <= 36
+
+
+def test_face_blur_refresh_is_free_right_after_a_detection():
+    detector = FixedFaces([(10, 10, 20, 20)])
+    blur = FaceBlur(detector)  # every=1: cada frame se detecta
+    frame = blur(noise())
+    blur.refresh(frame)
+    assert detector.calls == 1
 
 
 def test_privacy_error_is_an_os_error():
@@ -162,24 +176,18 @@ class _NoisyCamera:
         pass
 
 
-def test_camera_reader_blurs_what_it_delivers(monkeypatch):
-    """`latest()` nunca entrega una cara (tampoco a `vista_demo`, que usa
-    `CameraReader` directo). Se difumina al entregar, no en el hilo de lectura."""
+def test_camera_source_blurs_what_it_delivers(monkeypatch):
+    """La cámara también pasa por `open_source`: lo que entrega no tiene caras."""
     from servio_vision import capture
 
     monkeypatch.setattr(capture, "CAMERA_WARMUP_S", 0)
     monkeypatch.setattr(capture.cv2, "VideoCapture", _NoisyCamera)
     monkeypatch.setattr(privacy, "load_detector", lambda: FixedFaces([(5, 5, 20, 20)]))
-    reader = CameraReader(0)
-    reader.start()
-    try:
-        frame = reader.latest()
-    finally:
-        reader.stop()
-    assert frame is not None
+    frames = open_source("0", interval=60)
+    frame, _ = next(frames)
+    frames.close()
     assert not np.array_equal(frame[5:25, 5:25], _NoisyCamera.frame[5:25, 5:25])
     assert np.array_equal(frame[40:50, 40:50], _NoisyCamera.frame[40:50, 40:50])
-    assert reader.anonymize.faces >= 1
 
 
 def test_ensure_model_downloads_and_checks_the_hash(tmp_path, monkeypatch):
@@ -199,6 +207,20 @@ def test_ensure_model_downloads_and_checks_the_hash(tmp_path, monkeypatch):
     # la segunda vez no baja nada
     monkeypatch.setattr(privacy, "_download", None)
     assert privacy.ensure_model(privacy.MODEL_PATH) == path
+
+
+def test_ensure_model_replaces_a_corrupt_default(tmp_path, monkeypatch):
+    payload = b"modelo bueno"
+    path = tmp_path / "yunet.onnx"
+    path.write_bytes(b"trunc")
+    monkeypatch.setattr(privacy, "MODEL_PATH", path)
+    monkeypatch.setattr(privacy, "MODEL_SHA256", hashlib.sha256(payload).hexdigest())
+    monkeypatch.setattr(privacy, "_download", lambda url, dst: dst.write_bytes(payload))
+    assert privacy.ensure_model(path).read_bytes() == payload
+    # otro modelo en FACE_MODEL se acepta tal cual, sin hash
+    other = tmp_path / "otro.onnx"
+    other.write_bytes(b"lo que sea")
+    assert privacy.ensure_model(other) == other
 
 
 def test_ensure_model_rejects_a_wrong_hash(tmp_path, monkeypatch):
@@ -308,7 +330,7 @@ def test_read_camera_detects_only_on_delivered_frames(monkeypatch):
     monkeypatch.setattr(capture, "CAMERA_WARMUP_S", 0)
     monkeypatch.setattr(capture.cv2, "VideoCapture", _NoisyCamera)
     detector = FixedFaces([(5, 5, 20, 20)])
-    frames = capture.read_camera(0, interval=60, anonymize=FaceBlur(detector))
+    frames = open_source("0", interval=60, anonymize=FaceBlur(detector))
     frame, _ = next(frames)
     import time
 

@@ -492,18 +492,18 @@ def main(argv: list[str] | None = None) -> int:
     pipeline = build_pipeline(args)
     if pipeline is None:
         return 2
-    try:
-        # las caras salen difuminadas de open_source (C-3): nada de lo que sigue,
-        # tampoco la grabación, ve una cara. Si falta el modelo, falla acá.
-        frames = open_source(args.source, args.interval, args.speed)
-    except OSError as e:  # fuente que no existe o no abre, PrivacyError
-        logger.error("%s", e)
-        pipeline.close()
-        return 2
-    logger.info("Privacidad: caras difuminadas en la captura")
-    recorder = FrameRecorder(args.record) if args.record else None
     readings = 0
     try:
+        try:
+            # las caras salen difuminadas de open_source (C-3): nada de lo que
+            # sigue, tampoco la grabación, ve una cara. La fuente y el modelo de
+            # caras se abren acá: si fallan, fallan acá.
+            frames = open_source(args.source, args.interval, args.speed)
+            recorder = FrameRecorder(args.record) if args.record else None
+        except OSError as e:  # fuente que no existe o no abre, PrivacyError, --record
+            logger.error("%s", e)
+            return 2
+        logger.info("Privacidad: caras difuminadas en la captura")
         for frame, ts in frames:
             if recorder is not None:
                 try:

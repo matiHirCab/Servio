@@ -147,11 +147,21 @@ def _download(url: str, destination: Path, timeout: float = DOWNLOAD_TIMEOUT_S) 
 
 
 def ensure_model(path: Path = MODEL_PATH) -> Path:
-    """Devuelve la ruta del modelo; si no está, lo baja y verifica el hash."""
-    if path.exists():
-        return path
+    """Devuelve la ruta del modelo; si no está, lo baja y verifica el hash.
+
+    El default también se verifica cuando ya existe: una copia truncada (un share
+    que se cortó) se vuelve a bajar en vez de fallar al cargarla sin decir por qué.
+    Otro modelo en `FACE_MODEL` se acepta tal cual.
+    """
     if path != MODEL_PATH:
+        if path.exists():
+            return path
         raise PrivacyError(f"No existe el modelo de caras {MODEL_ENV}={path}")
+    if path.exists():
+        if _sha256(path) == MODEL_SHA256:
+            return path
+        logger.warning("El detector de caras en %s está dañado: lo bajo de nuevo", path)
+        path.unlink()
     logger.info("Bajando el detector de caras a %s", path)
     path.parent.mkdir(parents=True, exist_ok=True)
     # A un nombre propio de este proceso y recién al final `replace` (atómico): dos
@@ -227,28 +237,32 @@ class FaceBlur:
         self.faces = 0
         self._frames = 0
         self._boxes: list[Box] = []
+        self._detected_last = False  # el último frame tuvo detección propia
 
     def __call__(self, frame: np.ndarray) -> np.ndarray:
-        if self._frames % self.every == 0:
-            self._detect(frame)
+        self._detected_last = self._frames % self.every == 0
+        if self._detected_last:
+            self._boxes = self.detector.detect(frame)
+            if self._boxes:
+                self.faces += len(self._boxes)
+                logger.debug("%d cara(s) difuminada(s)", len(self._boxes))
         self._frames += 1
         if self._boxes:
             pixelate(frame, self._boxes)
         return frame
 
     def refresh(self, frame: np.ndarray) -> np.ndarray:
-        """Detecta en este frame sí o sí y lo pixela. Para un frame que sale de la
-        máquina (al modelo) aunque `every` > 1: las cajas viejas no alcanzan."""
-        self._detect(frame)
-        if self._boxes:
-            pixelate(frame, self._boxes)
+        """Para el último frame que pasó por acá y va a salir de la máquina (al
+        modelo): si se pixeló con cajas viejas (`every` > 1), busca caras que hayan
+        aparecido después y las pixela también. No toca las cajas guardadas ni el
+        contador: el frame ya viene pixelado, y lo que el detector encuentre acá no
+        dice nada de los frames que siguen."""
+        if self._detected_last:
+            return frame  # ya se detectó en este mismo frame
+        new = self.detector.detect(frame)
+        if new:
+            pixelate(frame, new)
         return frame
-
-    def _detect(self, frame: np.ndarray) -> None:
-        self._boxes = self.detector.detect(frame)
-        if self._boxes:
-            self.faces += len(self._boxes)
-            logger.debug("%d cara(s) difuminada(s)", len(self._boxes))
 
 
 def default_anonymizer(every: int = 1) -> FaceBlur:

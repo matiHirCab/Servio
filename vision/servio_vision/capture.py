@@ -62,25 +62,33 @@ def open_source(
     lo más rápido posible.
     `start`: ts del primer frame de un video o carpeta (por defecto, ahora).
     `anonymize`: se aplica a cada frame apenas se lee; por defecto, las caras
-    difuminadas (`privacy.default_anonymizer()`). Se resuelve acá, antes de
-    devolver el iterador: si falta el modelo (`PrivacyError`, un `OSError`) se
-    sabe al abrir la fuente, no en el primer frame.
+    difuminadas (`privacy.default_anonymizer()`). Es el **único** lugar donde se
+    engancha: los lectores devuelven el frame crudo y acá se envuelve.
+
+    Abre la fuente y resuelve el anonimizador antes de devolver el iterador: una
+    fuente que no existe o no abre, o el modelo de caras que falta
+    (`PrivacyError`, un `OSError`), fallan acá y no en el primer frame.
     """
     if interval <= 0:
         raise ValueError("interval tiene que ser mayor a 0")
     start = start or datetime.now(UTC)
-    anonymize = anonymize or privacy.default_anonymizer()
+    path = Path(source)
     if source.isdigit() or source.startswith(STREAM_PREFIXES):
         camera = int(source) if source.isdigit() else source
-        return read_camera(camera, interval, anonymize)
-    path = Path(source)
-    if path.is_dir():
-        return read_folder(path, interval, speed, start, anonymize)
-    if path.is_file() and path.suffix.lower() in IMAGE_SUFFIXES:
-        return read_image(path, start, anonymize)  # una foto suelta: un solo frame
-    if path.is_file():
-        return read_video(path, interval, speed, start, anonymize)
-    raise FileNotFoundError(f"No existe la fuente: {source}")
+        anonymize = anonymize or privacy.default_anonymizer()
+        raw = read_camera(camera, interval)
+    elif path.is_dir():
+        anonymize = anonymize or privacy.default_anonymizer()
+        raw = read_folder(path, interval, speed, start)
+    elif path.is_file() and path.suffix.lower() in IMAGE_SUFFIXES:
+        anonymize = anonymize or privacy.default_anonymizer()
+        raw = read_image(path, start)  # una foto suelta: un solo frame
+    elif path.is_file():
+        anonymize = anonymize or privacy.default_anonymizer()
+        raw = read_video(path, interval, speed, start)
+    else:
+        raise FileNotFoundError(f"No existe la fuente: {source}")
+    return ((anonymize(frame), ts) for frame, ts in raw)
 
 
 def declared_fps(cap: cv2.VideoCapture) -> float:
@@ -101,16 +109,23 @@ def frame_seconds(cap: cv2.VideoCapture, index: int, fps: float) -> float:
     return index / fps
 
 
+# Los lectores abren la fuente al llamarlos (una función común que falla con
+# `OSError` ahí mismo) y devuelven el generador de frames crudos; `open_source` los
+# envuelve con el anonimizador.
+
+
 def read_video(
-    path: Path,
-    interval: float,
-    speed: float | None,
-    start: datetime,
-    anonymize: Anonymizer,
+    path: Path, interval: float, speed: float | None, start: datetime
 ) -> Iterator[Frame]:
     cap = cv2.VideoCapture(str(path))
     if not cap.isOpened():
         raise OSError(f"No se pudo abrir el video: {path}")
+    return _video_frames(cap, interval, speed, start)
+
+
+def _video_frames(
+    cap: cv2.VideoCapture, interval: float, speed: float | None, start: datetime
+) -> Iterator[Frame]:
     fps = declared_fps(cap)
     pacer = _Pacer(speed)
     next_reading = 0.0  # segundo del video de la próxima lectura
@@ -128,7 +143,7 @@ def read_video(
             if not ok:
                 return
             pacer.wait(video_seconds)
-            yield anonymize(frame), start + timedelta(seconds=video_seconds)
+            yield frame, start + timedelta(seconds=video_seconds)
             while next_reading <= video_seconds:
                 next_reading += interval
     finally:
@@ -136,15 +151,17 @@ def read_video(
 
 
 def read_folder(
-    path: Path,
-    interval: float,
-    speed: float | None,
-    start: datetime,
-    anonymize: Anonymizer,
+    path: Path, interval: float, speed: float | None, start: datetime
 ) -> Iterator[Frame]:
     files = sorted(p for p in path.iterdir() if p.suffix.lower() in IMAGE_SUFFIXES)
     if not files:
         raise FileNotFoundError(f"No hay imágenes en {path}")
+    return _folder_frames(files, interval, speed, start)
+
+
+def _folder_frames(
+    files: list[Path], interval: float, speed: float | None, start: datetime
+) -> Iterator[Frame]:
     pacer = _Pacer(speed)
     for i, file in enumerate(files):
         frame = cv2.imread(str(file))
@@ -153,38 +170,36 @@ def read_folder(
             continue
         seconds = i * interval
         pacer.wait(seconds)
-        yield anonymize(frame), start + timedelta(seconds=seconds)
+        yield frame, start + timedelta(seconds=seconds)
 
 
-def read_image(path: Path, start: datetime, anonymize: Anonymizer) -> Iterator[Frame]:
+def read_image(path: Path, start: datetime) -> Iterator[Frame]:
     frame = cv2.imread(str(path))
     if frame is None:
         raise OSError(f"No se pudo leer la imagen: {path}")
-    yield anonymize(frame), start
+    return iter([(frame, start)])
 
 
-def read_camera(
-    source: int | str, interval: float, anonymize: Anonymizer
-) -> Iterator[Frame]:
-    # El lector entrega tal cual y se anonimiza solo el frame que se usa: detectar
-    # caras en los ~30 fps que se descartan entre lecturas gastaría la CPU al vicio.
-    reader = CameraReader(source, _as_is)
-    reader.start()
+def read_camera(source: int | str, interval: float) -> Iterator[Frame]:
+    reader = CameraReader(source)
+    reader.start()  # OSError si no abre
+    return _camera_frames(reader, interval)
+
+
+def _camera_frames(reader: "CameraReader", interval: float) -> Iterator[Frame]:
     last = -interval
     try:
         # `frames()` da siempre el frame más nuevo: si el loop estuvo ocupado
-        # clasificando, se entrega el actual, no uno de hace 10 s.
+        # clasificando, se entrega el actual, no uno de hace 10 s. Solo el que se
+        # entrega llega al anonimizador: detectar caras en los ~30 fps que se
+        # descartan entre lecturas gastaría la CPU al vicio.
         for frame in reader.frames():
             now = time.monotonic()
             if now - last >= interval:
                 last = now
-                yield anonymize(frame), datetime.now(UTC)
+                yield frame, datetime.now(UTC)
     finally:
         reader.stop()
-
-
-def _as_is(frame: np.ndarray) -> np.ndarray:
-    return frame
 
 
 class CameraReader:
@@ -195,19 +210,14 @@ class CameraReader:
     Webcam) corta la conexión. Un fallo suelto de lectura se reintenta; con
     `READ_FAILURES_TO_RECONNECT` seguidos, reabre la cámara. Se da por vencida si
     pasan `CAMERA_RECONNECT_S` sin un frame bueno, aunque abra y se vuelva a cortar.
-    Lo usan `read_camera` y `tools/vista_demo.py`.
-
-    Privacidad: `latest()` entrega cada frame anonimizado (`anonymize`; por defecto,
-    caras difuminadas). Se hace al entregar y no en el hilo: detectar caras tarda
-    ~120 ms y a 30 fps el hilo no daría abasto, el buffer se llenaría y los frames
-    saldrían viejos (lo que este hilo existe para evitar). Hasta que se entrega, el
-    frame es privado de esta clase. `read_camera` pasa `_as_is` y anonimiza solo el
-    frame de cada lectura.
+    Lo usan `read_camera` y `tools/vista_demo.py`. Entrega frames **crudos**: quien
+    los consume los pasa por el anonimizador (`open_source` lo hace; `vista_demo`
+    también). No se hace en el hilo porque detectar caras tarda ~120 ms y a 30 fps
+    el hilo no daría abasto: el buffer se llenaría y los frames saldrían viejos.
     """
 
-    def __init__(self, source: int | str, anonymize: Anonymizer | None = None) -> None:
+    def __init__(self, source: int | str) -> None:
         self.source = source
-        self.anonymize = anonymize or privacy.default_anonymizer()
         self.fps = 30.0
         self._cond = threading.Condition()
         self._frame: np.ndarray | None = None
@@ -253,9 +263,7 @@ class CameraReader:
             if self._seq <= self._taken:
                 return None
             self._taken = self._seq
-            frame = self._frame
-        # fuera del lock: el hilo sigue leyendo mientras se detectan las caras
-        return self.anonymize(frame)
+            return self._frame
 
     def _open(self) -> cv2.VideoCapture | None:
         if isinstance(self.source, str):

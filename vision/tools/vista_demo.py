@@ -193,10 +193,10 @@ def open_view_source(source: str, interval: float, detect_every: int = 1) -> Vie
         # el mismo lector que main.py: descarta los frames negros del arranque,
         # se reconecta si el celular se corta y difumina las caras
         faces = privacy.default_anonymizer(every=detect_every)
-        reader = CameraReader(int(source) if source.isdigit() else source, faces)
+        reader = CameraReader(int(source) if source.isdigit() else source)
         reader.start()
         t0 = time.monotonic()
-        frames = ((frame, time.monotonic() - t0) for frame in reader.frames())
+        frames = ((faces(frame), time.monotonic() - t0) for frame in reader.frames())
         return ViewSource(frames, live=True, fps=reader.fps, faces=faces)
     path = Path(source)
     # como en capture.py: caras difuminadas apenas se lee, antes de mostrar o grabar
@@ -322,7 +322,7 @@ def run(args) -> int:
         # grabando, se detectan caras en todos los frames; solo mirando, cada 3
         detect_every = 1 if args.record else FACE_DETECT_EVERY
         source = open_view_source(args.source, args.interval, detect_every)
-    except (OSError, privacy.PrivacyError) as e:
+    except OSError as e:  # también PrivacyError
         logger.error("%s", e)
         return 2
     pipeline = build_pipeline(args)
@@ -375,8 +375,8 @@ def run(args) -> int:
                     # el pipeline va atrasado: el video espera y después retoma su ritmo
                     finish_pending()
                     ref_clock, ref_s = time.monotonic(), video_s
-                # este frame sale de la máquina (recortes al modelo): detectar caras
-                # sí o sí, aunque para mirar se detecte cada FACE_DETECT_EVERY
+                # este frame sale de la máquina (recortes al modelo): si para mirar
+                # se detectó cada FACE_DETECT_EVERY, buscar caras nuevas en este
                 pending = worker.submit(
                     pipeline.process_frame, source.faces.refresh(frame.copy()), ts
                 )

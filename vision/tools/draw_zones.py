@@ -24,7 +24,7 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from servio_vision.capture import open_source
+from servio_vision.capture import IMAGE_SUFFIXES, open_source
 from servio_vision.zones import (
     DEFAULT_ZONES,
     TableZone,
@@ -109,10 +109,12 @@ def first_frame(source: str, at: float) -> np.ndarray:
     first = next(frames, None)
     if first is None:
         raise OSError(f"La fuente {source} no tiene frames")
-    if at == 0:
-        return first[0]
+    if at == 0 or Path(source).suffix.lower() in IMAGE_SUFFIXES:
+        return first[0]  # una foto no tiene segundo `at`: va la foto
     second = next(frames, None)
-    return (second or first)[0]  # una foto no tiene segundo `at`: va la foto
+    if second is None:
+        raise OSError(f"La fuente {source} no tiene un frame en el segundo {at}")
+    return second[0]
 
 
 def main(argv: list[str] | None = None) -> int:
