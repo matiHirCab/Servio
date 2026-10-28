@@ -1,0 +1,57 @@
+# Configuración del local (servio.toml).
+#
+# Por ahora solo tiene los roles (R-1). Cámara, mesas, umbrales y Telegram se
+# suman acá con A-1 (settings.py), y el mozo de cada mesa con C-7.
+# La tabla completa y el porqué están en docs/context/12-roles.md.
+
+# ── Roles: quién ve qué ──────────────────────────────────────────────────────
+# vistas:   pantallas que puede abrir: "reconocimiento", "dashboard", "configuracion".
+# mesas:    qué mesas ve en la vista de reconocimiento: "todas" o "suyas".
+# avisos:   qué avisos le llegan al reloj: "suyas" (las de sus mesas), "todas" o "ninguno".
+# metricas: ids de servio_vision/roles.py (METRICS). Un rol con admin = true ve
+#           todas las vistas y todas las métricas, aunque no estén en la lista.
+#
+# Es el default del 28/10. Para que un rol vea otra métrica, se agrega su id a
+# la lista; no hace falta tocar código.
+
+[roles.mozo]
+nombre = "Mozo"
+vistas = ["reconocimiento"]
+mesas = "todas"
+avisos = "suyas"
+metricas = []
+
+[roles.encargado]
+nombre = "Encargado"
+vistas = ["reconocimiento", "dashboard"]
+mesas = "todas"
+avisos = "ninguno"
+metricas = [
+  "avisos_abiertos",
+  "tiempo_respuesta",
+  "mesa_terminada_sin_atender",
+  "mesas_olvidadas",
+  "rotacion",
+  "resumen_cierre",
+  "platos_que_vuelven",
+]
+
+[roles.dueno]
+nombre = "Dueño"
+admin = true
+vistas = ["reconocimiento", "dashboard", "configuracion"]
+mesas = "todas"
+avisos = "ninguno"
+metricas = [
+  "avisos_abiertos",
+  "tiempo_respuesta",
+  "mesa_terminada_sin_atender",
+  "mesas_olvidadas",
+  "rotacion",
+  "resumen_cierre",
+  "platos_que_vuelven",
+  "desperdicio",
+  "historico",
+  "antes_despues",
+  "costos_y_configuracion",
+]

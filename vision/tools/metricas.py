@@ -8,7 +8,10 @@ primera vez). Muestra:
   común que respondieron los mozos;
 - mozos: minutos hasta atender una mesa que terminó, y segundos en responder el aviso.
 
-    python tools/metricas.py [--image out/metricas.png] [--sql]
+Con `--rol` muestra solo lo que ese rol puede ver según `config/servio.toml`
+(ver `servio_vision/roles.py`): el mozo no ve métricas.
+
+    python tools/metricas.py [--rol encargado] [--image out/metricas.png] [--sql]
 """
 
 import argparse
@@ -20,6 +23,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from servio_vision.db import Database
 from servio_vision.metrics import (
     HISTORY,
+    REPORT_METRICS,
     SQL_ANSWER,
     SQL_ATTEND,
     SQL_DISHES,
@@ -29,6 +33,7 @@ from servio_vision.metrics import (
     render,
 )
 from servio_vision.restaurant import Restaurant
+from servio_vision.roles import DEFAULT_CONFIG, Roles
 
 DB = VISION_DIR / "out" / "servio.db"
 
@@ -39,10 +44,21 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--historial", type=Path, default=HISTORY)
     parser.add_argument("--image", type=Path, help="guardar también como imagen")
     parser.add_argument("--sql", action="store_true", help="mostrar las consultas")
+    parser.add_argument(
+        "--rol", help="mostrar solo lo que ve este rol (mozo, encargado, dueno)"
+    )
+    parser.add_argument("--config", type=Path, default=DEFAULT_CONFIG)
     args = parser.parse_args(argv)
     for stream in (sys.stdout, sys.stderr):
         if hasattr(stream, "reconfigure"):
             stream.reconfigure(encoding="utf-8", errors="replace")
+    visible = None
+    if args.rol:
+        role = Roles.load(args.config).get(args.rol)
+        visible = set(role.visible_metrics()) & set(REPORT_METRICS)
+        if not visible:
+            print(f"El rol {role.nombre} no ve estas métricas (ver {args.config}).")
+            return 3
     db = Database(args.db)
     restaurant = Restaurant.load()
     db.load_restaurant(restaurant)
@@ -62,10 +78,15 @@ def main(argv: list[str] | None = None) -> int:
     if not m["dishes"]:
         print("La base no tiene datos: corré tools/generar_historial.py o una demo.")
         return 2
-    print_report(m)
+    print_report(m, visible)
     if args.image:
-        render(m, args.image)
-        print(f"\nImagen guardada en {args.image}")
+        if visible is not None and visible != set(REPORT_METRICS):
+            print(
+                "\n(la imagen muestra todas las métricas: no se guarda para este rol)"
+            )
+        else:
+            render(m, args.image)
+            print(f"\nImagen guardada en {args.image}")
     return 0
 
 
