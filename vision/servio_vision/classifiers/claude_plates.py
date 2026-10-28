@@ -35,30 +35,14 @@ from pathlib import Path
 
 from pydantic import BaseModel, Field, ValidationError
 
-from servio_vision import prompt
+from servio_vision import prompt, settings
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_MODELS = {
-    "cli": "haiku",
-    "anthropic": "claude-haiku-5-5",
-    "openai": "gpt-6-luna",
-}
-MODEL_ENV = {
-    "cli": "CLAUDE_MODEL",
-    "anthropic": "CLAUDE_MODEL",
-    "openai": "OPENAI_MODEL",
-}
-# `claude -p` tarda ~6-8 s con 8 platos (arranque del CLI incluido).
-# openai: unas 25 preguntas tipadas y ~17 imágenes en una mesa de 8 platos con referencias.
-# Con el reintento, el peor caso es 2 × timeout + RETRY_WAIT_S: 14 s deja 30 s, el
-# --interval por defecto, para no atrasar la lectura siguiente.
-DEFAULT_TIMEOUTS = {"cli": 15.0, "anthropic": 10.0, "openai": 14.0}
-TIMEOUT_ENV = {
-    "cli": "CLAUDE_TIMEOUT_S",
-    "anthropic": "CLAUDE_TIMEOUT_S",
-    "openai": "OPENAI_TIMEOUT_S",
-}
+# Modelo y timeout por defecto de cada proveedor: settings.py (DEFAULT_MODELS,
+# DEFAULT_TIMEOUTS). Acá se reexportan para quien ya los importaba de este módulo.
+DEFAULT_MODELS = settings.DEFAULT_MODELS
+DEFAULT_TIMEOUTS = settings.DEFAULT_TIMEOUTS
 RETRY_WAIT_S = 2.0
 ATTEMPTS = 2  # un intento + un reintento
 
@@ -152,10 +136,12 @@ def build_content(
     return content
 
 
-def _find_cli() -> str:
+def _find_cli(cli: str | None = None) -> str:
+    """`cli` (CLAUDE_CLI de la configuración) o el `claude` del PATH."""
     # En Windows hay que llamar a claude.exe: claude.cmd rompe los argumentos.
     exe = (
-        os.environ.get("CLAUDE_CLI")
+        cli
+        or settings.current().claude_cli
         or shutil.which("claude.exe")
         or shutil.which("claude")
     )
@@ -266,7 +252,12 @@ def _call_anthropic(
             "falta el paquete anthropic: pip install anthropic"
         ) from e
 
-    client = anthropic.Anthropic(timeout=timeout_s, max_retries=0)
+    # la key de la configuración (settings.py); sin ella, la que el SDK encuentre
+    client = anthropic.Anthropic(
+        api_key=settings.current().anthropic_api_key or None,
+        timeout=timeout_s,
+        max_retries=0,
+    )
     try:
         resp = client.messages.create(
             model=model,
@@ -423,7 +414,11 @@ def _call_openai(
     parts = [OPENAI_FORMAT.text(prompt.openai_instructions()), *request.content]
     # las preguntas same_plate_i solo van para los platos con referencia
     questions = prompt.decision_questions(request.has_reference)
-    client = openai.OpenAI(timeout=timeout_s, max_retries=0)
+    client = openai.OpenAI(
+        api_key=settings.current().openai_api_key or None,
+        timeout=timeout_s,
+        max_retries=0,
+    )
     if not hasattr(client, "decisions"):
         raise ClaudeCallError(
             'el paquete openai es viejo para la Decisions API: pip install "openai>=3.26.0"'
@@ -472,16 +467,15 @@ def estimate_plates(
     """
     if not plate_jpegs:
         return PlatesReport(plates=[], people_present=True)
-    provider = provider or os.environ.get("CLAUDE_PROVIDER") or "cli"
+    # lo que no vino por parámetro (app.py lo pasa todo) sale de la configuración
+    cfg = settings.current()  # barato: la configuración activa o la del entorno
+    provider = provider or cfg.claude_provider
     if provider not in _BACKENDS:
         raise ValueError(
             f"CLAUDE_PROVIDER desconocido: {provider!r}. Opciones: {sorted(_BACKENDS)}"
         )
-    model = model or os.environ.get(MODEL_ENV[provider]) or DEFAULT_MODELS[provider]
-    if timeout_s is None:
-        timeout_s = float(
-            os.environ.get(TIMEOUT_ENV[provider]) or DEFAULT_TIMEOUTS[provider]
-        )
+    model = model or cfg.model_for(provider)
+    timeout_s = cfg.timeout_for(provider) if timeout_s is None else timeout_s
     # Una sola vez y fuera del loop: las imágenes no se recodifican en cada intento, y un
     # `references` de otro largo es un bug del que llama (ValueError), no un fallo de Claude.
     # `references` se normaliza acá y lo usan igual las imágenes y las preguntas.

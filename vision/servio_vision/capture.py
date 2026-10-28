@@ -54,6 +54,7 @@ def open_source(
     speed: float | None = None,
     start: datetime | None = None,
     anonymize: Anonymizer | None = None,
+    face_model: Path | None = None,
 ) -> Iterator[Frame]:
     """Iterador de `(frame, ts)` según el tipo de `source`.
 
@@ -63,8 +64,9 @@ def open_source(
     lo más rápido posible.
     `start`: ts del primer frame de un video o carpeta (por defecto, ahora).
     `anonymize`: se aplica a cada frame apenas se lee; por defecto, las caras
-    difuminadas (`privacy.default_anonymizer()`). Es el **único** lugar donde se
-    engancha: los lectores devuelven el frame crudo y acá se envuelve.
+    difuminadas (`privacy.default_anonymizer()`, con el detector `face_model` de la
+    configuración si se pasa). Es el **único** lugar donde se engancha: los lectores
+    devuelven el frame crudo y acá se envuelve.
 
     Abre la fuente y resuelve el anonimizador antes de devolver el iterador: una
     fuente que no existe o no abre, o el modelo de caras que falta
@@ -79,7 +81,7 @@ def open_source(
         raise FileNotFoundError(f"No existe la fuente: {source}")
     # recién con una fuente que existe: un error de tipeo no tiene que terminar en
     # "no se pudo bajar el modelo"
-    anonymize = anonymize or privacy.default_anonymizer()
+    anonymize = anonymize or privacy.default_anonymizer(face_model=face_model)
     if is_camera:
         raw = read_camera(int(source) if source.isdigit() else source, interval)
     elif path.is_dir():

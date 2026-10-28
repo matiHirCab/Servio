@@ -23,7 +23,8 @@ No hay backend web ni dashboard. El estado vive en memoria; se guarda un log en 
 
 | Parte | Carpeta | Qué hace | Dueño |
 |---|---|---|---|
-| Pipeline | `vision/main.py`, `servio_vision/{capture,zones,change,smoothing}.py` | Lee el video, recorta cada mesa, decide cuándo clasificar, suaviza | Jessica |
+| Configuración y armado | `servio_vision/{settings,cli,app}.py`, `vision/main.py`, `vision/config/servio.example.toml` | Un `Settings` por casa (flags > toml > `.env`), y el armado del pipeline a partir de él | Jessica |
+| Pipeline | `servio_vision/{pipeline,capture,privacy,zones,smoothing,recording}.py` | Lee la fuente, difumina caras, recorta cada mesa, clasifica, suaviza, graba si se pidió | Jessica |
 | Clasificador | `servio_vision/classifiers/` | YOLO encuentra los platos; Claude estima cuánta comida queda | Tomás |
 | Reglas y avisos | `servio_vision/alerts/` | Estado de cada mesa, reglas, envío a Telegram, log | Matías |
 
@@ -38,7 +39,7 @@ Dueños por carpeta en [09-convenciones.md](09-convenciones.md).
 
 ## Flujo de datos
 
-1. `main.py` lee un frame por segundo del video o la cámara.
+1. `main.py` arma un `Settings` (flags, `--config casa.toml`, `.env`) y `app.run` lee un frame cada `interval` segundos del video o la cámara, ya con las caras difuminadas.
 2. Recorta cada mesa según `config/zones.json`, desde la resolución original.
 3. Si el recorte cambió (o pasó el refresco forzado), llama a `classifier.classify(recorte, table_id, items_anteriores)`, que devuelve un `TableReport` con los platos, su estado y su posición.
 4. El suavizado acepta un cambio de estado solo si se repite (ver [04-vision.md](04-vision.md)).

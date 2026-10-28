@@ -12,11 +12,11 @@ from datetime import UTC, datetime, timedelta
 import numpy as np
 import pytest
 
-import main as loop
 from servio_vision.classifiers import claude_plates
 from servio_vision.classifiers.claude_plates import PlateEstimate, PlatesReport
 from servio_vision.classifiers.hybrid import HybridClassifier
 from servio_vision.detector import Detection
+from servio_vision.pipeline import Pipeline
 from servio_vision.zones import TableZone, Zones
 
 FRAME = np.zeros((400, 600, 3), np.uint8)
@@ -83,7 +83,7 @@ def in_frame(bbox, rect):
 
 def test_plate_boxes_stay_on_the_plates_when_the_table_box_jumps(claude):
     scene = Scene()
-    pipeline = loop.Pipeline(
+    pipeline = Pipeline(
         HybridClassifier(detector=scene), None, lambda o: None, tables=scene
     )
     steps = [

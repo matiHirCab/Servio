@@ -13,3 +13,5 @@ vision/models/
 vision/out/
 # pesos de MobileCLIP que baja YOLOE
 mobileclip_blt.ts
+# configuración de cada casa (vision/config/servio.example.toml es el modelo)
+vision/config/casa-*.toml
