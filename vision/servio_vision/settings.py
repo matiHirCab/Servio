@@ -301,5 +301,21 @@ def current() -> Settings:
         return _active
     snapshot = tuple(sorted(os.environ.items()))
     if _fallback is None or _fallback[0] != snapshot:
-        _fallback = (snapshot, Settings.load())
+        loaded = Settings.load()
+        # la foto del entorno, después de cargar el .env: así la llamada siguiente
+        # ya coincide y no se rearma dos veces
+        _fallback = (tuple(sorted(os.environ.items())), loaded)
     return _fallback[1]
+
+
+def explain(error: Exception) -> str:
+    """Un `ValidationError` de pydantic en una línea legible: `demo_mode: Input should
+    be a valid boolean (vino 'si')`; cualquier otro error, su texto."""
+    errors = getattr(error, "errors", None)
+    if errors is None:
+        return str(error)
+    parts = []
+    for item in errors():
+        where = ".".join(str(p) for p in item.get("loc", ())) or "configuración"
+        parts.append(f"{where}: {item['msg']} (vino {item.get('input')!r})")
+    return "; ".join(parts)

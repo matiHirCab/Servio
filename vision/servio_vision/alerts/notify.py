@@ -64,12 +64,13 @@ class TelegramNotifier:
         """Token y grupo de `env`; sin `env`, de la configuración (settings.py)."""
         if env is None:
             cfg = settings.current()
-            env = {
-                "TELEGRAM_BOT_TOKEN": cfg.telegram_bot_token,
-                "TELEGRAM_GROUP_CHAT_ID": cfg.telegram_group_chat_id,
-            }
-        token = env.get("TELEGRAM_BOT_TOKEN", "").strip()
-        chat_id = env.get("TELEGRAM_GROUP_CHAT_ID", "").strip()
+            token, chat_id = (
+                cfg.telegram_bot_token.strip(),
+                cfg.telegram_group_chat_id.strip(),
+            )
+        else:
+            token = env.get("TELEGRAM_BOT_TOKEN", "").strip()
+            chat_id = env.get("TELEGRAM_GROUP_CHAT_ID", "").strip()
         missing = [
             name
             for name, value in (

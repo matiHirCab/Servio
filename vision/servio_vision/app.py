@@ -16,6 +16,7 @@ from servio_vision import alerts, prompt
 from servio_vision.alerts.config import load_config
 from servio_vision.capture import open_source
 from servio_vision.classifier import get_classifier
+from servio_vision.cli import require_source
 from servio_vision.dish_match import DishMatcher
 from servio_vision.pipeline import Pipeline
 from servio_vision.recording import FrameRecorder
@@ -190,8 +191,7 @@ def build_pipeline(settings: Settings) -> Pipeline | None:
 
 def run(settings: Settings, limit: int | None = None) -> int:
     """El loop: abre la fuente, graba si se pidió y procesa cada lectura."""
-    if settings.source is None:
-        logger.error("Falta la fuente: --source, o `source` en el toml de --config")
+    if not require_source(settings):
         return 2
     pipeline = build_pipeline(settings)
     if pipeline is None:

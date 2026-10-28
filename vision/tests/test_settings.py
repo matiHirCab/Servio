@@ -260,6 +260,34 @@ def test_api_model_ignores_cli_aliases(monkeypatch):
     assert cfg.api_model() == "claude-sonnet-5-5"
 
 
+def test_bad_values_are_explained_in_one_line(tmp_path, caplog):
+    toml = tmp_path / "casa.toml"
+    toml.write_text('source = "0"\nsmooth_min_confidence = 2\n', encoding="utf-8")
+    caplog.set_level("ERROR")
+    assert loop.main(["--config", str(toml)]) == 2
+    [line] = [r.message for r in caplog.records]
+    assert "smooth_min_confidence" in line and "vino 2" in line and "\n" not in line
+
+
+def test_estimate_plates_falls_back_for_empty_values(monkeypatch):
+    """Un modelo vacío (`model=""`, como un flag sin valor) toma el configurado, como
+    hacía la cadena `os.environ.get(...) or DEFAULT`."""
+    from servio_vision.classifiers import claude_plates
+
+    calls = []
+
+    def fake(request, model, timeout_s):
+        calls.append((model, timeout_s))
+        return {"plates": [], "people_present": True}, {}
+
+    monkeypatch.setitem(claude_plates._BACKENDS, "cli", fake)
+    monkeypatch.setattr(claude_plates, "RETRY_WAIT_S", 0)
+    monkeypatch.delenv("CLAUDE_MODEL", raising=False)
+    monkeypatch.delenv("CLAUDE_TIMEOUT_S", raising=False)
+    claude_plates.estimate_plates(b"jpeg", [b"jpeg"], "T1", provider="cli", model="")
+    assert calls[0] == ("haiku", 15.0)
+
+
 def test_current_reuses_the_fallback_until_the_environment_changes(monkeypatch):
     monkeypatch.delenv("CLAUDE_MODEL", raising=False)
     first = settings.current()

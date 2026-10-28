@@ -252,7 +252,12 @@ def _call_anthropic(
             "falta el paquete anthropic: pip install anthropic"
         ) from e
 
-    client = anthropic.Anthropic(timeout=timeout_s, max_retries=0)
+    # la key de la configuración (settings.py); sin ella, la que el SDK encuentre
+    client = anthropic.Anthropic(
+        api_key=settings.current().anthropic_api_key or None,
+        timeout=timeout_s,
+        max_retries=0,
+    )
     try:
         resp = client.messages.create(
             model=model,
@@ -409,7 +414,11 @@ def _call_openai(
     parts = [OPENAI_FORMAT.text(prompt.openai_instructions()), *request.content]
     # las preguntas same_plate_i solo van para los platos con referencia
     questions = prompt.decision_questions(request.has_reference)
-    client = openai.OpenAI(timeout=timeout_s, max_retries=0)
+    client = openai.OpenAI(
+        api_key=settings.current().openai_api_key or None,
+        timeout=timeout_s,
+        max_retries=0,
+    )
     if not hasattr(client, "decisions"):
         raise ClaudeCallError(
             'el paquete openai es viejo para la Decisions API: pip install "openai>=3.26.0"'
@@ -459,7 +468,7 @@ def estimate_plates(
     if not plate_jpegs:
         return PlatesReport(plates=[], people_present=True)
     # lo que no vino por parámetro (app.py lo pasa todo) sale de la configuración
-    cfg = settings.current() if None in (provider, model, timeout_s) else None
+    cfg = settings.current()  # barato: la configuración activa o la del entorno
     provider = provider or cfg.claude_provider
     if provider not in _BACKENDS:
         raise ValueError(

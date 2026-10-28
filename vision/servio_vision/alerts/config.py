@@ -17,7 +17,7 @@ PROD_REMINDER = 3 * 60  # R: recordatorio si la condición sigue
 MAX_REMINDERS = 2
 
 # Segundos entre lecturas por defecto (`--interval` de main.py, 04-vision.md).
-DEFAULT_INTERVAL = 30
+DEFAULT_INTERVAL = settings.DEFAULT_INTERVAL  # un solo default de cadencia
 
 # El suavizado necesita 2 lecturas para aceptar un cambio: es lo mínimo observable.
 MIN_READINGS = 2
@@ -76,17 +76,16 @@ def load_config(
 ) -> AlertConfig:
     """Arma la config de avisos. `demo` ya resuelto por el llamador (--demo le gana a
     DEMO_MODE). Sin `env`, los umbrales salen de la configuración (settings.py)."""
-    if env is None:
-        cfg = settings.current()
-        env = {
-            name: "" if value is None else str(value)
-            for name, value in (
-                ("ALERT_T1", cfg.alert_t1),
-                ("ALERT_T2", cfg.alert_t2),
-                ("ALERT_REMINDER", cfg.alert_reminder),
-            )
-        }
     flags = {"t1": t1, "t2": t2, "reminder": reminder}
+    if env is None:
+        cfg = settings.current()  # ya validados (enteros ≥ 1)
+        configured = {
+            "t1": cfg.alert_t1,
+            "t2": cfg.alert_t2,
+            "reminder": cfg.alert_reminder,
+        }
+    else:
+        configured = {key: _from_env(env, ENV_VARS[key]) for key in flags}
     if demo:
         defaults = dict.fromkeys(flags, MIN_READINGS * interval)
     else:
@@ -94,11 +93,10 @@ def load_config(
 
     values = {}
     for key, flag in flags.items():
-        from_env = _from_env(env, ENV_VARS[key])
         if flag is not None:
             values[key] = flag
-        elif from_env is not None:
-            values[key] = from_env
+        elif configured[key] is not None:
+            values[key] = configured[key]
         else:
             values[key] = defaults[key]
     return AlertConfig(interval=interval, **values)

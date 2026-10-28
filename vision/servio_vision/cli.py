@@ -10,7 +10,7 @@ import logging
 from pathlib import Path
 
 from servio_vision.classifier import available_classifiers
-from servio_vision.settings import Settings, activate
+from servio_vision.settings import Settings, activate, explain
 
 logger = logging.getLogger("servio")
 
@@ -117,10 +117,17 @@ def load_settings(args: argparse.Namespace) -> Settings | None:
     o no hay fuente."""
     try:
         settings = settings_from_args(args)
-    except (OSError, ValueError) as e:
-        logger.error("Configuración: %s", e)
+    except (OSError, ValueError) as e:  # toml, rango (ValidationError), fuente
+        logger.error("Configuración: %s", explain(e))
         return None
-    if settings.source is None:
-        logger.error("Falta la fuente: --source, o `source` en el toml de --config")
+    if not require_source(settings):
         return None
     return activate(settings)  # también lo hace build_pipeline; acá, para la vista
+
+
+def require_source(settings: Settings) -> bool:
+    """Sin fuente no hay nada que leer: lo dice y devuelve False."""
+    if settings.source is None:
+        logger.error("Falta la fuente: --source, o `source` en el toml de --config")
+        return False
+    return True
