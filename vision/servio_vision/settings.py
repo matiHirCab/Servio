@@ -23,6 +23,7 @@ que `cli.load_settings` dejó activa al arrancar o, si no hay, la del entorno.
     python main.py --config config/casa.toml --demo     # el flag pisa al toml
 """
 
+import os
 import tomllib
 from pathlib import Path
 from typing import Any, Literal
@@ -81,8 +82,17 @@ HOUSE_KEYS = (
 )
 
 # Rutas del toml que no son archivos del repo: relativas a la carpeta del toml, así
-# `zones = "zones.json"` al lado de `casa.toml` anda desde cualquier carpeta.
+# `zones = "zones.json"` al lado de `casa.toml` anda desde cualquier carpeta. (Por
+# flag o por `SERVIO_*` cuentan desde donde se corre, como cualquier flag.)
 TOML_PATH_KEYS = ("zones", "record", "restaurante", "fixture", "source")
+
+# Nunca en el toml (se versiona o se comparte): solo en el .env.
+SECRET_KEYS = (
+    "telegram_bot_token",
+    "anthropic_api_key",
+    "openai_api_key",
+    "database_url",  # la URL de Neon/Supabase lleva la contraseña
+)
 
 
 class Settings(BaseSettings):
@@ -162,12 +172,31 @@ class Settings(BaseSettings):
             return path
         return REPO_DIR / path
 
+    @field_validator("source", mode="before")
+    @classmethod
+    def _source_as_text(cls, value: Any) -> Any:
+        # `source = 0` en el toml es un entero: la webcam 0, como `--source 0`
+        return (
+            str(value)
+            if isinstance(value, int) and not isinstance(value, bool)
+            else value
+        )
+
     # --- derivados, para que los módulos no repitan la regla ---
 
     def model_for(self, provider: str | None = None) -> str:
+        """Modelo del proveedor: el configurado para él o su default."""
         provider = provider or self.claude_provider
         configured = self.openai_model if provider == "openai" else self.claude_model
         return configured or DEFAULT_MODELS[provider]
+
+    def api_model(self) -> str:
+        """Modelo para la API de Anthropic (dish_match). `claude_model` solo cuenta
+        si el proveedor es `anthropic`: con `cli` es un alias (`haiku`, `sonnet`)
+        que la API no conoce."""
+        if self.claude_provider == "anthropic" and self.claude_model:
+            return self.claude_model
+        return DEFAULT_MODELS["anthropic"]
 
     def timeout_for(self, provider: str | None = None) -> float:
         provider = provider or self.claude_provider
@@ -219,15 +248,21 @@ def read_toml(path: Path) -> dict[str, Any]:
         raise ValueError(f"{path} no es un TOML válido: {e}") from e
     flat: dict[str, Any] = {}
     for key, value in data.items():
-        if isinstance(value, dict):
-            flat.update(value)
-        else:
-            flat[key] = value
+        entries = value.items() if isinstance(value, dict) else [(key, value)]
+        for name, item in entries:
+            if name in flat:
+                raise ValueError(f"{path}: la clave {name!r} está dos veces")
+            flat[name] = item
     unknown = sorted(k for k in flat if k not in Settings.model_fields)
     if unknown:
         raise ValueError(
             f"{path}: claves que Servio no conoce: {', '.join(unknown)} "
             "(ver vision/config/servio.example.toml)"
+        )
+    secrets = sorted(k for k in flat if k in SECRET_KEYS)
+    if secrets:
+        raise ValueError(
+            f"{path}: {', '.join(secrets)} son secretos y van en el .env, no en el toml"
         )
     for key in TOML_PATH_KEYS:
         value = flat.get(key)
@@ -244,12 +279,13 @@ def _is_relative_path(key: str, value: str) -> bool:
 
 
 _active: Settings | None = None
+_fallback: tuple[tuple[tuple[str, str], ...], Settings] | None = None  # (entorno, cfg)
 
 
 def activate(settings: Settings) -> Settings:
     """Deja esta configuración (flags > toml > entorno) como la del proceso: es la
     que devuelve `current()` a los módulos que se construyen sin parámetros. La
-    llama `cli.load_settings` al arrancar."""
+    llaman `cli.load_settings` y `app.build_pipeline`."""
     global _active
     _active = settings
     return settings
@@ -257,5 +293,13 @@ def activate(settings: Settings) -> Settings:
 
 def current() -> Settings:
     """La configuración del proceso (`activate`, con toml y flags) o, si todavía no
-    se cargó ninguna, la del entorno de este momento."""
-    return _active if _active is not None else Settings.load()
+    se cargó ninguna, la del entorno de este momento (las herramientas que no pasan
+    por `app`). Esa se arma una vez y se reusa mientras el entorno no cambie: se la
+    pide cada llamada a Claude, cada suavizado, cada detector."""
+    global _fallback
+    if _active is not None:
+        return _active
+    snapshot = tuple(sorted(os.environ.items()))
+    if _fallback is None or _fallback[0] != snapshot:
+        _fallback = (snapshot, Settings.load())
+    return _fallback[1]

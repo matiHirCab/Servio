@@ -212,3 +212,58 @@ def test_current_returns_the_active_settings(tmp_path, monkeypatch):
     assert cfg is not None and settings.current() is cfg
     assert settings.current().claude_cli == "C:/x/claude.exe"
     assert load_settings(build_parser().parse_args([])) is None  # sin fuente
+
+
+def test_build_pipeline_activates_its_settings(tmp_path, monkeypatch):
+    """`run(Settings.load(...))` sin pasar por cli también deja activa la
+    configuración que validó: el prompt que loguea es el que después se usa."""
+    from servio_vision.app import build_pipeline
+
+    zones = tmp_path / "zones.json"
+    save_zones(ZONES, zones)
+    monkeypatch.delenv("DEMO_MODE", raising=False)
+    cfg = Settings.load(source="0", zones=zones, claude_cli="C:/x/claude.exe")
+    assert build_pipeline(cfg) is not None
+    assert settings.current() is cfg
+
+
+def test_run_without_source_explains(caplog):
+    from servio_vision.app import run
+
+    caplog.set_level("ERROR")
+    assert run(Settings.load()) == 2
+    assert "Falta la fuente" in caplog.text
+
+
+def test_toml_source_can_be_the_webcam_index(tmp_path):
+    toml = tmp_path / "casa.toml"
+    toml.write_text("source = 0\n", encoding="utf-8")  # entero, como --source 0
+    assert Settings.load(toml).source == "0"
+
+
+def test_toml_rejects_repeated_keys_and_secrets(tmp_path):
+    toml = tmp_path / "casa.toml"
+    toml.write_text("[camara]\ninterval = 10\n[avisos]\ninterval = 99\n", "utf-8")
+    with pytest.raises(ValueError, match="dos veces"):
+        Settings.load(toml)
+    toml.write_text('telegram_bot_token = "123:abc"\n', encoding="utf-8")
+    with pytest.raises(ValueError, match="secretos"):
+        Settings.load(toml)
+
+
+def test_api_model_ignores_cli_aliases(monkeypatch):
+    """`claude_model = "sonnet"` para `claude -p` no es un modelo de la API: el
+    matcher de platos sigue con el default de la API."""
+    cfg = Settings.load(claude_provider="cli", claude_model="sonnet")
+    assert cfg.model_for() == "sonnet" and cfg.api_model() == "claude-haiku-5-5"
+    cfg = Settings.load(claude_provider="anthropic", claude_model="claude-sonnet-5-5")
+    assert cfg.api_model() == "claude-sonnet-5-5"
+
+
+def test_current_reuses_the_fallback_until_the_environment_changes(monkeypatch):
+    monkeypatch.delenv("CLAUDE_MODEL", raising=False)
+    first = settings.current()
+    assert settings.current() is first  # mismo entorno: no se rearma
+    monkeypatch.setenv("CLAUDE_MODEL", "sonnet")
+    second = settings.current()
+    assert second is not first and second.claude_model == "sonnet"

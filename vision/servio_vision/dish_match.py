@@ -30,7 +30,7 @@ class DishMatcher:
         los del entorno."""
         if model is None or api_key is None:
             cfg = settings.current()
-            model = model or cfg.model_for("anthropic")
+            model = model or cfg.api_model()
             api_key = api_key or cfg.anthropic_api_key
         self.model = model
         self._client = None

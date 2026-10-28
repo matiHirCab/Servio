@@ -21,7 +21,7 @@ from servio_vision.pipeline import Pipeline
 from servio_vision.recording import FrameRecorder
 from servio_vision.restaurant import DEFAULT_DIR as RESTAURANT_DIR
 from servio_vision.restaurant import Restaurant
-from servio_vision.settings import Settings
+from servio_vision.settings import Settings, activate
 from servio_vision.smoothing import TableSmoother
 from servio_vision.tables import TableDetector, TableTracker
 from servio_vision.zones import Zones, load_zones
@@ -88,6 +88,9 @@ def finished_after_seconds(settings: Settings) -> float:
 def build_pipeline(settings: Settings) -> Pipeline | None:
     """Zonas, umbrales y clasificador según la configuración. `None` si algo falta
     (ya logueado)."""
+    # desde acá, lo que un módulo tome por fallback (`settings.current()`) es esta
+    # misma configuración, con lo del toml y los flags
+    activate(settings)
     zones: Zones | None = None
     tables: TableTracker | None = None
     if settings.zones is None:
@@ -177,8 +180,7 @@ def build_pipeline(settings: Settings) -> Pipeline | None:
         tables=tables,
         restaurant=restaurant,
         dish_matcher=DishMatcher(
-            model=settings.model_for("anthropic"),
-            api_key=settings.anthropic_api_key,
+            model=settings.api_model(), api_key=settings.anthropic_api_key
         )
         if restaurant is not None
         else None,
@@ -188,6 +190,9 @@ def build_pipeline(settings: Settings) -> Pipeline | None:
 
 def run(settings: Settings, limit: int | None = None) -> int:
     """El loop: abre la fuente, graba si se pidió y procesa cada lectura."""
+    if settings.source is None:
+        logger.error("Falta la fuente: --source, o `source` en el toml de --config")
+        return 2
     pipeline = build_pipeline(settings)
     if pipeline is None:
         return 2

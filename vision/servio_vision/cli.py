@@ -123,4 +123,4 @@ def load_settings(args: argparse.Namespace) -> Settings | None:
     if settings.source is None:
         logger.error("Falta la fuente: --source, o `source` en el toml de --config")
         return None
-    return activate(settings)
+    return activate(settings)  # también lo hace build_pipeline; acá, para la vista

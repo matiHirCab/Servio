@@ -4,7 +4,7 @@
 # Prioridad: flags > este archivo > entorno y .env > defaults (servio_vision/settings.py).
 # Las claves son las mismas que las variables del .env, en minúscula. Las tablas
 # ([camara], [modelo]…) son solo para agrupar: se aplanan al leer.
-# Los secretos (tokens, API keys) van en el .env, no acá.
+# Los secretos (tokens, API keys, DATABASE_URL) van en el .env, no acá: el toml los rechaza.
 # Rutas relativas: zones, record, restaurante, fixture y un source que sea archivo cuentan
 # desde la carpeta de este toml; yolo_weights, face_model y los prompts, desde la raíz del repo.
 
@@ -36,5 +36,4 @@ demo = false
 # smooth_hard_readings = 3
 # smooth_min_confidence = 0.8
 
-[base]
-# database_url = "postgresql://..."         # Postgres compartido (A-6); sin esto, SQLite local
+# La base compartida (DATABASE_URL, A-6) lleva la contraseña: va en el .env, no acá.
