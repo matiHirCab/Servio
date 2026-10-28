@@ -4,7 +4,7 @@ Guarda lo que pasa en el salón para sacar métricas con SQL:
 
     mozos (id, nombre)
     mesas (id, nombre, mozo_id → mozos)
-    platos (id, nombre)                                   -- la carta
+    platos (id, nombre, precio)                           -- la carta
     respuestas_tipicas (plato_id → platos, orden, texto)  -- opciones del aviso
     platos_servidos (id, mesa_id → mesas, plato_id → platos, track_id, servido_at, origen)
     avisos (id, tipo, mesa_id → mesas, mozo_id → mozos,
@@ -37,7 +37,8 @@ CREATE TABLE IF NOT EXISTS mesas (
 );
 CREATE TABLE IF NOT EXISTS platos (
     id TEXT PRIMARY KEY,
-    nombre TEXT NOT NULL UNIQUE
+    nombre TEXT NOT NULL UNIQUE,
+    precio REAL
 );
 CREATE TABLE IF NOT EXISTS respuestas_tipicas (
     plato_id TEXT NOT NULL REFERENCES platos(id),
@@ -92,8 +93,15 @@ class Database:
             self._migrate()
 
     def _migrate(self) -> None:
-        """Bases creadas antes de `motivo_cierre`: se agrega la columna. En el
-        historial simulado, toda mesa terminada se cerró retirando los platos."""
+        """Bases creadas antes de `motivo_cierre` o de `precio`: se agregan las
+        columnas. En el historial simulado, toda mesa terminada se cerró
+        retirando los platos."""
+        dish_columns = {
+            r["name"] for r in self._conn.execute("PRAGMA table_info(platos)")
+        }
+        if "precio" not in dish_columns:
+            with self._conn:
+                self._conn.execute("ALTER TABLE platos ADD COLUMN precio REAL")
         columns = {r["name"] for r in self._conn.execute("PRAGMA table_info(avisos)")}
         if "motivo_cierre" in columns:
             return
@@ -130,7 +138,8 @@ class Database:
                 )
             for did, dish in restaurant.dishes.items():
                 c.execute(
-                    "INSERT OR REPLACE INTO platos VALUES (?, ?)", (did, dish.name)
+                    "INSERT OR REPLACE INTO platos VALUES (?, ?, ?)",
+                    (did, dish.name, dish.price),
                 )
                 c.execute("DELETE FROM respuestas_tipicas WHERE plato_id = ?", (did,))
                 for i, text in enumerate(dish.answers):

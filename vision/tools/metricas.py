@@ -6,7 +6,9 @@ historial simulado (`fixtures/restaurante/historial.jsonl`, que se importa la
 primera vez). Muestra:
 - platos que vuelven llenos: % de las veces que se sirvieron, con el motivo más
   común que respondieron los mozos;
-- mozos: minutos hasta atender una mesa que terminó, y segundos en responder el aviso.
+- mozos: minutos hasta atender una mesa que terminó, y segundos en responder el aviso;
+- mesa terminada sin atender, mesas olvidadas, tiempo de mesa y rotación, y
+  desperdicio en $ (docs/context/13-metricas.md).
 
 Con `--rol` muestra solo lo que ese rol puede ver según `config/servio.toml`
 (ver `servio_vision/roles.py`): el mozo no ve métricas.
@@ -23,10 +25,14 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from servio_vision.db import Database
 from servio_vision.metrics import (
     HISTORY,
+    IMAGE_METRICS,
     REPORT_METRICS,
     SQL_ANSWER,
     SQL_ATTEND,
     SQL_DISHES,
+    SQL_FORGOTTEN,
+    SQL_UNATTENDED,
+    SQL_WASTE,
     VISION_DIR,
     compute,
     print_report,
@@ -71,6 +77,9 @@ def main(argv: list[str] | None = None) -> int:
             ("Platos que vuelven llenos", SQL_DISHES),
             ("Minutos hasta retirar los platos", SQL_ATTEND),
             ("Segundos en responder", SQL_ANSWER),
+            ("Mesa terminada sin atender", SQL_UNATTENDED),
+            ("Mesas olvidadas", SQL_FORGOTTEN),
+            ("Desperdicio en $", SQL_WASTE),
         ):
             print(f"-- {title}{sql}")
     m = compute(db)
@@ -80,7 +89,7 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     print_report(m, visible)
     if args.image:
-        if visible is not None and visible != set(REPORT_METRICS):
+        if visible is not None and not set(IMAGE_METRICS) <= visible:
             print(
                 "\n(la imagen muestra todas las métricas: no se guarda para este rol)"
             )

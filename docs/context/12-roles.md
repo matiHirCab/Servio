@@ -15,6 +15,8 @@ Quién ve qué en la vista de reconocimiento, el dashboard y los avisos (tarea R
 
 ## Métricas por rol (default)
 
+Qué es cada métrica y cómo se calcula: [13-metricas.md](13-metricas.md).
+
 | Métrica (M-1) | id en la config | Mozo | Encargado | Dueño |
 |---|---|---|---|---|
 | Avisos abiertos y quién los tomó | `avisos_abiertos` | – | Sí | Sí |
