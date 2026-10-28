@@ -45,7 +45,7 @@ Ver `.env.example`: `CLAUDE_PROVIDER`, `CLAUDE_MODEL`, `OPENAI_MODEL`, `CLAUDE_T
 
 ## Privacidad y datos
 
-- **Caras difuminadas apenas se lee el frame** (`servio_vision/privacy.py`, enganchado en `capture.py`): nada de lo que viene después (pipeline, vista de demo, grabaciones, `out/`) ve una cara. Si agregás una forma nueva de leer frames, tiene que pasar por `privacy.default_anonymizer()` (o por `CameraReader`, que ya lo hace). El modelo de YuNet se baja a `vision/models/` (ignorado); `FACE_MODEL` apunta a otra ruta.
+- **Caras difuminadas apenas se lee el frame** (`servio_vision/privacy.py`, enganchado en `capture.py`): nada de lo que viene después (pipeline, vista de demo, grabaciones, `out/`) ve una cara. Si agregás una forma nueva de leer frames, sumala como lector de `capture.open_source`, que es el único que envuelve los frames con `privacy.default_anonymizer()`; `CameraReader` solo entrega frames **crudos**, no lo uses directo para mostrar ni guardar. El modelo de YuNet se baja a `vision/models/` (ignorado); `FACE_MODEL` apunta a otra ruta.
 - **No se guardan frames** salvo con `main.py --record DIR`, y esos también salen difuminados. Una herramienta que escribe imágenes en `out/` tiene que leerlas con `capture.open_source`.
 - A Claude solo se mandan recortes de mesas y platos, no el salón entero.
 - Datasets, pesos e imágenes nunca se suben al repo (`vision/data/`, `vision/models/` y `vision/out/` están en `.gitignore`):

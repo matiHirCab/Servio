@@ -498,9 +498,11 @@ def main(argv: list[str] | None = None) -> int:
             # las caras salen difuminadas de open_source (C-3): nada de lo que
             # sigue, tampoco la grabación, ve una cara. La fuente y el modelo de
             # caras se abren acá: si fallan, fallan acá.
-            frames = open_source(args.source, args.interval, args.speed)
+            # la carpeta de grabación primero: si no se puede crear, la cámara
+            # todavía no se abrió y no queda un hilo leyéndola
             recorder = FrameRecorder(args.record) if args.record else None
-        except OSError as e:  # fuente que no existe o no abre, PrivacyError, --record
+            frames = open_source(args.source, args.interval, args.speed)
+        except OSError as e:  # --record, fuente que no existe o no abre, PrivacyError
             logger.error("%s", e)
             return 2
         logger.info("Privacidad: caras difuminadas en la captura")

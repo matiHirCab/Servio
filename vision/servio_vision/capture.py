@@ -73,21 +73,20 @@ def open_source(
         raise ValueError("interval tiene que ser mayor a 0")
     start = start or datetime.now(UTC)
     path = Path(source)
-    if source.isdigit() or source.startswith(STREAM_PREFIXES):
-        camera = int(source) if source.isdigit() else source
-        anonymize = anonymize or privacy.default_anonymizer()
-        raw = read_camera(camera, interval)
-    elif path.is_dir():
-        anonymize = anonymize or privacy.default_anonymizer()
-        raw = read_folder(path, interval, speed, start)
-    elif path.is_file() and path.suffix.lower() in IMAGE_SUFFIXES:
-        anonymize = anonymize or privacy.default_anonymizer()
-        raw = read_image(path, start)  # una foto suelta: un solo frame
-    elif path.is_file():
-        anonymize = anonymize or privacy.default_anonymizer()
-        raw = read_video(path, interval, speed, start)
-    else:
+    is_camera = source.isdigit() or source.startswith(STREAM_PREFIXES)
+    if not is_camera and not path.exists():
         raise FileNotFoundError(f"No existe la fuente: {source}")
+    # recién con una fuente que existe: un error de tipeo no tiene que terminar en
+    # "no se pudo bajar el modelo"
+    anonymize = anonymize or privacy.default_anonymizer()
+    if is_camera:
+        raw = read_camera(int(source) if source.isdigit() else source, interval)
+    elif path.is_dir():
+        raw = read_folder(path, interval, speed, start)
+    elif path.suffix.lower() in IMAGE_SUFFIXES:
+        raw = read_image(path, start)  # una foto suelta: un solo frame
+    else:
+        raw = read_video(path, interval, speed, start)
     return ((anonymize(frame), ts) for frame, ts in raw)
 
 

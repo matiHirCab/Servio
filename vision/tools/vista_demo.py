@@ -291,18 +291,44 @@ def _wait(due: float | None, no_window: bool) -> str | None:
 class _Recorder:
     STILLS_FPS = 10  # una carpeta de fotos se graba a 10 fps repitiendo cada foto
 
-    def __init__(self, path: Path | None, fps: float) -> None:
+    # Cámara en vivo: los fps de la grabación son los que el loop logra de verdad
+    # (con la detección de caras en cada frame puede ser bastante menos que los de
+    # la cámara); se miden sobre los primeros frames antes de abrir el archivo.
+    LIVE_MEASURE_FRAMES = 15
+    LIVE_MEASURE_S = 2.0
+
+    def __init__(self, path: Path | None, fps: float, live: bool = False) -> None:
         self.path = path
         if fps < 1:  # carpeta de fotos: fps = 1 / interval
             self.fps = self.STILLS_FPS
             self.repeat = max(1, round(self.STILLS_FPS / fps))
         else:
             self.fps, self.repeat = fps, 1
+        self.live = live
+        self._pending: list[tuple[np.ndarray, float]] = []  # en vivo, hasta medir
         self.writer = None
 
     def write(self, image: np.ndarray) -> None:
         if self.path is None:
             return
+        if self.writer is None and self.live:
+            self._pending.append((image, time.monotonic()))
+            first, last = self._pending[0][1], self._pending[-1][1]
+            if (
+                len(self._pending) < self.LIVE_MEASURE_FRAMES
+                and last - first < self.LIVE_MEASURE_S
+            ):
+                return
+            if last > first:
+                measured = (len(self._pending) - 1) / (last - first)
+                self.fps = min(60.0, max(1.0, measured))
+            pending, self._pending = self._pending, []
+            for frame, _ in pending:
+                self._write(frame)
+            return
+        self._write(image)
+
+    def _write(self, image: np.ndarray) -> None:
         if self.writer is None:
             self.path.parent.mkdir(parents=True, exist_ok=True)
             h, w = image.shape[:2]
@@ -312,9 +338,14 @@ class _Recorder:
             self.writer.write(image)
 
     def close(self) -> None:
+        if self.path is None:
+            return
+        for frame, _ in self._pending:  # en vivo y cortado antes de medir
+            self._write(frame)
+        self._pending = []
         if self.writer is not None:
             self.writer.release()
-            logger.info("Video guardado en %s", self.path)
+            logger.info("Video guardado en %s (%g fps)", self.path, self.fps)
 
 
 def run(args) -> int:
@@ -334,7 +365,7 @@ def run(args) -> int:
     realtime = source.live or args.realtime
     state = DemoState(pipeline.zones)
     worker = ThreadPoolExecutor(max_workers=1)
-    recorder = _Recorder(args.record, source.fps)
+    recorder = _Recorder(args.record, source.fps, live=source.live)
     pending: Future | None = None
     pending_ts: datetime | None = None
     start = datetime.now(UTC)

@@ -157,11 +157,13 @@ def ensure_model(path: Path = MODEL_PATH) -> Path:
         if path.exists():
             return path
         raise PrivacyError(f"No existe el modelo de caras {MODEL_ENV}={path}")
-    if path.exists():
+    damaged = path.exists()
+    if damaged:
         if _sha256(path) == MODEL_SHA256:
             return path
-        logger.warning("El detector de caras en %s está dañado: lo bajo de nuevo", path)
-        path.unlink()
+        # No se borra: si no hay internet, el archivo que copiaron queda donde está
+        # (y si es otro modelo a propósito, va en FACE_MODEL).
+        logger.warning("El detector de caras en %s no es el esperado: lo bajo", path)
     logger.info("Bajando el detector de caras a %s", path)
     path.parent.mkdir(parents=True, exist_ok=True)
     # A un nombre propio de este proceso y recién al final `replace` (atómico): dos
@@ -173,6 +175,12 @@ def ensure_model(path: Path = MODEL_PATH) -> Path:
         _download(MODEL_URL, partial)
     except OSError as e:
         partial.unlink(missing_ok=True)
+        if damaged:
+            raise PrivacyError(
+                f"El detector de caras en {path} no es el esperado y no se pudo bajar "
+                f"({e}). Copiá {MODEL_NAME} de la carpeta del equipo, o si es otro "
+                f"modelo a propósito, apuntá {MODEL_ENV} a él."
+            ) from e
         raise PrivacyError(
             f"No se pudo bajar el detector de caras ({e}). Sin internet, copiá "
             f"{MODEL_NAME} a {path} desde la carpeta del equipo."
@@ -183,8 +191,8 @@ def ensure_model(path: Path = MODEL_PATH) -> Path:
         raise PrivacyError(
             f"El detector de caras bajado no es el esperado (sha256 {digest})"
         )
-    if path.exists():  # el otro proceso llegó primero: el suyo ya está verificado
-        partial.unlink()
+    if not damaged and path.exists() and _sha256(path) == MODEL_SHA256:
+        partial.unlink()  # el otro proceso llegó primero y el suyo ya está bien
         return path
     partial.replace(path)
     return path

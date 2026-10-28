@@ -13,12 +13,13 @@ import logging
 from datetime import datetime
 from pathlib import Path
 
-import cv2
 import numpy as np
+
+from servio_vision.zones import to_jpeg
 
 logger = logging.getLogger(__name__)
 
-JPEG_QUALITY = 90
+JPEG_QUALITY = 90  # más que los recortes (85): es lo que se guarda para reproducir
 
 
 class FrameRecorder:
@@ -30,12 +31,9 @@ class FrameRecorder:
 
     def save(self, frame: np.ndarray, ts: datetime) -> Path:
         path = self.directory / frame_name(ts)
-        # imencode + write_bytes y no imwrite: en Windows, imwrite no escribe rutas
-        # con tildes o eñes (`out/grabación`)
-        ok, jpeg = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, JPEG_QUALITY])
-        if not ok:
-            raise OSError(f"No se pudo codificar el frame para {path}")
-        path.write_bytes(jpeg.tobytes())
+        # to_jpeg + write_bytes y no cv2.imwrite: en Windows, imwrite no escribe
+        # rutas con tildes o eñes (`out/grabación`)
+        path.write_bytes(to_jpeg(frame, JPEG_QUALITY))
         self.saved += 1
         return path
 

@@ -223,6 +223,21 @@ def test_ensure_model_replaces_a_corrupt_default(tmp_path, monkeypatch):
     assert privacy.ensure_model(other) == other
 
 
+def test_ensure_model_keeps_an_unexpected_default_when_offline(tmp_path, monkeypatch):
+    """Un modelo copiado a mano que no coincide no se borra si no hay internet."""
+    path = tmp_path / "yunet.onnx"
+    path.write_bytes(b"otro build")
+    monkeypatch.setattr(privacy, "MODEL_PATH", path)
+
+    def offline(url, dst):
+        raise OSError("sin red")
+
+    monkeypatch.setattr(privacy, "_download", offline)
+    with pytest.raises(PrivacyError, match="FACE_MODEL"):
+        privacy.ensure_model(path)
+    assert path.read_bytes() == b"otro build"
+
+
 def test_ensure_model_rejects_a_wrong_hash(tmp_path, monkeypatch):
     monkeypatch.setattr(privacy, "MODEL_PATH", tmp_path / "yunet.onnx")
     monkeypatch.setattr(
