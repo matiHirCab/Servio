@@ -5,7 +5,7 @@ import os
 import pytest
 
 import main
-from servio_vision import alerts
+from servio_vision import alerts, privacy
 from servio_vision.alerts.notify import ConsoleNotifier
 
 # SERVIO_TEST_TELEGRAM=1 pytest → los tests que pasan por alerts mandan al grupo de verdad
@@ -35,3 +35,18 @@ def alerts_sandbox(tmp_path, monkeypatch):
     yield
     if alerts._processor is not None:
         alerts._processor.close()
+
+
+class NoFaces:
+    """Detector de caras que no ve ninguna: los tests no bajan el modelo de YuNet."""
+
+    def detect(self, frame):
+        return []
+
+
+@pytest.fixture(autouse=True)
+def no_face_model(monkeypatch):
+    """`capture.open_source` y `CameraReader` difuminan caras por defecto (C-3); sin
+    esto cada test que lee un video intentaría bajar el detector. Un test que quiera
+    ver caras pixeladas pone su propio detector con `monkeypatch`."""
+    monkeypatch.setattr(privacy, "load_detector", NoFaces)

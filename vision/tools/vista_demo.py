@@ -40,6 +40,7 @@ import numpy as np
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from main import Pipeline, build_parser, build_pipeline, setup_logging
+from servio_vision import privacy
 from servio_vision.alerts.state import table_status
 from servio_vision.capture import (
     IMAGE_SUFFIXES,
@@ -56,6 +57,7 @@ logger = logging.getLogger("servio.vista")
 WINDOW = "Servio"
 MAX_PLAUSIBLE_FPS = 120
 FALLBACK_FPS = 25
+FACE_DETECT_EVERY = 3  # solo mirando: ~120 ms por detección en 1080p, cada 3 da ~25 fps
 
 # colores BGR, por estado de mesa y de plato
 TABLE_COLORS = {
@@ -173,46 +175,61 @@ class ViewSource:
     frames: Iterator[tuple[np.ndarray, float]]
     live: bool  # cámara o stream: tiempo real, sin esperar entre frames
     fps: float  # para grabar
+    faces: privacy.FaceBlur  # el que difumina estos frames (C-3)
 
 
-def open_view_source(source: str, interval: float) -> ViewSource:
+def open_view_source(source: str, interval: float, detect_every: int = 1) -> ViewSource:
     """Abre la fuente con las mismas reglas que `capture.open_source`.
 
     A diferencia de `capture`, devuelve **todos** los frames (para que el video
     se vea fluido), no uno por intervalo. Una carpeta de fotos muestra cada foto
     durante `interval` segundos. Tira `OSError`/`FileNotFoundError` si no abre.
+
+    `detect_every`: cada cuántos frames seguidos (cámara o video) se detectan las
+    caras; en los del medio se pixelan las últimas cajas. Más de 1 solo para mirar:
+    con `--record` va 1, una cara que aparece entre detecciones quedaría grabada.
     """
     if source.isdigit() or source.startswith(STREAM_PREFIXES):
-        # el mismo lector que main.py: descarta los frames negros del arranque
-        # y se reconecta si el celular se corta
+        # el mismo lector que main.py: descarta los frames negros del arranque,
+        # se reconecta si el celular se corta y difumina las caras
+        faces = privacy.default_anonymizer(every=detect_every)
         reader = CameraReader(int(source) if source.isdigit() else source)
         reader.start()
         t0 = time.monotonic()
-        frames = ((frame, time.monotonic() - t0) for frame in reader.frames())
-        return ViewSource(frames, live=True, fps=reader.fps)
+        frames = ((faces(frame), time.monotonic() - t0) for frame in reader.frames())
+        return ViewSource(frames, live=True, fps=reader.fps, faces=faces)
     path = Path(source)
+    # como en capture.py: caras difuminadas apenas se lee, antes de mostrar o grabar
     if path.is_dir():
         files = sorted(p for p in path.iterdir() if p.suffix.lower() in IMAGE_SUFFIXES)
         if not files:
             raise FileNotFoundError(f"No hay imágenes en {path}")
+        # fotos distintas: las caras de una no dicen nada de la siguiente, detectar
+        # en todas
+        faces = privacy.default_anonymizer()
         images = (cv2.imread(str(f)) for f in files)
         frames = (
-            (image, i * interval) for i, image in enumerate(images) if image is not None
+            (faces(image), i * interval)
+            for i, image in enumerate(images)
+            if image is not None
         )
-        return ViewSource(frames, live=False, fps=1 / interval)
+        return ViewSource(frames, live=False, fps=1 / interval, faces=faces)
     if path.is_file():
+        # frames seguidos: detectar cada `detect_every` mantiene el video fluido.
+        # Antes de abrir el video: si falla, no queda el VideoCapture sin cerrar.
+        faces = privacy.default_anonymizer(every=detect_every)
         cap = cv2.VideoCapture(str(path))
         if not cap.isOpened():
             raise OSError(f"No se pudo abrir el video: {path}")
         fps = declared_fps(cap)
         frames = (
-            (frame, frame_seconds(cap, i, fps))
+            (faces(frame), frame_seconds(cap, i, fps))
             for i, frame in enumerate(_read_all(cap))
         )
         if fps > MAX_PLAUSIBLE_FPS:  # fps falsos (cámaras de seguridad): para grabar
             logger.warning("El video declara %g fps; grabo a %d", fps, FALLBACK_FPS)
             fps = FALLBACK_FPS
-        return ViewSource(frames, live=False, fps=fps)
+        return ViewSource(frames, live=False, fps=fps, faces=faces)
     raise FileNotFoundError(f"No existe la fuente: {source}")
 
 
@@ -274,18 +291,44 @@ def _wait(due: float | None, no_window: bool) -> str | None:
 class _Recorder:
     STILLS_FPS = 10  # una carpeta de fotos se graba a 10 fps repitiendo cada foto
 
-    def __init__(self, path: Path | None, fps: float) -> None:
+    # Cámara en vivo: los fps de la grabación son los que el loop logra de verdad
+    # (con la detección de caras en cada frame puede ser bastante menos que los de
+    # la cámara); se miden sobre los primeros frames antes de abrir el archivo.
+    LIVE_MEASURE_FRAMES = 15
+    LIVE_MEASURE_S = 2.0
+
+    def __init__(self, path: Path | None, fps: float, live: bool = False) -> None:
         self.path = path
         if fps < 1:  # carpeta de fotos: fps = 1 / interval
             self.fps = self.STILLS_FPS
             self.repeat = max(1, round(self.STILLS_FPS / fps))
         else:
             self.fps, self.repeat = fps, 1
+        self.live = live
+        self._pending: list[tuple[np.ndarray, float]] = []  # en vivo, hasta medir
         self.writer = None
 
     def write(self, image: np.ndarray) -> None:
         if self.path is None:
             return
+        if self.writer is None and self.live:
+            self._pending.append((image, time.monotonic()))
+            first, last = self._pending[0][1], self._pending[-1][1]
+            if (
+                len(self._pending) < self.LIVE_MEASURE_FRAMES
+                and last - first < self.LIVE_MEASURE_S
+            ):
+                return
+            if last > first:
+                measured = (len(self._pending) - 1) / (last - first)
+                self.fps = min(60.0, max(1.0, measured))
+            pending, self._pending = self._pending, []
+            for frame, _ in pending:
+                self._write(frame)
+            return
+        self._write(image)
+
+    def _write(self, image: np.ndarray) -> None:
         if self.writer is None:
             self.path.parent.mkdir(parents=True, exist_ok=True)
             h, w = image.shape[:2]
@@ -295,15 +338,22 @@ class _Recorder:
             self.writer.write(image)
 
     def close(self) -> None:
+        if self.path is None:
+            return
+        for frame, _ in self._pending:  # en vivo y cortado antes de medir
+            self._write(frame)
+        self._pending = []
         if self.writer is not None:
             self.writer.release()
-            logger.info("Video guardado en %s", self.path)
+            logger.info("Video guardado en %s (%g fps)", self.path, self.fps)
 
 
 def run(args) -> int:
     try:
-        source = open_view_source(args.source, args.interval)
-    except OSError as e:
+        # grabando, se detectan caras en todos los frames; solo mirando, cada 3
+        detect_every = 1 if args.record else FACE_DETECT_EVERY
+        source = open_view_source(args.source, args.interval, detect_every)
+    except OSError as e:  # también PrivacyError
         logger.error("%s", e)
         return 2
     pipeline = build_pipeline(args)
@@ -315,7 +365,7 @@ def run(args) -> int:
     realtime = source.live or args.realtime
     state = DemoState(pipeline.zones)
     worker = ThreadPoolExecutor(max_workers=1)
-    recorder = _Recorder(args.record, source.fps)
+    recorder = _Recorder(args.record, source.fps, live=source.live)
     pending: Future | None = None
     pending_ts: datetime | None = None
     start = datetime.now(UTC)
@@ -356,7 +406,11 @@ def run(args) -> int:
                     # el pipeline va atrasado: el video espera y después retoma su ritmo
                     finish_pending()
                     ref_clock, ref_s = time.monotonic(), video_s
-                pending = worker.submit(pipeline.process_frame, frame.copy(), ts)
+                # este frame sale de la máquina (recortes al modelo): si para mirar
+                # se detectó cada FACE_DETECT_EVERY, buscar caras nuevas en este
+                pending = worker.submit(
+                    pipeline.process_frame, source.faces.refresh(frame.copy()), ts
+                )
                 pending_ts = ts
                 submitted += 1
                 # en tiempo real, la próxima lectura cuenta desde ahora: si el modelo
@@ -383,6 +437,10 @@ def run(args) -> int:
                 ref_clock, ref_s = time.monotonic(), video_s
             if args.limit is not None and submitted >= args.limit and pending is None:
                 break
+    except privacy.PrivacyError as e:
+        # el detector falló a mitad de camino: antes que mostrar caras, cortar
+        logger.error("%s", e)
+        failed = True
     except KeyboardInterrupt:
         interrupted = True
         logger.info("Cortado a mano")

@@ -33,10 +33,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from replay import RUN_GAP_READINGS, Run, _continues
 
+from servio_vision import VISION_DIR
 from servio_vision.alerts.config import DEFAULT_INTERVAL
 from servio_vision.alerts.models import TableObservation
 
-VISION_DIR = Path(__file__).resolve().parents[1]
 DEFAULT_LOG = VISION_DIR / "out" / "eventos.jsonl"
 
 ALERT_TYPES = {

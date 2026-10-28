@@ -5,9 +5,9 @@ tiempos de los mozos. Las usan `tools/metricas.py` (terminal e imagen) y el coma
 
 from pathlib import Path
 
+from servio_vision import VISION_DIR
 from servio_vision.db import Database
 
-VISION_DIR = Path(__file__).resolve().parents[1]
 HISTORY = VISION_DIR.parent / "fixtures" / "restaurante" / "historial.jsonl"
 
 # Tema oscuro (paleta de referencia de la guía de visualización): una serie por
