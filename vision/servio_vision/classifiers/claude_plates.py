@@ -28,6 +28,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
@@ -36,6 +37,7 @@ from pathlib import Path
 from pydantic import BaseModel, Field, ValidationError
 
 from servio_vision import prompt, settings
+from servio_vision.classifiers.breaker import CircuitBreaker
 
 logger = logging.getLogger(__name__)
 
@@ -62,6 +64,55 @@ class PlatesReport(BaseModel):
 
 class ClaudeCallError(RuntimeError):
     """La llamada a Claude falló o devolvió algo que no se pudo leer."""
+
+
+class PermanentCallError(ClaudeCallError):
+    """Falló y reintentar no lo arregla: una clave inválida, un paquete o un `claude`
+    que faltan, un modelo que no existe. No se reintenta y abre el cortacircuito."""
+
+
+# Estados HTTP que no se arreglan esperando: clave inválida, sin permiso, modelo que
+# no existe.
+PERMANENT_STATUS = {401, 403, 404}
+
+
+def _api_error(prefix: str, error: Exception) -> ClaudeCallError:
+    status = getattr(error, "status_code", None)
+    kind = PermanentCallError if status in PERMANENT_STATUS else ClaudeCallError
+    return kind(f"{prefix}: {error}")
+
+
+# Un cortacircuito por proveedor: con la API caída, las lecturas siguientes no gastan
+# dos intentos y 2 s por mesa (hybrid usa lo de YOLO). Ver classifiers/breaker.py.
+_clock = time.monotonic  # los tests lo reemplazan
+_breakers: dict[str, CircuitBreaker] = {}
+_breakers_lock = threading.Lock()
+
+
+def _breaker(provider: str) -> CircuitBreaker:
+    with _breakers_lock:
+        if provider not in _breakers:
+
+            def report(state: str) -> None:
+                if state == "open":
+                    logger.error(
+                        "Claude (%s) falla seguido: dejo de llamarlo un rato y uso "
+                        "YOLO solo",
+                        provider,
+                    )
+                else:
+                    logger.info("Claude (%s) volvió a responder", provider)
+
+            _breakers[provider] = CircuitBreaker(
+                clock=lambda: _clock(), on_change=report
+            )
+        return _breakers[provider]
+
+
+def reset_breakers() -> None:
+    """Todos cerrados (para los tests)."""
+    with _breakers_lock:
+        _breakers.clear()
 
 
 @dataclass(frozen=True)
@@ -147,7 +198,7 @@ def _find_cli(cli: str | None = None) -> str:
         or shutil.which("claude")
     )
     if not exe:
-        raise ClaudeCallError(
+        raise PermanentCallError(
             "No encuentro el comando claude (instalá Claude Code o usá CLAUDE_CLI)"
         )
     return exe
@@ -267,7 +318,7 @@ def _call_anthropic(
     try:
         import anthropic
     except ImportError as e:
-        raise ClaudeCallError(
+        raise PermanentCallError(
             "falta el paquete anthropic: pip install anthropic"
         ) from e
 
@@ -292,7 +343,7 @@ def _call_anthropic(
             },
         )
     except anthropic.APIError as e:
-        raise ClaudeCallError(f"API de Anthropic: {e}") from e
+        raise _api_error("API de Anthropic", e) from e
     if resp.stop_reason == "refusal":
         raise ClaudeCallError("Claude rechazó el pedido")
     text = next((b.text for b in resp.content if b.type == "text"), "")
@@ -426,7 +477,7 @@ def _call_openai(
     try:
         import openai
     except ImportError as e:
-        raise ClaudeCallError(
+        raise PermanentCallError(
             'falta el paquete openai: pip install "openai>=3.26.0"'
         ) from e
 
@@ -439,7 +490,7 @@ def _call_openai(
         max_retries=0,
     )
     if not hasattr(client, "decisions"):
-        raise ClaudeCallError(
+        raise PermanentCallError(
             'el paquete openai es viejo para la Decisions API: pip install "openai>=3.26.0"'
         )
     try:
@@ -449,7 +500,7 @@ def _call_openai(
             questions=questions,
         )
     except openai.OpenAIError as e:
-        raise ClaudeCallError(f"Decisions API de OpenAI: {e}") from e
+        raise _api_error("Decisions API de OpenAI", e) from e
     usage = getattr(resp, "usage", None)
     answers = getattr(resp, "answers", None) or []
     return _answers_to_report(answers, questions, request.has_reference), {
@@ -501,33 +552,55 @@ def estimate_plates(
     content = build_content(plate_jpegs, table_id, references, _FORMATS[provider])
     request = PlatesRequest(content, [r is not None for r in references])
     backend = _BACKENDS[provider]
-
-    for attempt in range(1, ATTEMPTS + 1):
-        start = time.monotonic()
-        try:
-            data, usage = backend(request, model, timeout_s)
-            report = _parse(data, len(plate_jpegs))
-        except (ClaudeCallError, ValidationError, ValueError) as e:
-            logger.warning(
-                "Claude falló en la mesa %s (intento %d/%d): %s",
-                table_id,
-                attempt,
-                ATTEMPTS,
-                e,
-            )
-            if attempt < ATTEMPTS:
-                time.sleep(RETRY_WAIT_S)
-            continue
+    breaker = _breaker(provider)
+    if not breaker.allow():
         logger.debug(
-            "Claude mesa=%s platos=%d proveedor=%s modelo=%s latencia=%.2fs uso=%s",
-            table_id,
-            len(plate_jpegs),
-            provider,
-            model,
-            time.monotonic() - start,
-            usage,
+            "Claude (%s) en pausa: la mesa %s va sin llamada", provider, table_id
         )
-        return report
+        return None
+
+    try:
+        for attempt in range(1, ATTEMPTS + 1):
+            start = time.monotonic()
+            try:
+                data, usage = backend(request, model, timeout_s)
+                report = _parse(data, len(plate_jpegs))
+            except (PermanentCallError, prompt.PromptError) as e:
+                # una clave inválida o un prompt roto no se arreglan reintentando
+                logger.error(
+                    "Claude falló en la mesa %s y reintentar no lo arregla: %s",
+                    table_id,
+                    e,
+                )
+                breaker.record_failure(permanent=True)
+                return None
+            except (ClaudeCallError, ValidationError, ValueError) as e:
+                logger.warning(
+                    "Claude falló en la mesa %s (intento %d/%d): %s",
+                    table_id,
+                    attempt,
+                    ATTEMPTS,
+                    e,
+                )
+                if attempt < ATTEMPTS:
+                    time.sleep(RETRY_WAIT_S)
+                continue
+            logger.debug(
+                "Claude mesa=%s platos=%d proveedor=%s modelo=%s latencia=%.2fs uso=%s",
+                table_id,
+                len(plate_jpegs),
+                provider,
+                model,
+                time.monotonic() - start,
+                usage,
+            )
+            breaker.record_success()
+            return report
+    except Exception:
+        # un bug nuestro: que la llamada de prueba no deje el cortacircuito trabado
+        breaker.record_failure()
+        raise
+    breaker.record_failure()
     return None
 
 
