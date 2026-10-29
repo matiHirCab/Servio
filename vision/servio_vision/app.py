@@ -14,10 +14,12 @@ import warnings
 
 from servio_vision import alerts, framing, prompt
 from servio_vision.alerts.config import load_config
+from servio_vision.alerts.notify import TelegramNotifier
 from servio_vision.capture import is_live_source, open_source
 from servio_vision.classifier import get_classifier
 from servio_vision.cli import require_source
 from servio_vision.dish_match import DishMatcher
+from servio_vision.health import STALL_S, HealthMonitor
 from servio_vision.pipeline import Pipeline
 from servio_vision.recording import FrameRecorder
 from servio_vision.restaurant import DEFAULT_DIR as RESTAURANT_DIR
@@ -198,6 +200,31 @@ def build_pipeline(settings: Settings) -> Pipeline | None:
     )
 
 
+def build_health_monitor(settings: Settings) -> HealthMonitor | None:
+    """El latido (`health.py`) de una cámara en vivo; un video o una foto no lo
+    necesitan. Avisa al chat de `TELEGRAM_ADMIN_CHAT_ID`, nunca al grupo de mozos;
+    sin ese chat el aviso queda solo en el log."""
+    if not settings.source or not is_live_source(settings.source):
+        return None
+    token, chat = settings.telegram_bot_token, settings.telegram_admin_chat_id
+    if settings.telegram and token and chat:
+        admin = TelegramNotifier(token, chat)
+
+        def send(text: str) -> bool:
+            return admin.send(text) is not None
+    else:
+        logger.warning(
+            "Sin TELEGRAM_ADMIN_CHAT_ID: si dejan de llegar lecturas, el aviso de "
+            "salud solo queda en el log"
+        )
+
+        def send(text: str) -> bool:
+            return True  # el monitor ya lo logueó; no hay a quién más avisar
+
+    # con una cadencia lenta, 5 min sin lectura es lo normal
+    return HealthMonitor(send, stall_s=max(STALL_S, 4 * settings.interval))
+
+
 def run(settings: Settings, limit: int | None = None) -> int:
     """El loop: abre la fuente, graba si se pidió y procesa cada lectura."""
     if not require_source(settings):
@@ -206,6 +233,7 @@ def run(settings: Settings, limit: int | None = None) -> int:
     if pipeline is None:
         return 2
     readings = 0
+    monitor = build_health_monitor(settings)
     try:
         # La carpeta de grabación primero: si no se puede crear, la cámara todavía
         # no se abrió. Después la fuente, que sale de open_source con las caras
@@ -218,6 +246,8 @@ def run(settings: Settings, limit: int | None = None) -> int:
             face_model=settings.face_model,
         )
         logger.info("Privacidad: caras difuminadas en la captura")
+        if monitor is not None:
+            monitor.start()  # recién ahora: abrir la cámara y cargar modelos ya pasó
         for frame, ts in frames:
             if recorder is not None:
                 recorder = _record(recorder, frame, ts)
@@ -232,6 +262,8 @@ def run(settings: Settings, limit: int | None = None) -> int:
                     frame, None if found_none else pipeline.zones, logger, light=False
                 )
             readings += 1
+            if monitor is not None:
+                monitor.beat()
             if limit is not None and readings >= limit:
                 break
     except OSError as e:
@@ -242,6 +274,8 @@ def run(settings: Settings, limit: int | None = None) -> int:
     except KeyboardInterrupt:
         logger.info("Cortado a mano")
     finally:
+        if monitor is not None:
+            monitor.stop()
         pipeline.close()
     logger.info("%d lecturas", readings)
     return 0 if readings else 1
