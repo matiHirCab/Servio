@@ -168,6 +168,8 @@ class Settings(BaseSettings):
     # --- Telegram ---
     telegram_bot_token: str = ""
     telegram_group_chat_id: str = ""
+    telegram_admin_chat_id: str = ""
+    """chat de quien mantiene Servio, para el aviso de salud (health.py)"""
 
     # --- umbrales de avisos en segundos (05-reglas-alertas.md); None = default ---
     alert_t1: int | None = Field(None, ge=1)
