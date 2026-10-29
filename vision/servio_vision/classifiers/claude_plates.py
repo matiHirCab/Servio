@@ -107,7 +107,7 @@ _FORMATS = {
 
 
 def build_content(
-    table_jpeg: bytes,
+    table_jpeg: bytes | None,
     plate_jpegs: list[bytes],
     table_id: str,
     references: list[bytes | None] | None = None,
@@ -115,12 +115,15 @@ def build_content(
 ) -> list:
     """Bloques del mensaje (texto + imágenes) en el formato `fmt`.
 
-    `references[i]`, si está, es el plato i recién servido y va antes del recorte actual."""
+    Al proveedor van **solo los recortes de plato** (C-3, docs/legal-uruguay.md):
+    `table_jpeg` no se manda nunca; el parámetro queda por compatibilidad y se
+    ignora. `references[i]`, si está, es el plato i recién servido y va antes del
+    recorte actual."""
 
     def image(jpeg: bytes) -> dict:
         return fmt.image(base64.standard_b64encode(jpeg).decode())
 
-    content: list[dict] = [fmt.text(prompt.table_caption(table_id)), image(table_jpeg)]
+    content: list[dict] = [fmt.text(prompt.table_caption(table_id))]
     references = references or [None] * len(plate_jpegs)
     # strict: un plato sin su lugar en `references` no se manda en silencio
     for i, (jpeg, ref) in enumerate(zip(plate_jpegs, references, strict=True), start=1):
@@ -451,7 +454,7 @@ def _parse(data: dict, n_plates: int) -> PlatesReport:
 
 
 def estimate_plates(
-    table_jpeg: bytes,
+    table_jpeg: bytes | None,
     plate_jpegs: list[bytes],
     table_id: str,
     *,

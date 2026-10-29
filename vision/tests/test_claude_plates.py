@@ -54,9 +54,9 @@ def test_three_plates(backend):
     report = estimate_plates(JPEG, [JPEG] * 3, "T1")
     assert [p.index for p in report.plates] == [1, 2, 3]
     assert report.people_present is False
-    # mesa + 3 platos = 4 imágenes, en ese orden
+    # 3 platos = 3 imágenes, en ese orden; la mesa no se manda (C-3)
     images = [b for b in calls[0]["content"] if b["type"] == "image"]
-    assert len(images) == 4
+    assert len(images) == 3
     assert calls[0]["model"] == "haiku"
     assert calls[0]["timeout_s"] == 15.0
 
@@ -70,7 +70,7 @@ def test_reference_goes_before_its_plate(backend):
         for b in calls[0]["content"]
         if b["type"] == "image"
     ]
-    assert images == [b"mesa", b"p1", b"ref2", b"p2"]
+    assert images == [b"p1", b"ref2", b"p2"]  # la mesa no va (C-3)
 
 
 def test_retries_once_then_succeeds(backend):
@@ -332,9 +332,8 @@ def test_openai_sends_images_as_data_urls(openai_api):
     # con preguntas tipadas no se pide JSON en ningún lado
     assert not any("JSON" in p.get("text", "") for p in parts)
     images = [p["image_url"] for p in parts if p["type"] == "input_image"]
-    assert images == [
-        "data:image/jpeg;base64," + claude_plates.base64.b64encode(b).decode()
-        for b in (b"mesa", b"p1")
+    assert images == [  # solo el plato: la mesa no va (C-3)
+        "data:image/jpeg;base64," + claude_plates.base64.b64encode(b"p1").decode()
     ]
 
 

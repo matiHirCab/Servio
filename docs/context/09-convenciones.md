@@ -52,7 +52,7 @@
 
 - **Caras difuminadas apenas se lee el frame** (`servio_vision/privacy.py`, enganchado en `capture.py`): nada de lo que viene después (pipeline, vista de demo, grabaciones, `out/`) ve una cara. Si agregás una forma nueva de leer frames, sumala como lector de `capture.open_source`, que es el único que envuelve los frames con `privacy.default_anonymizer()`; `CameraReader` solo entrega frames **crudos**, no lo uses directo para mostrar ni guardar. El modelo de YuNet se baja a `vision/models/` (ignorado); `FACE_MODEL` apunta a otra ruta.
 - **No se guardan frames** salvo con `main.py --record DIR`, y esos también salen difuminados. Una herramienta que escribe imágenes en `out/` tiene que leerlas con `capture.open_source`.
-- A Claude solo se mandan recortes de mesas y platos, no el salón entero.
+- Al modelo de la nube se mandan **solo recortes de platos** (`hybrid.py`), nunca la mesa ni el salón, y lo que de una persona entre en un recorte va pixelado (`people.py`). Si agregás un proveedor o cambiás `build_content`, el test `test_only_plate_crops_reach_the_provider` lo vigila.
 - Datasets, pesos e imágenes nunca se suben al repo (`vision/data/`, `vision/models/` y `vision/out/` están en `.gitignore`):
   - Video de la demo grabado por el equipo: carpeta compartida del equipo.
   - Dataset *AI Smart Restaurant Surveillance* de Roboflow (CC BY 4.0): se baja en local para entrenar y evaluar; se cita en `vision/README.md`.
