@@ -30,9 +30,8 @@ from typing import Protocol
 
 import cv2
 import numpy as np
-from dotenv import load_dotenv
 
-from servio_vision import ENV_FILE, VISION_DIR
+from servio_vision import VISION_DIR, settings
 
 logger = logging.getLogger(__name__)
 
@@ -125,15 +124,10 @@ class YuNetDetector:
         return [b for b in boxes if b[3] <= max_height]
 
 
-def model_path(env: dict[str, str] | None = None) -> Path:
-    """`FACE_MODEL` del entorno o el default. Una ruta relativa cuenta desde la raíz
-    del repo, como `YOLO_WEIGHTS` en `.env.example`, no desde donde se corre."""
-    env = os.environ if env is None else env
-    raw = (env.get(MODEL_ENV) or "").strip()
-    if not raw:
-        return MODEL_PATH
-    path = Path(raw)
-    return path if path.is_absolute() else VISION_DIR.parent / path
+def model_path(configured: Path | None = None) -> Path:
+    """`configured` (FACE_MODEL, ya resuelto por settings.py: una ruta relativa
+    cuenta desde la raíz del repo) o el default."""
+    return configured or MODEL_PATH
 
 
 def _sha256(path: Path) -> str:
@@ -200,11 +194,11 @@ def ensure_model(path: Path = MODEL_PATH) -> Path:
     return path
 
 
-def load_detector() -> FaceDetector:
-    # FACE_MODEL del .env también para las herramientas, que no pasan por main.py
-    # (A-1 lo lleva a Settings). No pisa variables ya puestas.
-    load_dotenv(ENV_FILE)
-    return YuNetDetector(ensure_model(model_path()))
+def load_detector(face_model: Path | None = None) -> FaceDetector:
+    """`face_model` de la configuración (lo pasa `app.py`); sin él, el del entorno."""
+    if face_model is None:
+        face_model = settings.current().face_model
+    return YuNetDetector(ensure_model(model_path(face_model)))
 
 
 def pixelate(
@@ -285,9 +279,9 @@ class FaceBlur:
         return frame
 
 
-def default_anonymizer(every: int = 1) -> FaceBlur:
+def default_anonymizer(every: int = 1, face_model: Path | None = None) -> FaceBlur:
     """El que usa `capture.py` si no le pasan otro."""
-    return FaceBlur(load_detector(), every)
+    return FaceBlur(load_detector(face_model), every)
 
 
 def main(argv: list[str] | None = None) -> int:

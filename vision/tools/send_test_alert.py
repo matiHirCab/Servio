@@ -15,8 +15,6 @@ import sys
 import time
 from pathlib import Path
 
-from dotenv import load_dotenv
-
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from servio_vision.alerts.notify import (
@@ -25,7 +23,6 @@ from servio_vision.alerts.notify import (
     resolved_text,
 )
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
 TEST_MESSAGE = "🍽️ Juan · Mesa 1: terminó. (prueba de Servio)"
 
 
@@ -43,8 +40,8 @@ def main() -> int:
     if args.no_telegram:
         notifier = ConsoleNotifier()
     else:
-        load_dotenv(REPO_ROOT / ".env")
         try:
+            # token y grupo del .env, vía settings.py (el único que lee el entorno)
             notifier = TelegramNotifier.from_env()
         except ValueError as error:
             print(f"{error} (ver .env.example)", file=sys.stderr)

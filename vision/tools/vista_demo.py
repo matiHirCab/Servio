@@ -39,9 +39,9 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from main import Pipeline, build_parser, build_pipeline, setup_logging
 from servio_vision import privacy
 from servio_vision.alerts.state import table_status
+from servio_vision.app import build_pipeline, setup_logging
 from servio_vision.capture import (
     IMAGE_SUFFIXES,
     STREAM_PREFIXES,
@@ -49,6 +49,8 @@ from servio_vision.capture import (
     declared_fps,
     frame_seconds,
 )
+from servio_vision.cli import build_parser, load_settings
+from servio_vision.pipeline import Pipeline
 from servio_vision.schemas import Item
 from servio_vision.zones import Zones, scaled_polygon, table_rect
 
@@ -349,23 +351,26 @@ class _Recorder:
 
 
 def run(args) -> int:
+    cfg = load_settings(args)  # flags > --config > .env; loguea qué falta
+    if cfg is None:
+        return 2
     try:
         # grabando, se detectan caras en todos los frames; solo mirando, cada 3
-        detect_every = 1 if args.record else FACE_DETECT_EVERY
-        source = open_view_source(args.source, args.interval, detect_every)
+        detect_every = 1 if args.record_video else FACE_DETECT_EVERY
+        source = open_view_source(cfg.source, cfg.interval, detect_every)
     except OSError as e:  # también PrivacyError
         logger.error("%s", e)
         return 2
-    pipeline = build_pipeline(args)
+    pipeline = build_pipeline(cfg)
     if pipeline is None:
         return 2
 
-    speed = args.speed or 1.0  # la vista es para mirar: por defecto, tiempo real
+    speed = cfg.speed or 1.0  # la vista es para mirar: por defecto, tiempo real
     # cámara (siempre) o video con --realtime: el video nunca espera a la IA
     realtime = source.live or args.realtime
     state = DemoState(pipeline.zones)
     worker = ThreadPoolExecutor(max_workers=1)
-    recorder = _Recorder(args.record, source.fps, live=source.live)
+    recorder = _Recorder(args.record_video, source.fps, live=source.live)
     pending: Future | None = None
     pending_ts: datetime | None = None
     start = datetime.now(UTC)
@@ -416,7 +421,7 @@ def run(args) -> int:
                 # en tiempo real, la próxima lectura cuenta desde ahora: si el modelo
                 # se atrasó, no se acumulan lecturas pendientes
                 base = video_s if realtime else next_reading
-                next_reading = base + args.interval
+                next_reading = base + cfg.interval
 
             image = render(frame, ts, video_s)
             last = (frame, ts, video_s)
@@ -463,7 +468,12 @@ def run(args) -> int:
 
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser("Servio: vista de la demo.")
-    parser.add_argument("--record", type=Path, help="guardar la vista en un video .mp4")
+    parser.add_argument(
+        "--record",
+        dest="record_video",  # distinto del --record DIR de main.py (frames sueltos)
+        type=Path,
+        help="guardar la vista en un video .mp4",
+    )
     parser.add_argument(
         "--realtime",
         action="store_true",

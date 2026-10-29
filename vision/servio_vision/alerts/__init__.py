@@ -6,12 +6,11 @@ API que usa `main.py`:
   manda, recuerda o edita, y escribe todo en `out/eventos.jsonl` (ver `processor.py`).
 """
 
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
-from dotenv import load_dotenv
-
-from servio_vision import ENV_FILE, VISION_DIR
+from servio_vision import VISION_DIR
 from servio_vision.alerts.config import DEFAULT_INTERVAL, AlertConfig, load_config
 from servio_vision.alerts.models import TableObservation
 from servio_vision.alerts.notify import get_notifier
@@ -29,17 +28,19 @@ def configure(
     telegram: bool = True,
     log_path: Path | None = None,
     restaurant: Restaurant | None = None,
+    env: Mapping[str, str] | None = None,
 ) -> AlertProcessor:
-    """Arranca un estado nuevo (sin mesas ni avisos abiertos) con estos umbrales."""
+    """Arranca un estado nuevo (sin mesas ni avisos abiertos) con estos umbrales.
+    `env`: token y grupo de Telegram (los pasa `app.py`); sin él, los de la
+    configuración del entorno."""
     global _processor
     if _processor is not None:
         _processor.close()
-    load_dotenv(ENV_FILE)  # no pisa variables ya puestas
     log_path = log_path or DEFAULT_LOG
     # con datos del restaurante, todo queda también en la base (junto al log)
     db = Database(log_path.parent / "servio.db") if restaurant is not None else None
     _processor = AlertProcessor(
-        config, get_notifier(telegram), log_path, restaurant, db
+        config, get_notifier(telegram, env), log_path, restaurant, db
     )
     return _processor
 

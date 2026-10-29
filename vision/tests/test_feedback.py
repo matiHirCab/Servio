@@ -144,8 +144,8 @@ def test_without_api_key_dishes_follow_the_order(monkeypatch):
 def test_plates_not_in_the_order_are_dropped(monkeypatch):
     import numpy as np
 
-    import main as loop
     from servio_vision.dish_match import DishMatcher
+    from servio_vision.pipeline import Pipeline
     from servio_vision.schemas import Item
     from servio_vision.zones import TableZone, Zones
 
@@ -156,7 +156,7 @@ def test_plates_not_in_the_order_are_dropped(monkeypatch):
             TableZone(table_id="T1", name="Mesa 1", polygon=[(0, 0), (99, 0), (99, 99)])
         ],
     )
-    pipeline = loop.Pipeline(
+    pipeline = Pipeline(
         None,
         zones,
         lambda o: None,

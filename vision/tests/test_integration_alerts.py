@@ -8,10 +8,10 @@ from datetime import UTC, datetime, timedelta
 
 import numpy as np
 
-import main as loop
 from servio_vision import alerts
 from servio_vision.alerts.config import load_config
 from servio_vision.classifiers.fake import FakeClassifier
+from servio_vision.pipeline import Pipeline
 from servio_vision.zones import TableZone, Zones
 
 ZONES = Zones(
@@ -41,7 +41,7 @@ def test_fake_loop_with_demo_thresholds_opens_and_closes_its_alerts(
     alerts.configure(
         load_config(INTERVAL, demo=True, env={}), telegram=False, log_path=log
     )
-    pipeline = loop.Pipeline(FakeClassifier(), ZONES, alerts.process)
+    pipeline = Pipeline(FakeClassifier(), ZONES, alerts.process)
     try:
         with caplog.at_level(logging.ERROR):
             for n in range(READINGS):

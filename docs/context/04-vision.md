@@ -99,7 +99,8 @@ Por cada plato:
 
 ```
 vision/
-  main.py                    # loop (Jessica)
+  main.py                    # flags → Settings → app.run (Jessica)
+  config/servio.example.toml # modelo del toml de cada casa (Jessica)
   config/zones.json          # (Jessica)
   servio_vision/
     schemas.py, classifier.py   # contrato (Tomás; cambios con revisión de Jessica)
@@ -108,7 +109,9 @@ vision/
       yolo.py, hybrid.py, claude.py   # (Tomás)
     tracking.py              # emparejar cajas con ids anteriores (Tomás)
     prompt.py                # (Tomás)
-    capture.py, zones.py, smoothing.py   # (Jessica)
+    settings.py, cli.py        # configuración en un solo lugar y flags (Jessica)
+    app.py, pipeline.py        # armado del pipeline y el pipeline (Jessica)
+    capture.py, zones.py, smoothing.py, privacy.py, recording.py   # (Jessica)
     alerts/                  # estado de mesa, reglas, Telegram, log (Matías)
   tools/
     draw_zones.py            # (Jessica)

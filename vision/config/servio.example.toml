@@ -1,0 +1,39 @@
+# Configuración de una casa (A-1). Copialo a config/casa-<quien>.toml (ignorado por
+# git si lo llamás casa-*.toml) y corré: python main.py --config config/casa-jessica.toml
+#
+# Prioridad: flags > este archivo > entorno y .env > defaults (servio_vision/settings.py).
+# Las claves son las mismas que las variables del .env, en minúscula. Las tablas
+# ([camara], [modelo]…) son solo para agrupar: se aplanan al leer.
+# Los secretos (tokens, API keys, DATABASE_URL) van en el .env, no acá: el toml los rechaza.
+# Rutas relativas: zones, record, restaurante, fixture y un source que sea archivo cuentan
+# desde la carpeta de este toml; yolo_weights, face_model y los prompts, desde la raíz del repo.
+
+[camara]
+source = "http://192.168.0.5:4747/video"   # DroidCam / IP Webcam, 0 para la webcam, o un video
+interval = 30                               # segundos entre lecturas
+# zones = "zones.json"                      # zonas fijas (al lado de este toml); sin esto se detectan solas
+# record = "../out/sesiones/casa-jessica"   # guardar los frames procesados (B-1)
+
+[modelo]
+classifier = "hybrid"                       # fake | yolo | hybrid
+claude_provider = "anthropic"               # cli | anthropic | openai
+# claude_model = "claude-haiku-5-5"
+# yolo_weights = "vision/models/best.pt"    # relativo a la raíz del repo
+# yolo_conf = 0.25
+
+[restaurante]
+# restaurante = "../../fixtures/restaurante"  # carta.json y salon.json
+
+[avisos]
+demo = false
+# alert_t1 = 60
+# alert_t2 = 600
+# alert_reminder = 180
+# finished_after = 360
+
+[suavizado]
+# smooth_readings = 2
+# smooth_hard_readings = 3
+# smooth_min_confidence = 0.8
+
+# La base compartida (DATABASE_URL, A-6) lleva la contraseña: va en el .env, no acá.
