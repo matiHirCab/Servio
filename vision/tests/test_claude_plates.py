@@ -166,6 +166,85 @@ def test_cli_reads_structured_output(monkeypatch):
     assert usage["cost_usd"] == 0.001
 
 
+class _Clock:
+    def __init__(self) -> None:
+        self.now = 1000.0
+
+    def __call__(self) -> float:
+        return self.now
+
+
+@pytest.fixture
+def clock(monkeypatch):
+    c = _Clock()
+    monkeypatch.setattr(claude_plates, "_clock", c)
+    claude_plates.reset_breakers()  # los arma con este reloj
+    return c
+
+
+def test_a_permanent_error_is_not_retried(backend):
+    calls, answers = backend
+    answers.append(claude_plates.PermanentCallError("clave inválida"))
+    assert estimate_plates([JPEG], "T1") is None
+    assert len(calls) == 1  # sin segundo intento: no se arregla esperando
+
+
+def test_a_broken_prompt_file_is_permanent_and_logged_as_an_error(backend, caplog):
+    calls, answers = backend
+    answers.append(prompt.PromptError("falta el archivo de prompt"))
+    with caplog.at_level("ERROR"):
+        assert estimate_plates([JPEG], "T1") is None
+    assert len(calls) == 1
+    assert "prompt" in caplog.text
+
+
+def test_the_breaker_opens_after_three_failed_estimates(backend, clock):
+    calls, answers = backend
+    answers.extend([ClaudeCallError("API caída")] * 6)  # 3 lecturas × 2 intentos
+    for _ in range(3):
+        assert estimate_plates([JPEG], "T1") is None
+    assert len(calls) == 6
+    assert estimate_plates([JPEG], "T2") is None
+    assert len(calls) == 6  # abierto: ni lo intenta
+
+
+def test_the_breaker_lets_a_probe_through_after_the_cooldown(backend, clock):
+    calls, answers = backend
+    answers.extend([ClaudeCallError("API caída")] * 6)
+    for _ in range(3):
+        estimate_plates([JPEG], "T1")
+    clock.now += 61
+    answers.append(_answer(1))
+    assert estimate_plates([JPEG], "T1") is not None  # la prueba anda
+    answers.append(_answer(1))
+    assert estimate_plates([JPEG], "T1") is not None  # y vuelve a la normalidad
+    assert len(calls) == 8
+
+
+def test_a_permanent_error_opens_the_breaker_at_once(backend, clock):
+    calls, answers = backend
+    answers.append(claude_plates.PermanentCallError("clave inválida"))
+    estimate_plates([JPEG], "T1")
+    assert estimate_plates([JPEG], "T2") is None
+    assert len(calls) == 1
+
+
+def test_one_provider_down_does_not_block_another(backend, clock, monkeypatch):
+    _calls, answers = backend
+    other_calls = []
+
+    def other(request, model, timeout_s):
+        other_calls.append(model)
+        return _answer(1), {}
+
+    monkeypatch.setitem(claude_plates._BACKENDS, "anthropic", other)
+    answers.extend([ClaudeCallError("API caída")] * 6)
+    for _ in range(3):
+        estimate_plates([JPEG], "T1")  # cli abierto
+    assert estimate_plates([JPEG], "T1", provider="anthropic") is not None
+    assert other_calls
+
+
 def test_cli_env_drops_the_secrets_and_keeps_what_the_cli_needs():
     """`claude -p` va con la suscripción: una ANTHROPIC_API_KEY en el entorno la
     cambiaría a facturación por API, y el token de Telegram o la base no tienen por
