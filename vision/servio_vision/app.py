@@ -13,7 +13,7 @@ import sys
 import time
 import warnings
 
-from servio_vision import alerts, framing, prompt
+from servio_vision import alerts, framing, privacy, prompt
 from servio_vision.alerts.config import load_config
 from servio_vision.alerts.notify import TelegramNotifier
 from servio_vision.capture import (
@@ -29,6 +29,7 @@ from servio_vision.cli import require_source
 from servio_vision.dish_match import DishMatcher
 from servio_vision.health import STALL_S, HealthMonitor
 from servio_vision.pipeline import Pipeline
+from servio_vision.privacy import Anonymizer
 from servio_vision.recording import FrameRecorder
 from servio_vision.restaurant import DEFAULT_DIR as RESTAURANT_DIR
 from servio_vision.restaurant import Restaurant
@@ -247,10 +248,19 @@ def run(settings: Settings, limit: int | None = None) -> int:
         # no se abrió. Después la fuente, que sale de open_source con las caras
         # difuminadas (C-3): nada de lo que sigue, tampoco la grabación, ve una cara.
         recorder = FrameRecorder(settings.record) if settings.record else None
+        # El detector de caras de una cámara se arma una sola vez y antes del latido:
+        # cargarlo (o bajarlo) en cada reintento, o contarlo como tiempo sin lecturas,
+        # no tiene sentido. Con un archivo lo arma `open_source` después de ver que
+        # existe, así un error de tipeo no termina en «no se pudo bajar el modelo».
+        anonymize = (
+            privacy.default_anonymizer(face_model=settings.face_model)
+            if is_live_source(settings.source)
+            else None
+        )
         if monitor is not None:
             # antes de abrir la cámara: si no abre, también hay que enterarse
             monitor.start()
-        frames = _open_frames(settings)
+        frames = _open_frames(settings, anonymize)
         logger.info("Privacidad: caras difuminadas en la captura")
         for frame, ts in frames:
             if recorder is not None:
@@ -258,7 +268,7 @@ def run(settings: Settings, limit: int | None = None) -> int:
             if readings == 0:
                 # la luz, antes de gastar la primera clasificación en un cuadro negro
                 framing.log_report(frame, None, logger, tables=False)
-            observations = pipeline.process_frame(frame, ts)
+            pipeline.process_frame(frame, ts)
             if readings == 0:
                 # las mesas, ya detectadas: ¿entra entera, con aire, se ve grande?
                 found_none = pipeline.tables is not None and not pipeline.tables.tables
@@ -266,10 +276,8 @@ def run(settings: Settings, limit: int | None = None) -> int:
                     frame, None if found_none else pipeline.zones, logger, light=False
                 )
             readings += 1
-            # Un latido es una lectura que llegó a los avisos. Si todas las mesas
-            # fallaron (el modelo caído), el loop sigue pero los mozos no se enteran
-            # de nada: no cuenta. Sin mesas detectadas no hay nada que avisar.
-            if monitor is not None and (observations or not pipeline.zones.tables):
+            # Un latido es una lectura que llegó a los avisos (ver `frame_ok`).
+            if monitor is not None and pipeline.frame_ok:
                 monitor.beat()
             if limit is not None and readings >= limit:
                 break
@@ -288,7 +296,7 @@ def run(settings: Settings, limit: int | None = None) -> int:
     return 0 if readings else 1
 
 
-def _open_frames(settings: Settings):
+def _open_frames(settings: Settings, anonymize: Anonymizer | None):
     """La fuente de frames. Una cámara que no abre se reintenta con esperas que
     crecen, sin rendirse: tras un corte de luz el router o el celular pueden
     arrancar después que la PC. Cualquier otro error de apertura sale tal cual."""
@@ -299,6 +307,7 @@ def _open_frames(settings: Settings):
                 settings.source,
                 settings.interval,
                 settings.speed,
+                anonymize=anonymize,
                 face_model=settings.face_model,
             )
         except CameraUnavailable as error:
