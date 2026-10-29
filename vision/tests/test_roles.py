@@ -11,7 +11,15 @@ from servio_vision.roles import METRICS, Roles
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
 import metricas
 
-OWNER_ONLY = {"desperdicio", "historico", "antes_despues", "costos_y_configuracion"}
+OWNER_ONLY = {
+    "desperdicio",
+    "historico",
+    "antes_despues",
+    "costos_y_configuracion",
+    "ritmo_por_plato",
+    "sobra_por_plato",
+    "adopcion",
+}
 
 
 def test_default_matches_the_decided_table():

@@ -78,6 +78,7 @@ class AlertProcessor:
         # base relacional (db.py): platos servidos, avisos y respuestas
         self.db = db
         self._served_rows: dict[str, int] = {}  # track_id → platos_servidos.id
+        self._plate_states: dict[str, str] = {}  # track_id → último estado guardado
         self._alert_plate: dict[str, str] = {}  # aviso → track_id del plato
         if db is not None and restaurant is not None:
             db.load_restaurant(restaurant)
@@ -104,17 +105,27 @@ class AlertProcessor:
         # que reemplaza al "ya resuelto" (quién y cuánto tardó)
         self._close_notes: dict[str, str] = {}
 
-    def _record_plates(self, table_id: str, table: TableState, ts: datetime) -> None:
-        """Cada plato nuevo de la mesa, a la base (con el plato del pedido que es)."""
+    def _record_plates(
+        self, obs: TableObservation, table: TableState, ts: datetime
+    ) -> None:
+        """Cada plato nuevo de la mesa, a la base (con el plato del pedido que es),
+        y la lectura de cada plato: estado y cuánto le queda (métricas de M-1)."""
         if self.db is None or self.restaurant is None:
             return
         for plate in table.active_plates():
             if plate.track_id in self._served_rows:
                 continue
-            dish = self.restaurant.dish(table_id, plate.track_id)
+            dish = self.restaurant.dish(obs.table_id, plate.track_id)
             self._served_rows[plate.track_id] = self.db.served(
-                table_id, dish.dish_id if dish else None, plate.track_id, ts
+                obs.table_id, dish.dish_id if dish else None, plate.track_id, ts
             )
+        for item in obs.items:
+            served_id = self._served_rows.get(item.track_id)
+            if served_id is None:
+                continue
+            changed = self._plate_states.get(item.track_id) != item.state
+            self._plate_states[item.track_id] = item.state
+            self.db.plate_reading(served_id, item.state, item.fill_ratio, ts, changed)
 
     def _record_opened(self, alert: Alert, ts: datetime) -> None:
         if self.db is None:
@@ -170,7 +181,7 @@ class AlertProcessor:
             self.restaurant.see_plates(
                 obs.table_id, [p.track_id for p in table.active_plates()]
             )
-        self._record_plates(obs.table_id, table, obs.ts)
+        self._record_plates(obs, table, obs.ts)
 
         result = evaluate(table, obs.ts, self.config, self.open_alerts.values())
         opened_all = [self._with_context(a, table, obs.ts) for a in result.opened]

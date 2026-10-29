@@ -6,7 +6,9 @@ Guarda lo que pasa en el salón para sacar métricas con SQL:
     mesas (id, nombre, mozo_id → mozos)
     platos (id, nombre, precio)                           -- la carta
     respuestas_tipicas (plato_id → platos, orden, texto)  -- opciones del aviso
-    platos_servidos (id, mesa_id → mesas, plato_id → platos, track_id, servido_at, origen)
+    platos_servidos (id, mesa_id → mesas, plato_id → platos, track_id, servido_at, origen,
+                     ultimo_fill_ratio, visto_at)    -- última lectura del plato
+    estados_plato (id, plato_servido_id → platos_servidos, estado, fill_ratio, desde)
     avisos (id, tipo, mesa_id → mesas, mozo_id → mozos,
             plato_servido_id → platos_servidos, abierto_at, resuelto_at, origen)
     respuestas (id, aviso_id → avisos, mozo_id → mozos, respondido_por, texto,
@@ -52,7 +54,16 @@ CREATE TABLE IF NOT EXISTS platos_servidos (
     plato_id TEXT REFERENCES platos(id),
     track_id TEXT,
     servido_at TEXT NOT NULL,
-    origen TEXT NOT NULL
+    origen TEXT NOT NULL,
+    ultimo_fill_ratio REAL,
+    visto_at TEXT
+);
+CREATE TABLE IF NOT EXISTS estados_plato (
+    id INTEGER PRIMARY KEY,
+    plato_servido_id INTEGER NOT NULL REFERENCES platos_servidos(id),
+    estado TEXT NOT NULL,
+    fill_ratio REAL,
+    desde TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS avisos (
     id TEXT PRIMARY KEY,
@@ -93,15 +104,22 @@ class Database:
             self._migrate()
 
     def _migrate(self) -> None:
-        """Bases creadas antes de `motivo_cierre` o de `precio`: se agregan las
-        columnas. En el historial simulado, toda mesa terminada se cerró
-        retirando los platos."""
-        dish_columns = {
-            r["name"] for r in self._conn.execute("PRAGMA table_info(platos)")
-        }
-        if "precio" not in dish_columns:
-            with self._conn:
-                self._conn.execute("ALTER TABLE platos ADD COLUMN precio REAL")
+        """Bases creadas antes de `motivo_cierre`, `precio` o la última lectura
+        del plato: se agregan las columnas. En el historial simulado, toda mesa
+        terminada se cerró retirando los platos."""
+        for table, column, kind in (
+            ("platos", "precio", "REAL"),
+            ("platos_servidos", "ultimo_fill_ratio", "REAL"),
+            ("platos_servidos", "visto_at", "TEXT"),
+        ):
+            existing = {
+                r["name"] for r in self._conn.execute(f"PRAGMA table_info({table})")
+            }
+            if column not in existing:
+                with self._conn:
+                    self._conn.execute(
+                        f"ALTER TABLE {table} ADD COLUMN {column} {kind}"
+                    )
         columns = {r["name"] for r in self._conn.execute("PRAGMA table_info(avisos)")}
         if "motivo_cierre" in columns:
             return
@@ -169,6 +187,29 @@ class Database:
             " VALUES (?, ?, ?, ?, 'camara')",
             (table_id, dish_id, track_id, _iso(at)),
         )
+
+    def plate_reading(
+        self,
+        served_id: int,
+        state: str,
+        fill_ratio: float | None,
+        at: datetime,
+        state_changed: bool,
+    ) -> None:
+        """Última lectura del plato (para lo que sobra cuando se lo llevan) y, si
+        cambió de estado, desde cuándo (para el ritmo por plato)."""
+        with self._lock, self._conn:
+            self._conn.execute(
+                "UPDATE platos_servidos SET ultimo_fill_ratio ="
+                " COALESCE(?, ultimo_fill_ratio), visto_at = ? WHERE id = ?",
+                (fill_ratio, _iso(at), served_id),
+            )
+            if state_changed:
+                self._conn.execute(
+                    "INSERT INTO estados_plato (plato_servido_id, estado, fill_ratio,"
+                    " desde) VALUES (?, ?, ?, ?)",
+                    (served_id, state, fill_ratio, _iso(at)),
+                )
 
     def alert_opened(
         self,

@@ -1,6 +1,7 @@
 """Métricas del negocio sacadas de la base (`db.py`): platos que vuelven llenos,
-tiempos de los mozos, mesas terminadas sin atender, mesas olvidadas, rotación y
-desperdicio en $. Las usan `tools/metricas.py` (terminal e imagen) y el comando
+tiempos de los mozos, mesas terminadas sin atender, mesas olvidadas, rotación,
+desperdicio en $, carga por mozo, horas pico, ritmo y sobra por plato, adopción
+y espera del siguiente plato. Las usan `tools/metricas.py` (terminal e imagen) y el comando
 `/metricas` del bot de Telegram (`alerts/feedback.py`).
 
 Qué es cada una, cómo se calcula y quién la ve: docs/context/13-metricas.md.
@@ -98,6 +99,8 @@ SELECT p.nombre AS plato, r.texto AS problema,
 UNATTENDED_LIMIT_MIN = 5  # mesa terminada esperando más que esto = mal
 FORGOTTEN_LIMIT_S = 120  # aviso de plato lleno sin respuesta en esto = olvidada
 LUNCH_UNTIL_HOUR = 17  # antes de esta hora es almuerzo, después cena
+PEAK_SLOT_MIN = 30  # franja de las horas pico
+GONE_AFTER_MIN = 2  # plato que no se ve hace esto (y la cámara sigue) = se lo llevaron
 
 # Mesa terminada sin atender: minutos desde que todos terminaron hasta que se
 # retiraron los platos (solo cierres por retiro, no porque llegó otro plato).
@@ -141,6 +144,65 @@ SELECT p.nombre AS plato, COUNT(*) AS platos, SUM(p.precio) AS pesos
                   AND r.texto NOT LIKE 'Está todo bien%')
  GROUP BY p.id
  ORDER BY pesos DESC
+"""
+# Ritmo por plato: minutos desde que se sirvió hasta la primera lectura en vacío.
+SQL_PACE = """
+SELECT p.nombre AS plato, COUNT(*) AS platos,
+       AVG((julianday(v.desde) - julianday(ps.servido_at)) * 24 * 60) AS minutos
+  FROM platos_servidos ps
+  JOIN platos p ON p.id = ps.plato_id
+  JOIN (SELECT plato_servido_id, MIN(desde) AS desde
+          FROM estados_plato WHERE estado = 'vacio'
+         GROUP BY plato_servido_id) v ON v.plato_servido_id = ps.id
+ GROUP BY p.id
+ ORDER BY minutos DESC
+"""
+# Sobra por plato: cuánto le quedaba (fill_ratio) en la última lectura, de los
+# platos que dejaron de verse hace más de GONE_AFTER_MIN mientras la cámara
+# seguía leyendo (se los llevaron).
+SQL_LEFTOVER = """
+SELECT p.nombre AS plato, COUNT(*) AS platos, AVG(ps.ultimo_fill_ratio) AS sobra
+  FROM platos_servidos ps
+  JOIN platos p ON p.id = ps.plato_id
+ WHERE ps.ultimo_fill_ratio IS NOT NULL
+   AND (julianday((SELECT MAX(visto_at) FROM platos_servidos))
+        - julianday(ps.visto_at)) * 24 * 60 > ?
+ GROUP BY p.id
+ ORDER BY sobra DESC
+"""
+# Adopción: de los avisos con botones (hoy solo plato lleno; con C-5, todos),
+# cuántos tuvieron respuesta y cuántos se marcaron "No hacía falta".
+SQL_ADOPTION = """
+SELECT COUNT(*) AS avisos,
+       SUM(EXISTS (SELECT 1 FROM respuestas r WHERE r.aviso_id = a.id))
+         AS respondidos,
+       SUM(EXISTS (SELECT 1 FROM respuestas r WHERE r.aviso_id = a.id
+                     AND r.texto LIKE 'No hacía falta%')) AS no_hacia_falta
+  FROM avisos a
+ WHERE a.tipo = 'plato_lleno_mucho' AND a.resuelto_at IS NOT NULL
+"""
+# Espera del siguiente plato: mesa terminada que se cerró porque llegó otro
+# plato (no por retiro): minutos que la mesa estuvo sin nada para comer.
+SQL_NEXT_DISH = """
+SELECT COALESCE(m.nombre, '(sin mozo)') AS mozo, COUNT(*) AS veces,
+       AVG((julianday(a.resuelto_at) - julianday(a.abierto_at)) * 24 * 60) AS minutos
+  FROM avisos a LEFT JOIN mozos m ON m.id = a.mozo_id
+ WHERE a.tipo = 'mesa_terminada' AND a.motivo_cierre = 'servido'
+ GROUP BY a.mozo_id
+ ORDER BY minutos DESC
+"""
+# Para las horas pico: cada aviso con su hora y, si es mesa terminada, cuánto esperó.
+SQL_ALERT_TIMES = """
+SELECT abierto_at,
+       CASE WHEN tipo = 'mesa_terminada' AND motivo_cierre = 'retirados'
+            THEN (julianday(resuelto_at) - julianday(abierto_at)) * 24 * 60 END
+         AS espera
+  FROM avisos
+"""
+# Para la carga por mozo: quién atiende cada mesa.
+SQL_TABLE_WAITER = """
+SELECT me.id AS mesa, COALESCE(m.nombre, '(sin mozo)') AS mozo
+  FROM mesas me LEFT JOIN mozos m ON m.id = me.mozo_id
 """
 # Para armar las visitas de cada mesa (rotación): platos servidos y cierres.
 SQL_TABLE_EVENTS = """
@@ -202,11 +264,46 @@ def rotation(db: Database) -> dict | None:
     }
 
 
+def waiter_load(db: Database, visits: list) -> list[tuple[str, float, float]]:
+    """Carga por mozo: mesas atendidas por servicio y minutos promedio hasta
+    retirar una mesa terminada (de `SQL_ATTEND`). De la más cargada a la menos."""
+    waiter = {r["mesa"]: r["mozo"] for r in db.query(SQL_TABLE_WAITER)}
+    attend = {r["mozo"]: r["minutos"] for r in db.query(SQL_ATTEND)}
+    tables: dict[str, int] = {}
+    services: dict[str, set] = {}
+    for table_id, start, _ in visits:
+        name = waiter.get(table_id, "(sin mozo)")
+        tables[name] = tables.get(name, 0) + 1
+        services.setdefault(name, set()).add(_service(start))
+    rows = [(n, c / len(services[n]), attend.get(n)) for n, c in tables.items()]
+    return sorted(rows, key=lambda r: -r[1])
+
+
+def peak_hours(db: Database) -> list[tuple[str, int, float | None]]:
+    """Horas pico: por franja de PEAK_SLOT_MIN, avisos y % de mesas terminadas que
+    esperaron más de UNATTENDED_LIMIT_MIN. Ordenado por hora."""
+    slots: dict[str, list] = {}
+    for r in db.query(SQL_ALERT_TIMES):
+        at = _time(r["abierto_at"])
+        minute = at.minute - at.minute % PEAK_SLOT_MIN
+        slot = slots.setdefault(f"{at.hour:02d}:{minute:02d}", [0, 0, 0])
+        slot[0] += 1
+        if r["espera"] is not None:
+            slot[1] += 1
+            slot[2] += r["espera"] > UNATTENDED_LIMIT_MIN
+    return [
+        (slot, n, late / ended if ended else None)
+        for slot, (n, ended, late) in sorted(slots.items())
+    ]
+
+
 def operation(db: Database) -> dict:
     """Métricas de operación de M-1 que no estaban en el reporte del pitch."""
     unattended = db.query(SQL_UNATTENDED, (UNATTENDED_LIMIT_MIN,))[0]
     waste = [(r["plato"], r["platos"], r["pesos"]) for r in db.query(SQL_WASTE)]
     rot = rotation(db)
+    visits = table_visits(db) if rot else []
+    adoption = db.query(SQL_ADOPTION)[0]
     return {
         "unattended": dict(unattended) if unattended["mesas"] else None,
         "forgotten": [
@@ -217,6 +314,17 @@ def operation(db: Database) -> dict:
         "waste": waste,
         "waste_total": sum(p for _, _, p in waste),
         "services": rot["services"] if rot else 0,
+        "load": waiter_load(db, visits),
+        "peaks": peak_hours(db),
+        "pace": [(r["plato"], r["platos"], r["minutos"]) for r in db.query(SQL_PACE)],
+        "leftover": [
+            (r["plato"], r["platos"], r["sobra"])
+            for r in db.query(SQL_LEFTOVER, (GONE_AFTER_MIN,))
+        ],
+        "adoption": dict(adoption) if adoption["avisos"] else None,
+        "next_dish": [
+            (r["mozo"], r["veces"], r["minutos"]) for r in db.query(SQL_NEXT_DISH)
+        ],
     }
 
 
@@ -252,6 +360,12 @@ REPORT_METRICS = (
     "rotacion",
     "platos_que_vuelven",
     "desperdicio",
+    "carga_por_mozo",
+    "horas_pico",
+    "ritmo_por_plato",
+    "sobra_por_plato",
+    "adopcion",
+    "espera_siguiente_plato",
 )
 # Las que van en la imagen del pitch (render).
 IMAGE_METRICS = ("platos_que_vuelven", "tiempo_respuesta")
@@ -320,6 +434,38 @@ def print_operation(ops: dict, show: set[str]) -> None:
         )
         for dish, plates, pesos in ops["waste"]:
             print(f"  {dish:34} {plates:3} platos  ${pesos:>8,.0f}")
+    if ops["load"] and "carga_por_mozo" in show:
+        print("\nCarga por mozo (mesas por servicio · minutos hasta retirar)")
+        for waiter, per_service, attend in ops["load"]:
+            took = f"{attend:4.1f} min" if attend is not None else "   -"
+            print(f"  {waiter:10} {per_service:4.1f} mesas · {took}")
+    if ops["peaks"] and "horas_pico" in show:
+        print(
+            f"\nHoras pico (avisos por franja de {PEAK_SLOT_MIN} min · % de mesas"
+            f" terminadas que esperaron más de {UNATTENDED_LIMIT_MIN} min)"
+        )
+        for slot, alerts, late in ops["peaks"]:
+            pct = f"{late * 100:3.0f} %" if late is not None else "   -"
+            print(f"  {slot}  {alerts:4} avisos · {pct}")
+    if ops["pace"] and "ritmo_por_plato" in show:
+        print("\nRitmo por plato (minutos de servido a vacío)")
+        for dish, plates, minutes in ops["pace"]:
+            print(f"  {dish:34} {minutes:5.1f} min  ({plates} platos)")
+    if ops["leftover"] and "sobra_por_plato" in show:
+        print("\nSobra por plato (cuánto le quedaba al retirarlo)")
+        for dish, plates, left in ops["leftover"]:
+            print(f"  {dish:34} {left * 100:4.0f} %  ({plates} platos)")
+    if ops["adoption"] and "adopcion" in show:
+        a = ops["adoption"]
+        print(
+            f"\nAdopción: {a['respondidos']} de {a['avisos']} avisos respondidos"
+            f" ({a['respondidos'] / a['avisos'] * 100:.0f} %),"
+            f" {a['no_hacia_falta']} marcados «No hacía falta»"
+        )
+    if ops["next_dish"] and "espera_siguiente_plato" in show:
+        print("\nEspera del siguiente plato (mesa sin nada hasta que llega otro)")
+        for waiter, times, minutes in ops["next_dish"]:
+            print(f"  {waiter:10} {minutes:4.1f} min  ({times} veces)")
 
 
 def problem_lines(m: dict, dish: str) -> list[tuple[str, float]]:

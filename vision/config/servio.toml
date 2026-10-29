@@ -34,6 +34,9 @@ metricas = [
   "rotacion",
   "resumen_cierre",
   "platos_que_vuelven",
+  "carga_por_mozo",
+  "horas_pico",
+  "espera_siguiente_plato",
 ]
 
 [roles.dueno]
@@ -54,4 +57,10 @@ metricas = [
   "historico",
   "antes_despues",
   "costos_y_configuracion",
+  "carga_por_mozo",
+  "horas_pico",
+  "ritmo_por_plato",
+  "sobra_por_plato",
+  "adopcion",
+  "espera_siguiente_plato",
 ]

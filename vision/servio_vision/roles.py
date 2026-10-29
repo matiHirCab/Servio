@@ -33,6 +33,12 @@ METRICS = {
     "historico": "Histórico y tendencias (más de 7 días)",
     "antes_despues": "Antes vs. después con Servio",
     "costos_y_configuracion": "Costo de Servio, configuración, usuarios y roles",
+    "carga_por_mozo": "Carga por mozo (mesas por servicio y tiempos)",
+    "horas_pico": "Horas pico (avisos y demoras por franja)",
+    "ritmo_por_plato": "Ritmo por plato (minutos hasta vacío)",
+    "sobra_por_plato": "Sobra por plato (cuánto queda al retirarlo)",
+    "adopcion": "Adopción de los mozos (avisos respondidos)",
+    "espera_siguiente_plato": "Espera del siguiente plato",
 }
 VIEWS = ("reconocimiento", "dashboard", "configuracion")
 View = Literal["reconocimiento", "dashboard", "configuracion"]
