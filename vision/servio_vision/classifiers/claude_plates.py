@@ -38,6 +38,7 @@ from pydantic import BaseModel, Field, ValidationError
 
 from servio_vision import prompt, settings
 from servio_vision.classifiers.breaker import CircuitBreaker
+from servio_vision.classifiers.usage import UsageMeter
 
 logger = logging.getLogger(__name__)
 
@@ -113,6 +114,16 @@ def reset_breakers() -> None:
     """Todos cerrados (para los tests)."""
     with _breakers_lock:
         _breakers.clear()
+
+
+# Cuánto se llamó hoy y el tope (`CLAUDE_MAX_CALLS_PER_DAY`). Ver classifiers/usage.py.
+_meter = UsageMeter()
+
+
+def reset_meter() -> None:
+    """El contador en cero (para los tests)."""
+    global _meter
+    _meter = UsageMeter()
 
 
 @dataclass(frozen=True)
@@ -561,6 +572,18 @@ def estimate_plates(
 
     try:
         for attempt in range(1, ATTEMPTS + 1):
+            # cada intento se factura, también el reintento
+            if not _meter.try_start(cfg.claude_max_calls_per_day):
+                if _meter.first_cap_report():
+                    logger.error(
+                        "Se llegó al tope de %d llamadas al modelo por día "
+                        "(CLAUDE_MAX_CALLS_PER_DAY): sigo con YOLO solo hasta mañana",
+                        cfg.claude_max_calls_per_day,
+                    )
+                if attempt == 1:  # no se llamó: que el cortacircuito no quede esperando
+                    breaker.cancel_probe()
+                    return None
+                break  # el primer intento ya falló: cuenta como falla
             start = time.monotonic()
             try:
                 data, usage = backend(request, model, timeout_s)
@@ -594,6 +617,9 @@ def estimate_plates(
                 time.monotonic() - start,
                 usage,
             )
+            _meter.add_usage(usage)
+            if _meter.report_due():
+                logger.info("Uso del modelo: %s", _meter.summary())
             breaker.record_success()
             return report
     except Exception:

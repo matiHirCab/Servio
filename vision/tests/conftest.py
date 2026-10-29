@@ -22,8 +22,10 @@ def fresh_model_breakers():
     from servio_vision.classifiers import claude_plates
 
     claude_plates.reset_breakers()
+    claude_plates.reset_meter()
     yield
     claude_plates.reset_breakers()
+    claude_plates.reset_meter()
 
 
 @pytest.fixture(autouse=True)
