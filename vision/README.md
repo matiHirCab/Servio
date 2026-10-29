@@ -33,6 +33,15 @@ Con [DroidCam](https://www.dev47apps.com/) (Android y iPhone) el celular sirve d
 - La cámara se lee en un hilo aparte (si no, DroidCam corta la conexión mientras Claude clasifica) y, si se corta, se reconecta sola: se da por vencida si pasan 60 s sin un frame bueno. Una lectura por red que se cuelga (celular sin Wi-Fi) corta a los 5 s.
 - **Mesas:** se detectan solas en cada lectura (YOLO de COCO, clase "dining table"; necesita `requirements-yolo.txt`) y se llaman "Mesa 1", "Mesa 2"… Si se mueven, el recuadro las sigue. Para zonas fijas, `--zones config/zones.json` (con `tools/draw_zones.py`).
 
+## Probar todo como usuario
+
+```bash
+python tools/probar_usuario.py                 # nube o PC: video de prueba, fake, 3 mesas, ~40 s
+python tools/probar_usuario.py --source "..\video demo test.mp4" --classifier hybrid
+```
+
+Levanta el servicio entero (vista de reconocimiento sin ventana, avisos sin Telegram, base y métricas) y deja en `out/prueba_usuario/` lo que ve cada rol: fotos de la vista, los avisos de cada mozo (`mozo_<nombre>.txt`), las métricas del encargado y del dueño, el resumen e `INFORME.md` con los chequeos. Aparta el log y la base de antes en `out/respaldo/` (`--conservar` para no hacerlo). Para que Claude Code lo pruebe como mozo, encargado y dueño está el skill `.claude/skills/probar-como-usuario/`.
+
 ## Tests
 
 ```bash
