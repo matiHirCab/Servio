@@ -64,8 +64,22 @@ class Pipeline:
         self.smoothers: dict[str, TableSmoother] = {}
         self._rects: dict[str, tuple[int, int, int, int]] = {}  # recorte de cada mesa
         self.previous: dict[str, list[Item]] = {}
+        # De la última lectura, para el latido (health.py): cuántas observaciones
+        # aceptaron los avisos y si falló la detección de mesas.
+        self.delivered = 0
+        self.detection_failed = False
         self._add_tables(self.zones)
         self._pool = ThreadPoolExecutor(max_workers=MAX_TABLE_WORKERS)
+
+    @property
+    def frame_ok(self) -> bool:
+        """¿La última lectura llegó a los avisos? Si todas las mesas fallaron (el
+        modelo caído) o `alerts` falló en cada una, el loop sigue andando pero los
+        mozos no se enteran de nada. Sin mesas detectadas (y sin que la detección
+        haya fallado) no hay nada que avisar: una sala vacía está bien."""
+        return self.delivered > 0 or (
+            not self.zones.tables and not self.detection_failed
+        )
 
     def _follow_moved_tables(self, frame: np.ndarray) -> None:
         """Si el recorte de una mesa cambió, las cajas de sus platos (relativas al
@@ -145,12 +159,15 @@ class Pipeline:
 
     def process_frame(self, frame: np.ndarray, ts: datetime) -> list[TableObservation]:
         """Procesa un frame. Un error en una mesa descarta esa mesa, no corta el loop."""
+        self.delivered = 0
+        self.detection_failed = False
         if self.tables is not None:
             try:
                 self.zones = self.tables.update(frame)
                 self._add_tables(self.zones)
                 self._follow_moved_tables(frame)
             except Exception:
+                self.detection_failed = True
                 logger.exception("%s: no se pudieron detectar las mesas", ts)
         futures = {}
         for zone in self.zones.tables:
@@ -183,6 +200,7 @@ class Pipeline:
                 continue
             try:
                 self.on_observation(observation)
+                self.delivered += 1
             except Exception:
                 logger.exception(
                     "%s %s: alerts falló con esta observación", ts, table_id

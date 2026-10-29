@@ -148,6 +148,18 @@ def test_state_is_saved_right_away_when_an_alert_opens(tmp_path):
     p.close()
 
 
+def test_state_is_saved_right_away_when_a_plate_is_served(tmp_path):
+    """El id de la fila de un plato servido tiene que llegar al estado guardado: si
+    no, tras un reinicio se inserta el plato de nuevo."""
+    db = RecordingDb()
+    p = recording(tmp_path, db, Restaurant.load())
+    p.process(obs(0, COMIENDO))
+    before = db.saves
+    p.process(obs(10, COMIENDO, VACIO))  # plato nuevo, sin aviso y sin pasar 5 s
+    assert db.saves == before + 1
+    p.close()
+
+
 def test_failed_plate_readings_are_retried_with_the_same_changes(tmp_path):
     """Si la base falla, el estado que ya se creía guardado no se pierde: la próxima
     lectura vuelve a mandar los cambios de estado."""
@@ -187,8 +199,17 @@ def test_a_down_database_does_not_flood_the_log(tmp_path, caplog):
         assert len([m for m in messages if "el estado" in m]) == 1
         assert len([m for m in messages if "el aviso abierto" in m]) == 1
 
+        # otro error en la misma escritura no se calla: es otra causa
+        def schema_error() -> None:
+            raise ValueError("no existe la columna")
+
+        with caplog.at_level(logging.ERROR):
+            p._db_write("el estado", schema_error)
+        assert "No se pudo guardar el estado" in caplog.records[-1].getMessage()
+        assert caplog.records[-1].exc_info[0] is ValueError
+
         # pasado el minuto vuelve a loguear y cuenta los que se callaron
-        p._db_logged["el estado"] -= 61
+        p._db_logged[("el estado", "RuntimeError")] -= 61
         with caplog.at_level(logging.ERROR):
             p._db_write("el estado", boom)
         assert "y 19 fallos más" in caplog.records[-1].getMessage()

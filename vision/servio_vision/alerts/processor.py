@@ -122,8 +122,10 @@ class AlertProcessor:
         self._close_notes: dict[str, str] = {}
         self._state_dirty = False  # hay estado sin guardar
         self._saved_at = float("-inf")  # time.monotonic() del último intento
-        self._db_logged: dict[str, float] = {}  # qué escritura, cuándo se logueó
-        self._db_muted: dict[str, int] = {}  # y cuántos fallos se callaron
+        # (escritura, tipo de error) → cuándo se logueó, y cuántos fallos se callaron
+        self._db_logged: dict[tuple[str, str], float] = {}
+        self._db_muted: dict[tuple[str, str], int] = {}
+        self._save_now = False  # pasó algo que no puede esperar al próximo guardado
         if resume and db is not None:
             self._resume(db, resume_max_age_s)
 
@@ -179,6 +181,7 @@ class AlertProcessor:
 
     def _flush_state(self) -> None:
         self._saved_at = time.monotonic()  # también si falla: no insistir cada lectura
+        self._save_now = False
         self._db_write("el estado", self._save_state)
 
     def _record_plates(
@@ -194,6 +197,9 @@ class AlertProcessor:
         for plate in active:
             if plate.track_id in self._served_rows:
                 continue
+            # el id de la fila tiene que llegar al estado guardado ya: si no, tras
+            # un reinicio el plato se insertaría de nuevo
+            self._save_now = True
             dish = self.restaurant.dish(obs.table_id, plate.track_id)
             same = self._served_rows.get(plate.inherited_from or "")
             if same is not None:
@@ -250,14 +256,16 @@ class AlertProcessor:
         y los demás se cuentan."""
         try:
             write(*args)
-        except Exception:
+        except Exception as error:
+            # por escritura y por tipo de error: una causa nueva no se calla
+            key = (what, type(error).__name__)
             now = time.monotonic()
-            last = self._db_logged.get(what)
+            last = self._db_logged.get(key)
             if last is not None and now - last < DB_LOG_EVERY_S:
-                self._db_muted[what] = self._db_muted.get(what, 0) + 1
+                self._db_muted[key] = self._db_muted.get(key, 0) + 1
                 return
-            self._db_logged[what] = now
-            muted = self._db_muted.pop(what, 0)
+            self._db_logged[key] = now
+            muted = self._db_muted.pop(key, 0)
             more = f" (y {muted} fallos más desde el último aviso)" if muted else ""
             logger.exception("No se pudo guardar %s en la base%s", what, more)
 
@@ -380,7 +388,7 @@ class AlertProcessor:
             self._state_dirty = True
             alerts_changed = any(e["event"] != "observation" for e in events)
             due = time.monotonic() - self._saved_at >= SAVE_STATE_EVERY_S
-            if alerts_changed or due:
+            if alerts_changed or self._save_now or due:
                 self._flush_state()
         return events
 
