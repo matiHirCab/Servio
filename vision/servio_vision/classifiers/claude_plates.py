@@ -29,7 +29,7 @@ import subprocess
 import sys
 import tempfile
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -164,6 +164,26 @@ def json_from_text(text: str) -> dict:
     raise ClaudeCallError(f"claude -p no devolvió JSON: {text[:300]!r}")
 
 
+# Variables que no le llegan a `claude -p`: las claves y los tokens de Servio
+# (settings.SECRET_KEYS) y el token de login alternativo de Anthropic.
+_CLI_HIDDEN = {k.upper() for k in settings.SECRET_KEYS} | {"ANTHROPIC_AUTH_TOKEN"}
+
+
+def _cli_env(environ: Mapping[str, str] | None = None) -> dict[str, str]:
+    """El entorno de `claude -p`: el nuestro sin los secretos.
+
+    Con una `ANTHROPIC_API_KEY` el CLI deja la suscripción del equipo y factura por
+    API sin avisar; y el token de Telegram o la URL de la base no tienen por qué
+    llegarle a un proceso hijo. El resto (PATH, el perfil donde guarda su login) sí."""
+    env = {
+        k: v for k, v in (environ or os.environ).items() if k.upper() not in _CLI_HIDDEN
+    }
+    # sin esto, claude se actualiza solo en medio de la corrida y el siguiente
+    # llamado no encuentra el ejecutable
+    env["DISABLE_AUTOUPDATER"] = "1"
+    return env
+
+
 def _call_cli(
     request: PlatesRequest, model: str, timeout_s: float
 ) -> tuple[dict, dict]:
@@ -207,9 +227,7 @@ def _call_cli(
             encoding="utf-8",
             timeout=timeout_s,
             cwd=tempfile.gettempdir(),  # que no cargue el CLAUDE.md del repo
-            # sin esto, claude se actualiza solo en medio de la corrida y el
-            # siguiente llamado no encuentra el ejecutable
-            env={**os.environ, "DISABLE_AUTOUPDATER": "1"},
+            env=_cli_env(),
         )
     except subprocess.TimeoutExpired as e:
         raise ClaudeCallError(f"claude -p tardó más de {timeout_s} s") from e

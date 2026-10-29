@@ -166,6 +166,48 @@ def test_cli_reads_structured_output(monkeypatch):
     assert usage["cost_usd"] == 0.001
 
 
+def test_cli_env_drops_the_secrets_and_keeps_what_the_cli_needs():
+    """`claude -p` va con la suscripción: una ANTHROPIC_API_KEY en el entorno la
+    cambiaría a facturación por API, y el token de Telegram o la base no tienen por
+    qué llegarle a un proceso hijo."""
+    env = claude_plates._cli_env(
+        {
+            "PATH": "/bin",
+            "USERPROFILE": "C:/Users/x",  # donde el CLI guarda su login
+            "ANTHROPIC_API_KEY": "sk-ant",
+            "ANTHROPIC_AUTH_TOKEN": "tok",
+            "OPENAI_API_KEY": "sk-oai",
+            "TELEGRAM_BOT_TOKEN": "1:x",
+            "DATABASE_URL": "postgresql://u:p@h/db",
+        }
+    )
+    assert env["PATH"] == "/bin" and env["USERPROFILE"] == "C:/Users/x"
+    assert env["DISABLE_AUTOUPDATER"] == "1"
+    assert not {"ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "OPENAI_API_KEY"} & set(
+        env
+    )
+    assert not {"TELEGRAM_BOT_TOKEN", "DATABASE_URL"} & set(env)
+
+
+def test_cli_subprocess_runs_with_the_scrubbed_env(monkeypatch):
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant")
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "1:x")
+    seen = {}
+
+    def fake_run(args, **kwargs):
+        seen.update(kwargs["env"])
+        result = {"type": "result", "structured_output": _answer(1)}
+        return subprocess.CompletedProcess(
+            args, 0, stdout=json.dumps(result) + "\n", stderr=""
+        )
+
+    monkeypatch.setattr(claude_plates, "_find_cli", lambda: "claude")
+    monkeypatch.setattr(claude_plates.subprocess, "run", fake_run)
+    claude_plates._call_cli(REQUEST, "haiku", 10)
+    assert "ANTHROPIC_API_KEY" not in seen and "TELEGRAM_BOT_TOKEN" not in seen
+    assert seen["DISABLE_AUTOUPDATER"] == "1"
+
+
 def test_cli_timeout_is_a_call_error(monkeypatch):
     def fake_run(args, **kwargs):
         raise subprocess.TimeoutExpired(args, 10)
