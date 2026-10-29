@@ -2,6 +2,7 @@
 
 import os
 import sys
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -164,7 +165,7 @@ def test_two_houses_write_the_same_database_without_clashing(tmp_path):
         ]
         m = metricas.compute(a)
         assert m["dishes"] == [("Donas glaseadas", 1.0, "Muy dulces")]
-        assert m["live_answers"] == 2
+        assert m["live_answers"] == 1  # las respuestas en vivo son solo de esta casa
     finally:
         a.close()
         b.close()
@@ -214,5 +215,74 @@ def test_postgres_end_to_end(tmp_path):
         db.import_history(Path(metricas.HISTORY), restaurant)
         m = metricas.compute(db)
         assert m["dishes"] and m["attend"]
+    finally:
+        db.close()
+
+
+def test_foreign_keys_stay_on_after_migrating(tmp_path):
+    """Migrar apaga las FK de SQLite un momento; la conexión vuelve al pool con
+    las FK prendidas: una fila que apunta a una mesa que no existe se rechaza."""
+    import sqlalchemy
+
+    db = Database(tmp_path / "servio.db")
+    try:
+        [(on,)] = db.query("PRAGMA foreign_keys")
+        assert on == 1
+        with pytest.raises(sqlalchemy.exc.IntegrityError):
+            db._write(
+                sqlalchemy.text(
+                    "INSERT INTO avisos (local_id, id, tipo, mesa_id, abierto_at, origen)"
+                    " VALUES ('local', 'x', 'mesa_terminada', 'NOPE', 't', 'camara')"
+                )
+            )
+    finally:
+        db.close()
+
+
+def test_live_metrics_are_only_this_house(tmp_path):
+    """Lo que pasó en vivo (último retiro, respuestas de hoy) es de esta casa; la
+    otra casa no aparece en mi /metricas."""
+    path = tmp_path / "compartida.db"
+    restaurant = Restaurant.load()
+    a, b = Database(path, local_id="casa-a"), Database(path, local_id="casa-b")
+    try:
+        a.load_restaurant(restaurant)
+        b.alert_opened("T1-mesa_terminada-1", "mesa_terminada", "T1", None, T0)
+        b.alert_resolved("T1-mesa_terminada-1", T0 + timedelta(seconds=90), "retirados")
+        assert metricas.compute(a)["last_pickup"] is None
+        mozo, mesa, seconds = metricas.compute(b)["last_pickup"]
+        assert (mozo, mesa) == ("Juan", "Mesa 1") and seconds == pytest.approx(
+            90, abs=0.01
+        )
+    finally:
+        a.close()
+        b.close()
+
+
+def test_restaurant_reload_drops_answers_that_went_away(tmp_path):
+    db = Database(tmp_path / "servio.db")
+    try:
+        restaurant = Restaurant.load()
+        db.load_restaurant(restaurant)
+        [(before,)] = db.query("SELECT COUNT(*) FROM respuestas_tipicas")
+        did, dish = next(iter(restaurant.dishes.items()))
+        restaurant.dishes[did] = replace(dish, answers=dish.answers[:1])
+        db.load_restaurant(restaurant)  # otra vez, con menos opciones: no choca
+        [(after,)] = db.query("SELECT COUNT(*) FROM respuestas_tipicas")
+        assert after < before
+    finally:
+        db.close()
+
+
+def test_query_rejects_a_bare_string_and_unknown_columns(tmp_path):
+    db = Database(tmp_path / "servio.db")
+    try:
+        with pytest.raises(TypeError):
+            db.query("SELECT * FROM mesas WHERE id = ?", "T1")
+        db.load_restaurant(Restaurant.load())
+        [row] = db.query("SELECT id FROM mesas WHERE id = ?", ("T1",))
+        assert row["id"] == "T1"
+        with pytest.raises(KeyError):
+            row["typo"]
     finally:
         db.close()

@@ -41,7 +41,11 @@ DB = VISION_DIR / "out" / "servio.db"
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Métricas de platos y mozos.")
-    parser.add_argument("--db", type=Path, default=DB)
+    parser.add_argument(
+        "--db",
+        type=Path,
+        help=f"un SQLite puntual (por defecto {DB}, o DATABASE_URL del .env si está)",
+    )
     parser.add_argument("--historial", type=Path, default=HISTORY)
     parser.add_argument("--image", type=Path, help="guardar también como imagen")
     parser.add_argument("--sql", action="store_true", help="mostrar las consultas")
@@ -60,10 +64,12 @@ def main(argv: list[str] | None = None) -> int:
         if not visible:
             print(f"El rol {role.nombre} no ve estas métricas (ver {args.config}).")
             return 3
-    # con DATABASE_URL en el .env lee el Postgres compartido; si no, el SQLite local
+    # un --db explícito gana; si no, DATABASE_URL del .env (Postgres compartido) o
+    # el SQLite local
     cfg = settings.current()
-    db = Database(args.db, url=cfg.database_url, local_id=cfg.local_id)
-    if cfg.database_url:
+    url = None if args.db else cfg.database_url
+    db = Database(args.db or DB, url=url, local_id=cfg.local_id)
+    if url:
         print("(base compartida: DATABASE_URL)\n")
     restaurant = Restaurant.load()
     db.load_restaurant(restaurant)

@@ -52,14 +52,14 @@ from sqlalchemy import (
     Table,
 )
 
-from servio_vision import VISION_DIR
+from servio_vision import DEFAULT_LOCAL, VISION_DIR
 
 logger = logging.getLogger(__name__)
 
 MIGRATIONS_DIR = Path(__file__).resolve().parent / "migrations"
 DEFAULT_PATH = VISION_DIR / "out" / "servio.db"
-DEFAULT_LOCAL = "local"  # local_id cuando la casa no dice el suyo
 HISTORY_LOCAL = "historial"  # el historial simulado no es de ninguna casa
+HISTORY_LOCK = 4211  # pg_advisory_xact_lock: una sola casa importa el historial
 
 # Hora de inicio de cada servicio, para fechar el historial simulado.
 SERVICE_START = {"almuerzo": "13:00:00", "cena": "21:00:00"}
@@ -145,6 +145,8 @@ class Row(tuple):
 
     def __getitem__(self, key):
         if isinstance(key, str):
+            if key not in self._keys:
+                raise KeyError(key)
             return tuple.__getitem__(self, self._keys.index(key))
         return tuple.__getitem__(self, key)
 
@@ -215,6 +217,9 @@ class Database:
                 command.stamp(cfg, "0002" if "motivo_cierre" in columns else "0001")
             command.upgrade(cfg, "head")
             conn.commit()
+            if self.dialect == "sqlite":
+                # la conexión vuelve al pool: que no quede con las FK apagadas
+                conn.exec_driver_sql("PRAGMA foreign_keys=ON")
 
     def close(self) -> None:
         with self._lock:
@@ -237,10 +242,10 @@ class Database:
         """Rellena en una consulta lo que cambia según el motor: cuánto tardó un aviso
         (`{elapsed_minutes}` / `{elapsed_seconds}` entre `a.abierto_at` y
         `a.resuelto_at`). SQLite y Postgres restan fechas distinto."""
-        return template.format(
-            elapsed_minutes=self.elapsed("a.abierto_at", "a.resuelto_at", 60),
-            elapsed_seconds=self.elapsed("a.abierto_at", "a.resuelto_at", 1),
-        )
+        # reemplazo literal, no str.format: una llave suelta en el SQL no es un error
+        return template.replace(
+            "{elapsed_minutes}", self.elapsed("a.abierto_at", "a.resuelto_at", 60)
+        ).replace("{elapsed_seconds}", self.elapsed("a.abierto_at", "a.resuelto_at", 1))
 
     def elapsed(self, start: str, end: str, unit_seconds: int) -> str:
         """Expresión SQL: segundos (o minutos, con 60) entre dos columnas ISO."""
@@ -287,17 +292,23 @@ class Database:
                     .values(row)
                     .on_conflict_do_update(index_elements=["id"], set_=row)
                 )
-                conn.execute(
-                    respuestas_tipicas.delete().where(
-                        respuestas_tipicas.c.plato_id == did
-                    )
-                )
+                # upsert y no DELETE + INSERT: dos casas arrancando a la vez no se
+                # pisan la clave (plato_id, orden); las opciones que sobran se borran
                 for i, text in enumerate(dish.answers):
+                    row = {"plato_id": did, "orden": i, "texto": text}
                     conn.execute(
-                        respuestas_tipicas.insert().values(
-                            plato_id=did, orden=i, texto=text
+                        self._upsert(respuestas_tipicas)
+                        .values(row)
+                        .on_conflict_do_update(
+                            index_elements=["plato_id", "orden"], set_=row
                         )
                     )
+                conn.execute(
+                    respuestas_tipicas.delete().where(
+                        respuestas_tipicas.c.plato_id == did,
+                        respuestas_tipicas.c.orden >= len(dish.answers),
+                    )
+                )
 
     def waiter_id(self, table_id: str) -> str | None:
         rows = self.query(
@@ -385,83 +396,121 @@ class Database:
 
     def import_history(self, path: Path, restaurant) -> int:
         """Carga `historial.jsonl` (una sola vez: si ya está, no hace nada). Va con
-        `local_id` "historial": no es de ninguna casa."""
-        if self.query("SELECT 1 FROM avisos WHERE origen = 'historial' LIMIT 1"):
+        `local_id` "historial": no es de ninguna casa.
+
+        Tres inserts masivos y no uno por fila: en un Postgres remoto son miles de
+        idas y vueltas con el lock tomado (el loop de la cámara esperaría minutos).
+        En Postgres, además, un lock consultivo: dos casas que piden `/metricas` a la
+        vez no importan las dos."""
+        exists = sa.text("SELECT 1 FROM avisos WHERE origen = 'historial' LIMIT 1")
+        if self.query(str(exists)):
             return 0
-        dish_ids = {d.name: did for did, d in restaurant.dishes.items()}
-        waiter_ids = {name: wid for wid, name in restaurant.waiters.items()}
-        count = 0
-        clock: dict[tuple, datetime] = {}
-        last_served: dict[tuple, int] = {}
+        served_rows, served_keys, alert_rows, answer_rows = _history_rows(
+            path, restaurant
+        )
         with self._lock, self._engine.begin() as conn:
-            for n, line in enumerate(path.read_text(encoding="utf-8").splitlines()):
-                r = json.loads(line)
-                key = (r["fecha"], r["servicio"], r["mesa"])
-                start = datetime.fromisoformat(
-                    f"{r['fecha']}T{SERVICE_START[r['servicio']]}"
-                )
-                at = clock.get(key, start) + timedelta(minutes=4)
-                clock[key] = at
-                waiter = waiter_ids.get(r["mozo"])
-                if r["tipo"] == "servido":
-                    result = conn.execute(
-                        platos_servidos.insert().values(
-                            local_id=HISTORY_LOCAL,
-                            mesa_id=r["mesa"],
-                            plato_id=dish_ids.get(r["plato"]),
-                            servido_at=_iso(at),
-                            origen="historial",
-                        )
-                    )
-                    last_served[(key, r["plato"])] = result.inserted_primary_key[0]
-                elif r["tipo"] == "plato_lleno":
-                    alert_id = f"h{n}"
-                    conn.execute(
-                        avisos.insert().values(
-                            local_id=HISTORY_LOCAL,
-                            id=alert_id,
-                            tipo="plato_lleno_mucho",
-                            mesa_id=r["mesa"],
-                            mozo_id=waiter,
-                            plato_servido_id=last_served.get((key, r["plato"])),
-                            abierto_at=_iso(at),
-                            resuelto_at=_iso(at + timedelta(minutes=5)),
-                            origen="historial",
-                        )
-                    )
-                    conn.execute(
-                        respuestas.insert().values(
-                            local_id=HISTORY_LOCAL,
-                            aviso_id=alert_id,
-                            mozo_id=waiter,
-                            respondido_por=r["mozo"],
-                            texto=r["respuesta"],
-                            escrita=0,
-                            segundos=r["segundos_respuesta"],
-                            respondido_at=_iso(
-                                at + timedelta(seconds=r["segundos_respuesta"])
-                            ),
-                        )
-                    )
-                    count += 1
-                elif r["tipo"] == "mesa_terminada":
-                    conn.execute(
-                        avisos.insert().values(
-                            local_id=HISTORY_LOCAL,
-                            id=f"h{n}",
-                            tipo="mesa_terminada",
-                            mesa_id=r["mesa"],
-                            mozo_id=waiter,
-                            abierto_at=_iso(at),
-                            resuelto_at=_iso(
-                                at + timedelta(minutes=r["minutos_hasta_atender"])
-                            ),
-                            origen="historial",
-                            motivo_cierre="retirados",
-                        )
-                    )
-                    count += 1
-        return count
+            if self.dialect == "postgresql":
+                conn.execute(sa.text(f"SELECT pg_advisory_xact_lock({HISTORY_LOCK})"))
+            if conn.execute(exists).first():  # la otra casa llegó primero
+                return 0
+            ids = conn.execute(
+                platos_servidos.insert().returning(
+                    platos_servidos.c.id, sort_by_parameter_order=True
+                ),
+                served_rows,
+            ).scalars()
+            served_ids = dict(zip(served_keys, ids, strict=True))
+            for alert in alert_rows:
+                alert["plato_servido_id"] = served_ids.get(alert.pop("served_key"))
+            if alert_rows:
+                conn.execute(avisos.insert(), alert_rows)
+            if answer_rows:
+                conn.execute(respuestas.insert(), answer_rows)
+        return len(alert_rows)
+
+
+def _history_rows(
+    path: Path, restaurant
+) -> tuple[list[dict], list, list[dict], list[dict]]:
+    """Las filas del historial simulado, listas para insertar: platos servidos (y la
+    clave con la que los avisos los referencian), avisos y respuestas."""
+    dish_ids = {d.name: did for did, d in restaurant.dishes.items()}
+    waiter_ids = {name: wid for wid, name in restaurant.waiters.items()}
+    clock: dict[tuple, datetime] = {}
+    served_rows: list[dict] = []
+    served_keys: list[tuple] = []
+    alert_rows: list[dict] = []
+    answer_rows: list[dict] = []
+    for n, line in enumerate(path.read_text(encoding="utf-8").splitlines()):
+        r = json.loads(line)
+        key = (r["fecha"], r["servicio"], r["mesa"])
+        start = datetime.fromisoformat(f"{r['fecha']}T{SERVICE_START[r['servicio']]}")
+        at = clock.get(key, start) + timedelta(minutes=4)
+        clock[key] = at
+        waiter = waiter_ids.get(r["mozo"])
+        if r["tipo"] == "servido":
+            served_rows.append(
+                {
+                    "local_id": HISTORY_LOCAL,
+                    "mesa_id": r["mesa"],
+                    "plato_id": dish_ids.get(r["plato"]),
+                    "track_id": None,
+                    "servido_at": _iso(at),
+                    "origen": "historial",
+                }
+            )
+            served_keys.append((n, key, r["plato"]))
+        elif r["tipo"] == "plato_lleno":
+            # el último servido de ese plato en esa mesa y servicio
+            served_key = next(
+                (k for k in reversed(served_keys) if k[1:] == (key, r["plato"])), None
+            )
+            alert_rows.append(
+                {
+                    "local_id": HISTORY_LOCAL,
+                    "id": f"h{n}",
+                    "tipo": "plato_lleno_mucho",
+                    "mesa_id": r["mesa"],
+                    "mozo_id": waiter,
+                    "served_key": served_key,
+                    "abierto_at": _iso(at),
+                    "resuelto_at": _iso(at + timedelta(minutes=5)),
+                    "origen": "historial",
+                    "motivo_cierre": None,
+                }
+            )
+            answer_rows.append(
+                {
+                    "local_id": HISTORY_LOCAL,
+                    "aviso_id": f"h{n}",
+                    "mozo_id": waiter,
+                    "respondido_por": r["mozo"],
+                    "texto": r["respuesta"],
+                    "escrita": 0,
+                    "segundos": r["segundos_respuesta"],
+                    "respondido_at": _iso(
+                        at + timedelta(seconds=r["segundos_respuesta"])
+                    ),
+                }
+            )
+        elif r["tipo"] == "mesa_terminada":
+            alert_rows.append(
+                {
+                    "local_id": HISTORY_LOCAL,
+                    "id": f"h{n}",
+                    "tipo": "mesa_terminada",
+                    "mesa_id": r["mesa"],
+                    "mozo_id": waiter,
+                    "served_key": None,
+                    "abierto_at": _iso(at),
+                    "resuelto_at": _iso(
+                        at + timedelta(minutes=r["minutos_hasta_atender"])
+                    ),
+                    "origen": "historial",
+                    "motivo_cierre": "retirados",
+                }
+            )
+    return served_rows, served_keys, alert_rows, answer_rows
 
 
 def _sqlite_foreign_keys_on(dbapi_connection, _record) -> None:
@@ -472,6 +521,8 @@ def _bind(sql: str, params: Mapping[str, Any] | Sequence[Any]):
     """`text()` con parámetros con nombre; los posicionales (`?`) se numeran."""
     if isinstance(params, Mapping):
         return sa.text(sql), dict(params)
+    if isinstance(params, str | bytes):
+        raise TypeError("params: una tupla o un dict, no un texto suelto")
     bound: dict[str, Any] = {}
     for i, value in enumerate(params):
         sql = sql.replace("?", f":p{i}", 1)

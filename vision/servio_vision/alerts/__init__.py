@@ -10,12 +10,12 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
-from servio_vision import VISION_DIR
+from servio_vision import VISION_DIR, settings
 from servio_vision.alerts.config import DEFAULT_INTERVAL, AlertConfig, load_config
 from servio_vision.alerts.models import TableObservation
 from servio_vision.alerts.notify import get_notifier
 from servio_vision.alerts.processor import AlertProcessor
-from servio_vision.db import DEFAULT_LOCAL, Database
+from servio_vision.db import Database
 from servio_vision.restaurant import Restaurant
 
 DEFAULT_LOG = VISION_DIR / "out" / "eventos.jsonl"
@@ -30,7 +30,7 @@ def configure(
     restaurant: Restaurant | None = None,
     env: Mapping[str, str] | None = None,
     database_url: str | None = None,
-    local_id: str = DEFAULT_LOCAL,
+    local_id: str | None = None,
 ) -> AlertProcessor:
     """Arranca un estado nuevo (sin mesas ni avisos abiertos) con estos umbrales.
     `env`: token y grupo de Telegram (los pasa `app.py`); sin él, los de la
@@ -41,11 +41,14 @@ def configure(
         _processor.close()
     log_path = log_path or DEFAULT_LOG
     # con datos del restaurante, todo queda también en la base (junto al log)
-    db = (
-        Database(log_path.parent / "servio.db", url=database_url, local_id=local_id)
-        if restaurant is not None
-        else None
-    )
+    db = None
+    if restaurant is not None:
+        cfg = settings.current() if local_id is None else None
+        db = Database(
+            log_path.parent / "servio.db",
+            url=database_url,
+            local_id=local_id if local_id is not None else cfg.local_id,
+        )
     _processor = AlertProcessor(
         config, get_notifier(telegram, env), log_path, restaurant, db
     )

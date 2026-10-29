@@ -18,12 +18,12 @@ Revises: 0002
 import sqlalchemy as sa
 from alembic import op
 
+from servio_vision import DEFAULT_LOCAL as LOCAL
+
 revision = "0003"
 down_revision = "0002"
 branch_labels = None
 depends_on = None
-
-LOCAL = "local"
 
 
 def upgrade() -> None:
@@ -77,6 +77,12 @@ def upgrade() -> None:
     op.drop_table("avisos")
     op.rename_table("avisos_v3", "avisos")
     op.rename_table("respuestas_v3", "respuestas")
+    if op.get_bind().dialect.name == "postgresql":
+        # las filas copiadas traen su id: la secuencia tiene que seguir después
+        op.execute(
+            "SELECT setval(pg_get_serial_sequence('respuestas', 'id'),"
+            " COALESCE((SELECT MAX(id) FROM respuestas), 1))"
+        )
 
 
 def downgrade() -> None:

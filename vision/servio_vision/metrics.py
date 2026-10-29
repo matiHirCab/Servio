@@ -54,7 +54,7 @@ SELECT m.nombre AS mozo, me.nombre AS mesa,
   JOIN mesas me ON me.id = a.mesa_id
   LEFT JOIN mozos m ON m.id = a.mozo_id
  WHERE a.tipo = 'mesa_terminada' AND a.motivo_cierre = 'retirados'
-   AND a.origen = 'camara'
+   AND a.origen = 'camara' AND a.local_id = :local
  ORDER BY a.resuelto_at DESC
  LIMIT 1
 """
@@ -70,7 +70,7 @@ SELECT (SELECT COUNT(DISTINCT substr(abierto_at, 1, 10)) FROM avisos
        (SELECT COUNT(*) FROM respuestas) AS respuestas,
        (SELECT COUNT(*) FROM respuestas r
          JOIN avisos a ON a.id = r.aviso_id AND a.local_id = r.local_id
-         WHERE a.origen = 'camara') AS en_vivo
+         WHERE a.origen = 'camara' AND a.local_id = :local) AS en_vivo
 """
 
 
@@ -95,7 +95,10 @@ SELECT p.nombre AS plato, r.texto AS problema,
 
 def compute(db: Database) -> dict:
     def query(template: str):
-        return db.query(db.render(template))
+        # lo que pasó en vivo (`:local`) es solo de esta casa; el historial y los
+        # promedios por plato y mozo juntan todo
+        params = {"local": db.local_id} if ":local" in template else {}
+        return db.query(db.render(template), params)
 
     totals = query(SQL_TOTALS)[0]
     problems: dict[str, list[tuple[str, float]]] = {}
