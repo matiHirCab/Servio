@@ -2,14 +2,19 @@
 
 Solo envío, con `httpx` directo a la Bot API: `send` abre un mensaje en el grupo y
 devuelve su `message_id`; `edit` lo reescribe (al cerrar, con `resolved_text`).
-Si Telegram falla se loguea y se sigue: nunca lanza, así el loop no se frena.
+Si Telegram falla se loguea y se sigue: nunca lanza, así el loop no se frena. Antes
+de rendirse reintenta lo que puede ser pasajero (red, 5xx y el 429 de «esperá N
+segundos»): un aviso perdido por un parpadeo de internet es un mozo que no se entera.
+Un reintento después de un timeout puede duplicar un mensaje que sí llegó: se
+prefiere eso a perder el aviso.
 
 El agrupado por mesa y guardar el `message_id` en el `Alert` son de `processor.py`.
 """
 
 import logging
 import sys
-from collections.abc import Mapping
+import time
+from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -23,6 +28,9 @@ logging.getLogger("httpx").setLevel(logging.WARNING)
 
 API_URL = "https://api.telegram.org"
 RESOLVED_SUFFIX = "\n\n✅ ya resuelto"
+SEND_ATTEMPTS = 3  # el primero y dos reintentos
+RETRY_WAIT_S = 1.0  # espera entre intentos si Telegram no pide otra
+RETRY_WAIT_MAX_S = 10.0  # tope por espera: el loop de lecturas espera al envío
 
 
 def resolved_text(text: str) -> str:
@@ -54,10 +62,12 @@ class TelegramNotifier:
         *,
         client: httpx.Client | None = None,
         timeout: float = 10.0,
+        sleep: Callable[[float], None] = time.sleep,
     ) -> None:
         self._token = token
         self._chat_id = chat_id
         self._client = client or httpx.Client(timeout=timeout)
+        self._sleep = sleep  # los tests no duermen de verdad
 
     @classmethod
     def from_env(cls, env: Mapping[str, str] | None = None) -> "TelegramNotifier":
@@ -123,7 +133,8 @@ class TelegramNotifier:
         }
         if offset is not None:
             payload["offset"] = offset
-        result = self._call("getUpdates", payload, timeout=timeout + 10)
+        # sin reintentos acá: el bucle de feedback.py ya repite el long polling
+        result = self._call("getUpdates", payload, timeout=timeout + 10, attempts=1)
         return result if isinstance(result, list) else []
 
     def is_group(self, chat_id: object) -> bool:
@@ -141,32 +152,53 @@ class TelegramNotifier:
         payload: dict[str, Any],
         timeout: float | None = None,
         files: dict[str, Any] | None = None,
+        attempts: int = SEND_ATTEMPTS,
     ) -> Any:
         """POST a la Bot API; devuelve `result` o None si falló (ya logueado).
-        Con `files`, va como formulario (multipart) en vez de JSON."""
+        Con `files`, va como formulario (multipart) en vez de JSON. Reintenta hasta
+        `attempts` veces un error pasajero (ver `_retry_wait`)."""
         url = f"{API_URL}/bot{self._token}/{method}"
         body: dict[str, Any] = (
             {"data": payload, "files": files} if files else {"json": payload}
         )
         if timeout is not None:
             body["timeout"] = timeout
+        for attempt in range(1, attempts + 1):
+            result, wait = self._post_once(method, url, body)
+            if wait is None:  # terminó (bien o con un error que no se arregla solo)
+                return result
+            if attempt == attempts:
+                break
+            self._sleep(wait)
+        logger.warning("Telegram %s: me rindo tras %d intentos", method, attempts)
+        return None
+
+    def _post_once(
+        self, method: str, url: str, body: dict[str, Any]
+    ) -> tuple[Any, float | None]:
+        """Un POST. Devuelve `(result, None)` si terminó, o `(None, espera)` si vale
+        la pena reintentar después de esa cantidad de segundos."""
         try:
             response = self._client.post(url, **body)
-            data = response.json()
-        except (httpx.HTTPError, ValueError) as error:
+        except httpx.HTTPError as error:
             # Sin el mensaje de httpx: trae la URL, y la URL trae el token.
             logger.warning("Telegram %s falló: %s", method, type(error).__name__)
-            return None
-        if not isinstance(data, dict) or not data.get("ok"):
-            description = data.get("description") if isinstance(data, dict) else None
-            logger.warning(
-                "Telegram %s falló (HTTP %s): %s",
-                method,
-                response.status_code,
-                description,
-            )
-            return None
-        return data.get("result")
+            return None, RETRY_WAIT_S
+        try:
+            data = response.json()
+        except ValueError:
+            data = None
+        if isinstance(data, dict) and data.get("ok"):
+            return data.get("result"), None
+        description = data.get("description") if isinstance(data, dict) else None
+        logger.warning(
+            "Telegram %s falló (HTTP %s): %s", method, response.status_code, description
+        )
+        if response.status_code == 429:
+            return None, _retry_after(data)
+        if response.status_code >= 500:
+            return None, RETRY_WAIT_S
+        return None, None
 
 
 class ConsoleNotifier:
@@ -200,6 +232,15 @@ def _keyboard(buttons: Buttons) -> dict[str, Any]:
             for row in buttons
         ]
     }
+
+
+def _retry_after(data: Any) -> float:
+    """Segundos que pide Telegram en un 429, con tope; sin dato, la espera normal."""
+    params = data.get("parameters") if isinstance(data, dict) else None
+    seconds = params.get("retry_after") if isinstance(params, dict) else None
+    if isinstance(seconds, int | float) and not isinstance(seconds, bool):
+        return min(max(float(seconds), 0.0), RETRY_WAIT_MAX_S)
+    return RETRY_WAIT_S
 
 
 def _message_id(result: Any) -> int | None:
