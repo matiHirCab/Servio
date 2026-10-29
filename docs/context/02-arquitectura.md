@@ -17,7 +17,7 @@ Un solo programa en Python, corriendo en una laptop:
                                                    [Telegram: grupo "Mozos"]
 ```
 
-No hay backend web ni dashboard. El estado vive en memoria; se guarda un log en `vision/out/eventos.jsonl` y, con los datos del restaurante (`fixtures/restaurante/`), una base SQLite relacional en `vision/out/servio.db` (ver `servio_vision/db.py`) para las métricas.
+No hay backend web ni dashboard. El estado vive en memoria; se guarda un log en `vision/out/eventos.jsonl` y, con los datos del restaurante (`fixtures/restaurante/`), una base relacional para las métricas (`servio_vision/db.py`, SQLAlchemy Core con migraciones de Alembic): SQLite en `vision/out/servio.db`, o el Postgres compartido de `DATABASE_URL`, donde cada casa escribe con su `local_id` (A-6).
 
 ## Componentes
 

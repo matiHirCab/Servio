@@ -172,6 +172,8 @@ def build_pipeline(settings: Settings) -> Pipeline | None:
         telegram=settings.telegram,
         restaurant=restaurant,
         env=telegram_env,
+        database_url=settings.database_url,
+        local_id=settings.local_id,
     )
     return Pipeline(
         classifier,

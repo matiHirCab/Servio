@@ -252,7 +252,7 @@ def test_config_reaches_alerts(tmp_path, monkeypatch):
     monkeypatch.setattr(
         alerts,
         "configure",
-        lambda config, telegram, restaurant=None, env=None: calls.append(
+        lambda config, telegram, restaurant=None, env=None, **kw: calls.append(
             (config.t1, telegram, env["TELEGRAM_GROUP_CHAT_ID"])
         ),
     )
