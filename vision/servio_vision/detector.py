@@ -11,6 +11,7 @@
 import logging
 import os
 import statistics
+import threading
 from dataclasses import dataclass
 
 from servio_vision import settings
@@ -90,16 +91,20 @@ class PlateDetector:
         self.min_rel = min_rel
         # torchvision de Windows suele ser build de CPU: por defecto, CPU
         self.device = device or "cpu"
+        # El pipeline clasifica varias mesas a la vez en hilos y comparten este
+        # modelo: el predictor de ultralytics no es seguro entre hilos.
+        self._predict_lock = threading.Lock()
 
     def detect(self, image) -> list[Detection]:
         """`image`: PIL.Image o array RGB."""
-        r = self.model.predict(
-            image,
-            conf=self.conf,
-            imgsz=self.imgsz,
-            device=self.device,
-            verbose=False,
-        )[0]
+        with self._predict_lock:
+            r = self.model.predict(
+                image,
+                conf=self.conf,
+                imgsz=self.imgsz,
+                device=self.device,
+                verbose=False,
+            )[0]
         names = r.names
         dets = [
             Detection(tuple(box), float(c), names[int(k)])
