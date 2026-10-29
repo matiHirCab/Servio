@@ -20,6 +20,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from servio_vision import settings
 from servio_vision.db import Database
 from servio_vision.metrics import (
     HISTORY,
@@ -59,7 +60,11 @@ def main(argv: list[str] | None = None) -> int:
         if not visible:
             print(f"El rol {role.nombre} no ve estas métricas (ver {args.config}).")
             return 3
-    db = Database(args.db)
+    # con DATABASE_URL en el .env lee el Postgres compartido; si no, el SQLite local
+    cfg = settings.current()
+    db = Database(args.db, url=cfg.database_url, local_id=cfg.local_id)
+    if cfg.database_url:
+        print("(base compartida: DATABASE_URL)\n")
     restaurant = Restaurant.load()
     db.load_restaurant(restaurant)
     if args.historial.exists():
@@ -72,7 +77,7 @@ def main(argv: list[str] | None = None) -> int:
             ("Minutos hasta retirar los platos", SQL_ATTEND),
             ("Segundos en responder", SQL_ANSWER),
         ):
-            print(f"-- {title}{sql}")
+            print(f"-- {title}{db.render(sql)}")
     m = compute(db)
     db.close()
     if not m["dishes"]:

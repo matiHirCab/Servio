@@ -8,6 +8,8 @@
 # Rutas relativas: zones, record, restaurante, fixture y un source que sea archivo cuentan
 # desde la carpeta de este toml; yolo_weights, face_model y los prompts, desde la raíz del repo.
 
+# local_id = "casa-jessica"                 # con qué nombre escribe esta casa en la base compartida (A-6)
+
 [camara]
 source = "http://192.168.0.5:4747/video"   # DroidCam / IP Webcam, 0 para la webcam, o un video
 interval = 30                               # segundos entre lecturas
@@ -37,3 +39,4 @@ demo = false
 # smooth_min_confidence = 0.8
 
 # La base compartida (DATABASE_URL, A-6) lleva la contraseña: va en el .env, no acá.
+# La sección [roles] (quién ve qué) la lee servio_vision/roles.py; puede ir en este mismo archivo.
