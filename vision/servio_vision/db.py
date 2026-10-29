@@ -4,10 +4,11 @@ Guarda lo que pasa en el salón para sacar métricas con SQL:
 
     mozos (id, nombre)
     mesas (id, nombre, mozo_id → mozos)
-    platos (id, nombre)                                   -- la carta
+    platos (id, nombre, precio)                           -- la carta
     respuestas_tipicas (plato_id → platos, orden, texto)  -- opciones del aviso
     platos_servidos (id, local_id, mesa_id → mesas, plato_id → platos, track_id,
-                     servido_at, origen)
+                     servido_at, origen, ultimo_fill_ratio, retirado_at)
+    estados_plato (id, plato_servido_id → platos_servidos, estado, fill_ratio, desde)
     avisos (local_id, id, tipo, mesa_id → mesas, mozo_id → mozos,
             plato_servido_id → platos_servidos, abierto_at, resuelto_at, origen,
             motivo_cierre)                                -- clave (local_id, id)
@@ -91,6 +92,7 @@ platos = Table(
     metadata,
     Column("id", String, primary_key=True),
     Column("nombre", String, nullable=False, unique=True),
+    Column("precio", Float),  # en pesos; sin precio no entra en el desperdicio
 )
 respuestas_tipicas = Table(
     "respuestas_tipicas",
@@ -109,6 +111,20 @@ platos_servidos = Table(
     Column("track_id", String),
     Column("servido_at", String, nullable=False),
     Column("origen", String, nullable=False),
+    # la última lectura del plato y cuándo se fue de la mesa (métricas de M-1)
+    Column("ultimo_fill_ratio", Float),
+    Column("retirado_at", String),
+)
+estados_plato = Table(
+    "estados_plato",
+    metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column(
+        "plato_servido_id", Integer, ForeignKey("platos_servidos.id"), nullable=False
+    ),
+    Column("estado", String, nullable=False),
+    Column("fill_ratio", Float),
+    Column("desde", String, nullable=False),
 )
 avisos = Table(
     "avisos",
@@ -305,7 +321,7 @@ class Database:
                     .on_conflict_do_update(index_elements=["id"], set_=row)
                 )
             for did, dish in restaurant.dishes.items():
-                row = {"id": did, "nombre": dish.name}
+                row = {"id": did, "nombre": dish.name, "precio": dish.price}
                 conn.execute(
                     self._upsert(platos)
                     .values(row)
@@ -370,6 +386,47 @@ class Database:
                 )
             )
             return result.inserted_primary_key[0]
+
+    def plate_readings(
+        self,
+        readings: list[tuple[int, str, float | None, bool]],
+        gone: list[int],
+        at: datetime,
+    ) -> None:
+        """Lecturas de los platos de una mesa, en una sola transacción.
+
+        `readings`: (plato servido, estado, fill_ratio, cambió de estado). Guarda
+        el último fill_ratio (vacío si la lectura no lo trae: no se arrastra uno
+        viejo) y, si cambió de estado, desde cuándo (ritmo por plato). Un plato
+        que se ve otra vez deja de estar retirado.
+        `gone`: platos que se fueron de la mesa en esta lectura (sobra por plato).
+        """
+        if not readings and not gone:
+            return
+        ts = _iso(at)
+        ps = platos_servidos.c
+        with self._lock, self._engine.begin() as conn:
+            for served_id, state, fill_ratio, changed in readings:
+                conn.execute(
+                    platos_servidos.update()
+                    .where(ps.id == served_id)
+                    .values(ultimo_fill_ratio=fill_ratio, retirado_at=None)
+                )
+                if changed:
+                    conn.execute(
+                        estados_plato.insert().values(
+                            plato_servido_id=served_id,
+                            estado=state,
+                            fill_ratio=fill_ratio,
+                            desde=ts,
+                        )
+                    )
+            if gone:
+                conn.execute(
+                    platos_servidos.update()
+                    .where(ps.id.in_(gone))
+                    .values(retirado_at=ts)
+                )
 
     def alert_opened(
         self,

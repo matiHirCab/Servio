@@ -15,6 +15,8 @@ Quién ve qué en la vista de reconocimiento, el dashboard y los avisos (tarea R
 
 ## Métricas por rol (default)
 
+Qué es cada métrica y cómo se calcula: [13-metricas.md](13-metricas.md).
+
 | Métrica (M-1) | id en la config | Mozo | Encargado | Dueño |
 |---|---|---|---|---|
 | Avisos abiertos y quién los tomó | `avisos_abiertos` | – | Sí | Sí |
@@ -28,6 +30,12 @@ Quién ve qué en la vista de reconocimiento, el dashboard y los avisos (tarea R
 | Histórico y tendencias (más de 7 días) | `historico` | – | No | Sí |
 | Antes vs. después con Servio | `antes_despues` | – | No | Sí |
 | Costo de Servio, configuración, usuarios y roles | `costos_y_configuracion` | – | No | Sí |
+| Carga por mozo (mesas por servicio y tiempos) | `carga_por_mozo` | – | Sí | Sí |
+| Horas pico (avisos y demoras por franja) | `horas_pico` | – | Sí | Sí |
+| Espera del siguiente plato | `espera_siguiente_plato` | – | Sí | Sí |
+| Ritmo por plato (minutos hasta vacío) | `ritmo_por_plato` | – | No | Sí |
+| Sobra por plato (cuánto queda al retirarlo) | `sobra_por_plato` | – | No | Sí |
+| Adopción de los mozos (avisos respondidos) | `adopcion` | – | No | Sí |
 
 Criterio: el encargado ve todo lo que le sirve para operar el turno; el dueño además ve plata, historia y configuración.
 

@@ -22,6 +22,7 @@ Contexto: MVP de hackathon, 24 horas, equipo de 3 personas (Tomás, Matías, Jes
 | [docs/context/09-convenciones.md](docs/context/09-convenciones.md) | Antes de commitear: estructura, dueños por carpeta, ramas, estilo, variables de entorno. |
 | [docs/context/11-tareas.md](docs/context/11-tareas.md) | Vas a hacer una tarea: qué hacer, en qué archivo, de qué depende y cuándo está hecha. |
 | [docs/context/12-roles.md](docs/context/12-roles.md) | Vas a mostrar algo según quién mira (mozo, encargado, dueño): vistas, métricas y avisos por rol, y dónde se configura. |
+| [docs/context/13-metricas.md](docs/context/13-metricas.md) | Vas a calcular o mostrar una métrica: lista cerrada de M-1, fórmula, de qué tabla sale, qué rol la ve y en qué pantalla. |
 | [docs/roadmap-producto.md](docs/roadmap-producto.md) | Vas a hacer una tarea de después de la hackathon (fases A–E): arquitectura, banco de pruebas en casa, mejoras y funciones nuevas. |
 
 ## Reglas para agentes

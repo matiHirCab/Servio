@@ -23,6 +23,7 @@ class Dish:
     dish_id: str
     name: str
     answers: tuple[str, ...]  # respuestas típicas a "¿está todo bien?"
+    price: float | None = None  # en pesos; sin precio no entra en el desperdicio
 
 
 class Restaurant:
@@ -38,7 +39,7 @@ class Restaurant:
         carta = json.loads((directory / "carta.json").read_text(encoding="utf-8"))
         salon = json.loads((directory / "salon.json").read_text(encoding="utf-8"))
         dishes = {
-            dish_id: Dish(dish_id, d["nombre"], tuple(d["respuestas"]))
+            dish_id: Dish(dish_id, d["nombre"], tuple(d["respuestas"]), d.get("precio"))
             for dish_id, d in carta["platos"].items()
         }
         waiters = {wid: w["nombre"] for wid, w in salon["mozos"].items()}
