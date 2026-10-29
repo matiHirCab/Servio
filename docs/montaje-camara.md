@@ -35,15 +35,15 @@ Con el celular: **foco fijo en la mesa** (tocar la mesa en la app y bloquear), e
 1. Cámara fija a 2,2–2,8 m, mirando hacia abajo, cable enchufado.
 2. Luz del comedor prendida; ninguna ventana ni lámpara en el cuadro.
 3. Foco y exposición bloqueados en la app.
-4. `python -m servio_vision.framing --source http://<IP>:4747/video` → `Encuadre OK` (o `--zones` si las mesas son fijas). Si avisa algo, está escrito qué mover.
+4. `python -m servio_vision.framing --config config/casa-<quien>.toml` (acepta los mismos flags que `main.py`: `--source`, `--zones`…) → `Encuadre OK`. Si avisa algo, está escrito qué mover.
 5. `python main.py --config config/casa-<quien>.toml`: la primera lectura repite el chequeo en el log.
 
 ## Qué revisa el chequeo (`servio_vision/framing.py`)
 
 - **Oscura** (brillo medio < 60) o **quemada** (> 215).
-- **Desenfocada**: varianza del laplaciano < 40 con la imagen a 640 px de ancho.
-- **Mesa cortada**: el recuadro de una mesa a menos del 1 % del lado del borde del cuadro.
+- **Desenfocada**: varianza del laplaciano < 40, con la imagen achicada a 640 px de ancho si es más grande (nunca agrandada).
+- **Mesa cortada o pegada al borde**: el recuadro de una mesa a menos del 1 % del lado del borde del cuadro. Las mesas detectadas solas ya traen un 10 % de margen, así que tocar el borde es no tener el aire que pide esta guía, aunque la mesa entre justo.
 - **Mesa muy chica**: menos del 4 % del área del cuadro.
-- **Sin mesa**: no se detectó ninguna (o la zona fija queda fuera del cuadro).
+- **Sin mesa**: no se detectó ninguna (con detección automática, "una mesa" que ocupa casi todo el cuadro es el comodín del detector: no encontró nada), o la zona fija queda fuera del cuadro.
 
 Los umbrales están arriba del archivo; si una casa los necesita distintos, es una señal de que algo del montaje se puede mejorar antes de tocarlos.
