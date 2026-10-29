@@ -65,6 +65,7 @@ DEFAULT_PATH = VISION_DIR / "out" / "servio.db"
 HISTORY_LOCAL = "historial"  # el historial simulado no es de ninguna casa
 HISTORY_LOCK = 4211  # pg_advisory_xact_lock: una sola casa importa el historial
 MIGRATE_LOCK = 4212  # pg_advisory_lock: una sola casa migra a la vez
+HISTORY_EXISTS_SQL = "SELECT 1 FROM avisos WHERE origen = 'historial' LIMIT 1"
 
 # Hora de inicio de cada servicio, para fechar el historial simulado.
 SERVICE_START = {"almuerzo": "13:00:00", "cena": "21:00:00"}
@@ -233,6 +234,9 @@ class Database:
                     # la conexión vuelve al pool: que no quede con las FK apagadas
                     conn.exec_driver_sql("PRAGMA foreign_keys=ON")
                 elif self.dialect == "postgresql":
+                    # si la migración falló, la transacción quedó abortada: sin el
+                    # rollback el unlock también fallaría y el lock quedaría tomado
+                    conn.rollback()
                     conn.execute(sa.text(f"SELECT pg_advisory_unlock({MIGRATE_LOCK})"))
                     conn.commit()
 
@@ -242,15 +246,15 @@ class Database:
 
     # --- SQL a mano (métricas, tests) ---
 
-    def query(
-        self, sql: str, params: Mapping[str, Any] | Sequence[Any] = ()
-    ) -> list[Row]:
-        """Consulta de lectura. `params` con nombre (`:mesa`) o posicionales (`?`),
-        como antes con sqlite3."""
+    def query(self, sql: str, params: Mapping[str, Any] | None = None) -> list[Row]:
+        """Consulta de lectura, con parámetros con nombre (`WHERE id = :mesa`). Sin el
+        lock: las lecturas (seis por `/metricas`, desde el hilo de Telegram) no
+        tienen que frenar las escrituras del loop; el pool da una conexión a cada
+        hilo."""
         statement, bound = _bind(sql, params)
-        with self._lock, self._engine.connect() as conn:
+        with self._engine.connect() as conn:
             result = conn.execute(statement, bound)
-            keys = list(result.keys())
+            keys = tuple(result.keys())  # una sola vez, compartida por las filas
             return [Row(tuple(r), keys) for r in result]
 
     def render(self, template: str) -> str:
@@ -410,7 +414,7 @@ class Database:
             respuestas.insert().values(
                 local_id=self.local_id,
                 aviso_id=event["alert_id"],
-                mozo_id=self.waiter_id(event["table_id"]),
+                mozo_id=self._waiter_of(event["table_id"]),
                 respondido_por=event.get("answered_by"),
                 texto=event["answer"],
                 escrita=int(bool(event.get("free_text"))),
@@ -429,8 +433,7 @@ class Database:
         idas y vueltas con el lock tomado (el loop de la cámara esperaría minutos).
         En Postgres, además, un lock consultivo: dos casas que piden `/metricas` a la
         vez no importan las dos."""
-        exists = sa.text("SELECT 1 FROM avisos WHERE origen = 'historial' LIMIT 1")
-        if self.query(str(exists)):
+        if self.query(HISTORY_EXISTS_SQL):
             return 0
         served_rows, served_keys, alert_rows, answer_rows = _history_rows(
             path, restaurant
@@ -438,7 +441,7 @@ class Database:
         with self._lock, self._engine.begin() as conn:
             if self.dialect == "postgresql":
                 conn.execute(sa.text(f"SELECT pg_advisory_xact_lock({HISTORY_LOCK})"))
-            if conn.execute(exists).first():  # la otra casa llegó primero
+            if conn.execute(sa.text(HISTORY_EXISTS_SQL)).first():  # la otra llegó antes
                 return 0
             served_ids: dict = {}
             if served_rows:  # un insert vacío no es "nada": es una fila por defecto
@@ -468,6 +471,7 @@ def _history_rows(
     clock: dict[tuple, datetime] = {}
     served_rows: list[dict] = []
     served_keys: list[tuple] = []
+    last_served: dict[tuple, tuple] = {}  # (mesa y servicio, plato) → su clave
     alert_rows: list[dict] = []
     answer_rows: list[dict] = []
     for n, line in enumerate(path.read_text(encoding="utf-8").splitlines()):
@@ -489,11 +493,10 @@ def _history_rows(
                 }
             )
             served_keys.append((n, key, r["plato"]))
+            last_served[(key, r["plato"])] = served_keys[-1]
         elif r["tipo"] == "plato_lleno":
             # el último servido de ese plato en esa mesa y servicio
-            served_key = next(
-                (k for k in reversed(served_keys) if k[1:] == (key, r["plato"])), None
-            )
+            served_key = last_served.get((key, r["plato"]))
             alert_rows.append(
                 {
                     "local_id": HISTORY_LOCAL,
@@ -546,16 +549,16 @@ def _sqlite_foreign_keys_on(dbapi_connection, _record) -> None:
     dbapi_connection.execute("PRAGMA foreign_keys=ON")
 
 
-def _bind(sql: str, params: Mapping[str, Any] | Sequence[Any]):
-    """`text()` con parámetros con nombre; los posicionales (`?`) se numeran."""
-    if isinstance(params, Mapping):
-        return sa.text(sql), dict(params)
-    if params:
-        # un `?` adentro de un literal ('%?%') haría cualquier cosa: solo con nombre
+def _bind(sql: str, params: Mapping[str, Any] | None):
+    """`text()` con parámetros con nombre. Posicionales (`?`) no: un `?` adentro de
+    un literal ('%?%') haría cualquier cosa."""
+    if params is None:
+        return sa.text(sql), {}
+    if not isinstance(params, Mapping):
         raise TypeError(
             "params: un dict con nombres (`WHERE id = :mesa`), no posicionales"
         )
-    return sa.text(sql), {}
+    return sa.text(sql), dict(params)
 
 
 def _iso(at: datetime) -> str:

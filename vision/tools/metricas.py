@@ -20,6 +20,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+import sqlalchemy
+
 from servio_vision import settings
 from servio_vision.db import DEFAULT_PATH, Database
 from servio_vision.metrics import (
@@ -72,7 +74,12 @@ def main(argv: list[str] | None = None) -> int:
         print(f"Configuración: {settings.explain(e)}", file=sys.stderr)
         return 2
     url = None if args.db else cfg.database_url
-    db = Database(args.db, url=url, local_id=cfg.local_id)
+    try:
+        db = Database(args.db, url=url, local_id=cfg.local_id)
+    except (RuntimeError, sqlalchemy.exc.OperationalError) as e:
+        # falta el driver, o la URL no responde: una línea, sin traceback con la URL
+        print(f"Base: {e}", file=sys.stderr)
+        return 2
     if url:
         print(f"(base compartida: DATABASE_URL, local {cfg.local_id})\n")
     restaurant = Restaurant.load()
