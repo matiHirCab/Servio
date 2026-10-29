@@ -67,8 +67,9 @@ El CI (`.github/workflows/ci.yml`) corre en cada PR y en cada push a `main` y `d
 | `vision` | `ruff check`, `ruff format --check` y `pytest` con cobertura en Python 3.11. Falla si la cobertura baja del piso (`fail_under` en `vision/pyproject.toml`). Es el check obligatorio. |
 | `compat-py313` | `pytest` en Python 3.13. |
 | `higiene` | No hay `.env`, pesos, imágenes ni videos versionados (ver «Privacidad y datos»). |
-| `origen-develop` | Un PR a `main` solo viene de `develop`. |
+
+Aparte, `solo-develop-a-main.yml` corre solo en PRs hacia `main` y falla si no vienen de `develop` (job `origen-develop`). Para que bloquee el merge, hay que marcarlo como obligatorio en la regla de `main`.
 
 - Todo PR con lógica nueva trae sus tests. Los tests no usan red, ni YOLO, ni Telegram: se mockean (`httpx.MockTransport`, clasificador `fake`, módulos falsos para `ultralytics`).
-- Cobertura en local: `cd vision && pytest --cov` (agregá `--cov-report=term-missing` para ver qué líneas faltan). Si la cobertura sube bastante, subí `fail_under`; nunca lo bajes para que pase un PR.
-- Las migraciones de Alembic se prueban en `tests/test_migrations.py`: una sola cabeza, subir, bajar y volver a subir en SQLite.
+- Cobertura en local: `cd vision && pytest --cov` (agregá `--cov-report=term-missing` para ver qué líneas faltan). Si la cobertura sube bastante, subí `fail_under`; nunca lo bajes para que pase un PR. El piso actual (88 %) es inicial: se midió en Windows y hay que subirlo tras las primeras corridas en Linux.
+- Las migraciones de Alembic se prueban en `tests/test_migrations.py`: una sola cabeza, subir, bajar (salvo las que se declaran irreversibles, como `0003`) y volver a subir en SQLite.

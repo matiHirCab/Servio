@@ -4,6 +4,9 @@ import json
 import logging
 from types import SimpleNamespace
 
+import pytest
+
+from servio_vision import settings
 from servio_vision.dish_match import DishMatcher
 from servio_vision.restaurant import Dish
 
@@ -12,6 +15,14 @@ OPTIONS = [
     Dish("d2", "Ensalada", ("bien",)),
     Dish("d3", "Pasta", ("bien",)),
 ]
+
+
+@pytest.fixture(autouse=True)
+def no_real_api_key(monkeypatch):
+    """Sin clave en el entorno ni en el .env: un `DishMatcher` sin `api_key` no puede
+    armar un cliente real y llamar a la API."""
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.setattr(settings, "ENV_FILE", None)
 
 
 class FakeMessages:

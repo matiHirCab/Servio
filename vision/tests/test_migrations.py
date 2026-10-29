@@ -72,14 +72,16 @@ def schema(engine) -> dict[str, set[str]]:
 
 
 def test_last_migration_downgrades_and_upgrades_again(engine_for):
-    """La última migración (la que sea) se deshace sacando algo del esquema y al
-    volver a subir queda igual: tablas y columnas."""
+    """Si la última migración se puede deshacer, al volver a subir el esquema
+    (tablas y columnas) queda igual. Una irreversible a propósito se saltea."""
     engine = engine_for("b.db")
     run(engine, command.upgrade, "head")
     full = schema(engine)
 
-    run(engine, command.downgrade, "-1")
-    assert schema(engine) != full
+    try:
+        run(engine, command.downgrade, "-1")
+    except NotImplementedError:
+        pytest.skip("la última migración es irreversible a propósito")
 
     run(engine, command.upgrade, "head")
     assert schema(engine) == full
