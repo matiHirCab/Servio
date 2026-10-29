@@ -3,8 +3,12 @@
 Se corre sobre la primera lectura (`app.run`) y avisa, sin cortar, de lo que
 haría que YOLO y Claude lean mal: imagen oscura o quemada, desenfocada, una mesa
 que sale cortada o pegada al borde del cuadro, que se ve muy chica, o ninguna
-mesa. Los umbrales salen de las pruebas con el video de la demo y las fotos de
-salones; la guía de montaje está en docs/montaje-camara.md.
+mesa. La luz se chequea **antes** de clasificar el primer frame (un cuadro negro
+no vale una llamada al modelo); las mesas, después, cuando ya se detectaron.
+Brillo y nitidez se miden sobre todo el cuadro: la mesa vacía y lisa de antes de
+servir no tiene textura, pero sus bordes y las sillas sí. Los umbrales salen de las
+pruebas con el video de la demo y las fotos de salones; la guía de montaje está en
+docs/montaje-camara.md.
 
 Antes de correr todo Servio, el mismo chequeo a mano, con los mismos flags y el
 mismo toml que `main.py` (así mira la misma cámara, las mismas zonas y el mismo
@@ -37,9 +41,8 @@ EDGE_FRACTION = (
 MIN_TABLE_FRACTION = (
     0.04  # una mesa con menos área que esto (del cuadro) se ve muy chica
 )
-# Con detección automática, una "mesa" que ocupa casi todo el cuadro es el
-# comodín del tracker cuando no encontró ninguna (tables._whole_frame).
-WHOLE_FRAME_FRACTION = 0.95
+
+NO_TABLE = "No se ve ninguna mesa: apuntá la cámara a la mesa, desde arriba."
 
 
 @dataclass(frozen=True)
@@ -66,14 +69,10 @@ def measure(frame: np.ndarray) -> Measures:
     )
 
 
-def problems(
-    frame: np.ndarray, zones: Zones | None, measures: Measures | None = None
-) -> list[str]:
-    """Lo que está mal en el encuadre, en palabras para quien arma la cámara. Vacío
-    si está todo bien. `zones`: las mesas (fijas o detectadas); `None` si todavía
-    no se sabe dónde están. `measures`: brillo y nitidez ya medidos, si se tienen."""
-    found: list[str] = []
+def light_problems(frame: np.ndarray, measures: Measures | None = None) -> list[str]:
+    """Oscura, quemada o desenfocada. No necesita saber dónde están las mesas."""
     m = measures or measure(frame)
+    found: list[str] = []
     if m.brightness < DARK_MEAN:
         found.append(
             f"Imagen oscura (brillo {m.brightness:.0f}/255): más luz sobre la mesa o "
@@ -89,20 +88,21 @@ def problems(
             f"Imagen desenfocada (nitidez {m.sharpness:.0f}): limpiá la lente, fijá "
             "el foco en la mesa y revisá que la cámara no vibre."
         )
-    height, width = frame.shape[:2]
-    no_table = "No se ve ninguna mesa: apuntá la cámara a la mesa, desde arriba."
+    return found
+
+
+def table_problems(frame: np.ndarray, zones: Zones | None) -> list[str]:
+    """Mesa cortada o pegada al borde, muy chica, fuera del cuadro, o ninguna.
+    `zones`: las mesas (fijas, o detectadas); `None` si no se encontró ninguna."""
     if zones is None or not zones.tables:
-        found.append(no_table)
-        return found
+        return [NO_TABLE]
+    height, width = frame.shape[:2]
+    found: list[str] = []
     for zone in zones.tables:
         try:
             x0, y0, x1, y1 = table_rect(frame, zone, zones)
         except ValueError:
             found.append(f"{zone.name}: la zona queda fuera del cuadro.")
-            continue
-        area = (x1 - x0) * (y1 - y0)
-        if area >= width * height * WHOLE_FRAME_FRACTION:
-            found.append(no_table)
             continue
         sides = []
         if x0 <= width * EDGE_FRACTION:
@@ -120,7 +120,7 @@ def problems(
                 f"{zone.name} sale cortada o pegada al borde {' y '.join(sides)}: "
                 "subí la cámara o alejala, con un 10 % de aire alrededor de la mesa."
             )
-        if area < width * height * MIN_TABLE_FRACTION:
+        if (x1 - x0) * (y1 - y0) < width * height * MIN_TABLE_FRACTION:
             found.append(
                 f"{zone.name} se ve muy chica ({(x1 - x0)}×{(y1 - y0)} px): acercá la "
                 "cámara o usá más resolución; los platos tienen que medir ≥ 60 px."
@@ -128,62 +128,70 @@ def problems(
     return found
 
 
-def log_report(frame: np.ndarray, zones: Zones | None, log=logger) -> list[str]:
-    """El chequeo al arrancar: cada problema como una advertencia; si no hay, una
-    línea que dice que el encuadre está bien."""
-    m = measure(frame)
-    found = problems(frame, zones, m)
-    if not found:
-        log.info(
-            "Encuadre OK: %d mesa(s), brillo %.0f, nitidez %.0f",
-            len(zones.tables) if zones else 0,
-            m.brightness,
-            m.sharpness,
-        )
+def problems(frame: np.ndarray, zones: Zones | None) -> list[str]:
+    """Todo junto: luz y mesas. Vacío si el encuadre está bien."""
+    return light_problems(frame) + table_problems(frame, zones)
+
+
+def log_report(
+    frame: np.ndarray,
+    zones: Zones | None,
+    log=logger,
+    *,
+    light: bool = True,
+    tables: bool = True,
+) -> list[str]:
+    """El chequeo al arrancar: cada problema como una advertencia; si no hubo
+    ninguno (en esta parte), una línea que dice que está bien. `app.run` lo llama
+    dos veces: la luz antes de clasificar el primer frame, las mesas después."""
+    m = measure(frame) if light else None
+    found = (light_problems(frame, m) if light else []) + (
+        table_problems(frame, zones) if tables else []
+    )
     for text in found:
         log.warning("Encuadre: %s", text)
+    if not found and tables:
+        log.info("Encuadre OK: %d mesa(s)", len(zones.tables) if zones else 0)
+    if not found and light:
+        log.info("Luz OK: brillo %.0f, nitidez %.0f", m.brightness, m.sharpness)
     return found
 
 
 def main(argv: list[str] | None = None) -> int:
+    from servio_vision.app import load_tables, setup_logging
     from servio_vision.capture import open_source
-    from servio_vision.cli import build_parser, load_settings
+    from servio_vision.cli import add_record_flag, build_parser, load_settings
     from servio_vision.settings import explain
-    from servio_vision.zones import load_zones
 
-    args = build_parser("Chequeo de encuadre de la cámara (B-4).").parse_args(argv)
-    logging.basicConfig(level=logging.INFO, format="%(message)s")
-    settings = load_settings(args)  # los mismos flags y toml que main.py
+    parser = add_record_flag(build_parser("Chequeo de encuadre de la cámara (B-4)."))
+    args = parser.parse_args(argv)  # los mismos flags y toml que main.py
+    setup_logging(args.verbose)
+    settings = load_settings(args)
     if settings is None:
         return 2
     try:
-        if settings.zones is not None:
-            zones = load_zones(settings.zones)
-            detect = None
-        else:
-            # antes de abrir la cámara: si falta ultralytics, que no espere al warm-up
-            from servio_vision.tables import TableDetector, TableTracker
-
-            detect = TableTracker(TableDetector()).update
+        zones, tracker = load_tables(settings)  # ultralytics o zones.json, antes
         first = next(open_source(settings.source, face_model=settings.face_model), None)
         if first is None:
             print(f"La fuente {settings.source} no dio ningún frame.", file=sys.stderr)
             return 2
         frame, _ = first
-        if detect is not None:
-            zones = detect(frame)
+        if tracker is not None:
+            try:
+                zones = tracker.update(frame)
+            except Exception as e:  # noqa: BLE001 — pesos rotos, torch: no es encuadre
+                print(f"El detector de mesas falló: {e}", file=sys.stderr)
+                return 2
+            if not tracker.tables:
+                zones = None  # el tracker devuelve todo el cuadro como comodín
     except OSError as e:  # fuente que no abre, modelo de caras, zones.json que no está
         print(e, file=sys.stderr)
         return 2
     except ValueError as e:  # zones.json inválido
         print(f"Zonas: {explain(e)}", file=sys.stderr)
         return 2
-    except ImportError:
-        print(
-            "Para detectar las mesas hace falta ultralytics (requirements-yolo.txt), "
-            "o pasá --zones.",
-            file=sys.stderr,
-        )
+    except ImportError as e:
+        print(e, file=sys.stderr)
         return 2
     found = log_report(frame, zones)
     return 1 if found else 0

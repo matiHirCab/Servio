@@ -2,6 +2,7 @@
 
 import cv2
 import numpy as np
+import pytest
 
 from servio_vision import framing
 from servio_vision.zones import TableZone, Zones
@@ -68,9 +69,14 @@ def test_sharpness_is_measured_at_a_fixed_width():
 def test_log_report_says_ok_or_warns(caplog):
     caplog.set_level("INFO")
     assert framing.log_report(textured_frame(), GOOD) == []
-    assert "Encuadre OK: 1 mesa(s)" in caplog.text
+    assert "Encuadre OK: 1 mesa(s)" in caplog.text and "Luz OK" in caplog.text
     found = framing.log_report(textured_frame(brightness=20), GOOD)
     assert len(found) == 1 and "Encuadre: Imagen oscura" in caplog.text
+    # en dos partes, como app.run: la luz antes de clasificar, las mesas después
+    caplog.clear()
+    assert framing.log_report(textured_frame(), None, tables=False) == []
+    assert "Luz OK" in caplog.text and "Encuadre OK" not in caplog.text
+    assert framing.log_report(textured_frame(), None, light=False) == [framing.NO_TABLE]
 
 
 def test_cli_checks_a_photo(tmp_path, capsys):
@@ -81,14 +87,16 @@ def test_cli_checks_a_photo(tmp_path, capsys):
     assert framing.main(["--source", str(photo), "--zones", str(zones)]) == 1
     cv2.imwrite(str(photo), textured_frame())
     assert framing.main(["--source", str(photo), "--zones", str(zones)]) == 0
-    assert framing.main(["--source", str(tmp_path / "no.png")]) == 2
+    assert (
+        framing.main(["--source", str(tmp_path / "no.png"), "--zones", str(zones)]) == 2
+    )
 
 
-def test_whole_frame_fallback_means_no_table():
-    """Con detección automática, el tracker devuelve todo el cuadro como "Mesa 1"
-    cuando no encontró ninguna: eso es "no se ve ninguna mesa", no "mesa cortada"."""
-    [none] = framing.problems(textured_frame(), zones_with(table(0, 0, 639, 479)))
-    assert none.startswith("No se ve ninguna mesa")
+def test_a_fixed_zone_over_the_whole_frame_is_glued_to_the_borders():
+    """Una zona dibujada a todo el cuadro es una mesa sin aire, no "sin mesa"."""
+    [glued] = framing.problems(textured_frame(), zones_with(table(0, 0, 639, 479)))
+    assert "pegada al borde izquierdo y derecho y de arriba y de abajo" in glued
+    assert framing.table_problems(textured_frame(), None) == [framing.NO_TABLE]
 
 
 def test_small_frames_are_not_upscaled_to_measure_sharpness():
@@ -108,3 +116,56 @@ def test_cli_uses_the_shared_parser_and_explains_bad_zones(tmp_path, capsys):
     assert framing.main(["--source", str(photo), "--zones", str(bad)]) == 2
     assert "Zonas:" in capsys.readouterr().err
     assert framing.main([]) == 2  # sin fuente: lo dice load_settings
+
+
+def test_load_tables_is_shared_with_the_app(tmp_path):
+    from servio_vision.app import load_tables
+    from servio_vision.settings import Settings
+
+    zones = tmp_path / "zones.json"
+    zones.write_text(GOOD.model_dump_json(), encoding="utf-8")
+    fixed, tracker = load_tables(Settings.load(source="0", zones=zones))
+    assert tracker is None and [t.name for t in fixed.tables] == ["Mesa 1"]
+    with pytest.raises(FileNotFoundError, match="draw_zones"):
+        load_tables(Settings.load(source="0", zones=tmp_path / "no.json"))
+
+
+def test_main_checks_the_light_before_classifying_and_the_tables_after(
+    tmp_path, monkeypatch, caplog
+):
+    import main as loop
+    from servio_vision import alerts
+    from servio_vision.zones import save_zones
+
+    video = tmp_path / "salon.avi"
+    writer = cv2.VideoWriter(
+        str(video), cv2.VideoWriter_fourcc(*"MJPG"), 10, (640, 480)
+    )
+    for _ in range(10 * 5):
+        writer.write(textured_frame(brightness=20))
+    writer.release()
+    zones = tmp_path / "zones.json"
+    save_zones(zones_with(table(0, 90, 400, 480)), zones)
+    monkeypatch.delenv("DEMO_MODE", raising=False)
+    monkeypatch.setattr(alerts, "DEFAULT_LOG", tmp_path / "eventos.jsonl")
+    caplog.set_level("INFO")
+    assert (
+        loop.main(
+            [
+                "--source",
+                str(video),
+                "--zones",
+                str(zones),
+                "--no-telegram",
+                "--limit",
+                "1",
+            ]
+        )
+        == 0
+    )
+    alerts._processor.close()
+    messages = [
+        r.message for r in caplog.records if r.message.startswith(("Encuadre", "Luz"))
+    ]
+    assert messages[0].startswith("Encuadre: Imagen oscura")
+    assert any("pegada al borde izquierdo y de abajo" in m for m in messages[1:])

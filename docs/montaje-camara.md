@@ -44,6 +44,8 @@ Con el celular: **foco fijo en la mesa** (tocar la mesa en la app y bloquear), e
 - **Desenfocada**: varianza del laplaciano < 40, con la imagen achicada a 640 px de ancho si es más grande (nunca agrandada).
 - **Mesa cortada o pegada al borde**: el recuadro de una mesa a menos del 1 % del lado del borde del cuadro. Las mesas detectadas solas ya traen un 10 % de margen, así que tocar el borde es no tener el aire que pide esta guía, aunque la mesa entre justo.
 - **Mesa muy chica**: menos del 4 % del área del cuadro.
-- **Sin mesa**: no se detectó ninguna (con detección automática, "una mesa" que ocupa casi todo el cuadro es el comodín del detector: no encontró nada), o la zona fija queda fuera del cuadro.
+- **Sin mesa**: el detector no encontró ninguna, o la zona fija queda fuera del cuadro.
+
+Brillo y nitidez se miden sobre todo el cuadro (la mesa vacía y lisa de antes de servir no tiene textura; sus bordes y las sillas sí). En `main.py`, la luz se chequea antes de clasificar el primer frame y las mesas después, cuando ya se detectaron.
 
 Los umbrales están arriba del archivo; si una casa los necesita distintos, es una señal de que algo del montaje se puede mejorar antes de tocarlos.
