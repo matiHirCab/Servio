@@ -23,6 +23,7 @@ Contexto: MVP de hackathon, 24 horas, equipo de 3 personas (Tomás, Matías, Jes
 | [docs/context/11-tareas.md](docs/context/11-tareas.md) | Vas a hacer una tarea: qué hacer, en qué archivo, de qué depende y cuándo está hecha. |
 | [docs/context/12-roles.md](docs/context/12-roles.md) | Vas a mostrar algo según quién mira (mozo, encargado, dueño): vistas, métricas y avisos por rol, y dónde se configura. |
 | [docs/roadmap-producto.md](docs/roadmap-producto.md) | Vas a hacer una tarea de después de la hackathon (fases A–E): arquitectura, banco de pruebas en casa, mejoras y funciones nuevas. |
+| [docs/montaje-camara.md](docs/montaje-camara.md) | Vas a armar la cámara en una casa: altura, ángulo, luz, cámaras probadas y el chequeo de encuadre. |
 
 ## Reglas para agentes
 

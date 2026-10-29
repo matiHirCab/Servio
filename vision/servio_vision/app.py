@@ -12,7 +12,7 @@ import logging
 import sys
 import warnings
 
-from servio_vision import alerts, prompt
+from servio_vision import alerts, framing, prompt
 from servio_vision.alerts.config import load_config
 from servio_vision.capture import open_source
 from servio_vision.classifier import get_classifier
@@ -215,6 +215,9 @@ def run(settings: Settings, limit: int | None = None) -> int:
             if recorder is not None:
                 recorder = _record(recorder, frame, ts)
             pipeline.process_frame(frame, ts)
+            if readings == 0:
+                # con las mesas ya detectadas: ¿se ve la mesa entera, con luz, nítida?
+                framing.log_report(frame, pipeline.zones, logger)
             readings += 1
             if limit is not None and readings >= limit:
                 break
