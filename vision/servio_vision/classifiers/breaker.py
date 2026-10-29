@@ -45,6 +45,11 @@ class CircuitBreaker:
             self._probing = True
             return True
 
+    def cancel_probe(self) -> None:
+        """La llamada de prueba no llegó a hacerse: que otro pueda probar."""
+        with self._lock:
+            self._probing = False
+
     def record_success(self) -> None:
         with self._lock:
             was_open = self._opened_at is not None

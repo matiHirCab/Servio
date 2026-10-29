@@ -145,6 +145,8 @@ class Settings(BaseSettings):
     claude_provider: Provider = "cli"
     claude_model: str | None = None  # cli y anthropic; por defecto DEFAULT_MODELS
     openai_model: str | None = None
+    claude_max_calls_per_day: int | None = Field(None, ge=1)
+    """tope de llamadas al modelo por día (UTC); al llegar, solo YOLO hasta mañana"""
     claude_timeout_s: float | None = Field(None, gt=0)
     openai_timeout_s: float | None = Field(None, gt=0)
     claude_cli: str | None = None  # ruta a claude.exe si no está en el PATH

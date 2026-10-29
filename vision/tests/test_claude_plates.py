@@ -245,6 +245,54 @@ def test_one_provider_down_does_not_block_another(backend, clock, monkeypatch):
     assert other_calls
 
 
+def test_daily_cap_degrades_to_none_without_calling(backend, monkeypatch, caplog):
+    calls, answers = backend
+    monkeypatch.setenv("CLAUDE_MAX_CALLS_PER_DAY", "2")
+    answers.extend([_answer(1)] * 3)
+    with caplog.at_level("ERROR"):
+        assert estimate_plates([JPEG], "T1") is not None
+        assert estimate_plates([JPEG], "T1") is not None
+        assert estimate_plates([JPEG], "T1") is None  # tope: sigue con YOLO
+        assert estimate_plates([JPEG], "T2") is None
+    assert len(calls) == 2
+    assert caplog.text.count("tope") == 1  # se avisa una sola vez por día
+
+
+def test_daily_cap_resets_the_next_day(backend, monkeypatch):
+    from datetime import date
+
+    calls, answers = backend
+    monkeypatch.setenv("CLAUDE_MAX_CALLS_PER_DAY", "1")
+    day = {"d": date(2026, 10, 29)}
+    monkeypatch.setattr(claude_plates._meter, "_today", lambda: day["d"])
+    answers.extend([_answer(1)] * 2)
+    assert estimate_plates([JPEG], "T1") is not None
+    assert estimate_plates([JPEG], "T1") is None
+    day["d"] = date(2026, 10, 30)
+    assert estimate_plates([JPEG], "T1") is not None
+    assert len(calls) == 2
+
+
+def test_every_attempt_counts_against_the_cap(backend, monkeypatch):
+    """Un reintento también se factura: con tope 1 no hay segundo intento."""
+    calls, answers = backend
+    monkeypatch.setenv("CLAUDE_MAX_CALLS_PER_DAY", "1")
+    answers.append(ClaudeCallError("API caída"))
+    assert estimate_plates([JPEG], "T1") is None
+    assert len(calls) == 1
+
+
+def test_usage_is_summed_and_summarised_at_info(backend, caplog):
+    _calls, answers = backend
+    answers.extend([_answer(1)] * 3)
+    claude_plates._meter._report_every = 2
+    with caplog.at_level("INFO"):
+        for _ in range(3):
+            estimate_plates([JPEG], "T1")
+    assert claude_plates._meter.input_tokens == 30  # 10 por llamada
+    assert "hoy 2 llamadas" in caplog.text
+
+
 def test_cli_env_drops_the_secrets_and_keeps_what_the_cli_needs():
     """`claude -p` va con la suscripción: una ANTHROPIC_API_KEY en el entorno la
     cambiaría a facturación por API, y el token de Telegram o la base no tienen por

@@ -49,6 +49,18 @@ def test_after_the_cooldown_one_probe_goes_through():
     assert not breaker.allow()  # las demás esperan a su resultado
 
 
+def test_a_cancelled_probe_lets_the_next_caller_probe():
+    """Si la llamada de prueba no llega a hacerse (tope diario), no queda trabado."""
+    clock = Clock()
+    breaker = make(clock)
+    for _ in range(3):
+        breaker.record_failure()
+    clock.now = 61
+    assert breaker.allow()
+    breaker.cancel_probe()
+    assert breaker.allow()
+
+
 def test_a_successful_probe_closes_it():
     clock = Clock()
     breaker = make(clock)
