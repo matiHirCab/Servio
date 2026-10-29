@@ -12,7 +12,7 @@ import logging
 import sys
 import warnings
 
-from servio_vision import alerts, prompt
+from servio_vision import alerts, framing, prompt
 from servio_vision.alerts.config import load_config
 from servio_vision.capture import open_source
 from servio_vision.classifier import get_classifier
@@ -86,32 +86,37 @@ def finished_after_seconds(settings: Settings) -> float:
     return PROD_FINISHED_AFTER
 
 
+def load_tables(settings: Settings) -> tuple[Zones | None, TableTracker | None]:
+    """Las mesas: zonas fijas (`zones.json`) o un tracker que las detecta en cada
+    lectura. `ImportError` sin ultralytics, `FileNotFoundError` sin el archivo; los
+    mensajes ya dicen qué hacer. Lo usan `build_pipeline` y el chequeo de encuadre."""
+    if settings.zones is None:
+        try:
+            return None, TableTracker(TableDetector())
+        except ImportError as e:
+            raise ImportError(
+                "Para detectar las mesas solas hace falta ultralytics "
+                "(pip install -r requirements-yolo.txt), o pasá --zones config/zones.json."
+            ) from e
+    if not settings.zones.exists():
+        raise FileNotFoundError(
+            f"No existe {settings.zones}. Sacá --zones para que las mesas se detecten "
+            "solas, o generalo con tools/draw_zones.py --source <video>."
+        )
+    return load_zones(settings.zones), None
+
+
 def build_pipeline(settings: Settings) -> Pipeline | None:
     """Zonas, umbrales y clasificador según la configuración. `None` si algo falta
     (ya logueado)."""
     # desde acá, lo que un módulo tome por fallback (`settings.current()`) es esta
     # misma configuración, con lo del toml y los flags
     activate(settings)
-    zones: Zones | None = None
-    tables: TableTracker | None = None
-    if settings.zones is None:
-        try:
-            tables = TableTracker(TableDetector())
-        except ImportError:
-            logger.error(
-                "Para detectar las mesas solas hace falta ultralytics "
-                "(pip install -r requirements-yolo.txt), o pasá --zones config/zones.json."
-            )
-            return None
-    elif not settings.zones.exists():
-        logger.error(
-            "No existe %s. Sacá --zones para que las mesas se detecten solas, o "
-            "generalo con tools/draw_zones.py --source <video>.",
-            settings.zones,
-        )
+    try:
+        zones, tables = load_tables(settings)
+    except (ImportError, OSError) as e:
+        logger.error("%s", e)
         return None
-    else:
-        zones = load_zones(settings.zones)
     try:
         # los umbrales ya vienen resueltos (flags > toml > .env): van como "flags"
         config = load_config(
@@ -214,7 +219,16 @@ def run(settings: Settings, limit: int | None = None) -> int:
         for frame, ts in frames:
             if recorder is not None:
                 recorder = _record(recorder, frame, ts)
+            if readings == 0:
+                # la luz, antes de gastar la primera clasificación en un cuadro negro
+                framing.log_report(frame, None, logger, tables=False)
             pipeline.process_frame(frame, ts)
+            if readings == 0:
+                # las mesas, ya detectadas: ¿entra entera, con aire, se ve grande?
+                found_none = pipeline.tables is not None and not pipeline.tables.tables
+                framing.log_report(
+                    frame, None if found_none else pipeline.zones, logger, light=False
+                )
             readings += 1
             if limit is not None and readings >= limit:
                 break

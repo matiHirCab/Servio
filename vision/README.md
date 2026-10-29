@@ -32,6 +32,7 @@ Con [DroidCam](https://www.dev47apps.com/) (Android y iPhone) el celular sirve d
 - Dejá la app en primer plano, el celular enchufado y sin ahorro de batería para DroidCam.
 - La cámara se lee en un hilo aparte (si no, DroidCam corta la conexión mientras Claude clasifica) y, si se corta, se reconecta sola: se da por vencida si pasan 60 s sin un frame bueno. Una lectura por red que se cuelga (celular sin Wi-Fi) corta a los 5 s.
 - **Mesas:** se detectan solas en cada lectura (YOLO de COCO, clase "dining table"; necesita `requirements-yolo.txt`) y se llaman "Mesa 1", "Mesa 2"… Si se mueven, el recuadro las sigue. Para zonas fijas, `--zones config/zones.json` (con `tools/draw_zones.py`).
+- **Montaje:** altura, ángulo, luz y cámaras probadas en [docs/montaje-camara.md](../docs/montaje-camara.md). Antes de arrancar, `python -m servio_vision.framing --config config/casa-<quien>.toml` (mismos flags que `main.py`) dice si la mesa sale cortada, oscura o desenfocada; `main.py` repite el chequeo en la primera lectura.
 
 ## Probar todo como usuario
 
