@@ -10,12 +10,20 @@ con `build_pipeline`. Nada de esto lee el entorno: todo viene en `Settings`.
 
 import logging
 import sys
+import time
 import warnings
 
 from servio_vision import alerts, framing, prompt
 from servio_vision.alerts.config import load_config
 from servio_vision.alerts.notify import TelegramNotifier
-from servio_vision.capture import is_live_source, open_source
+from servio_vision.capture import (
+    CAMERA_RETRY_MAX_S,
+    CAMERA_RETRY_S,
+    CameraUnavailable,
+    is_live_source,
+    open_source,
+    retry_waits,
+)
 from servio_vision.classifier import get_classifier
 from servio_vision.cli import require_source
 from servio_vision.dish_match import DishMatcher
@@ -239,22 +247,18 @@ def run(settings: Settings, limit: int | None = None) -> int:
         # no se abrió. Después la fuente, que sale de open_source con las caras
         # difuminadas (C-3): nada de lo que sigue, tampoco la grabación, ve una cara.
         recorder = FrameRecorder(settings.record) if settings.record else None
-        frames = open_source(
-            settings.source,
-            settings.interval,
-            settings.speed,
-            face_model=settings.face_model,
-        )
-        logger.info("Privacidad: caras difuminadas en la captura")
         if monitor is not None:
-            monitor.start()  # recién ahora: abrir la cámara y cargar modelos ya pasó
+            # antes de abrir la cámara: si no abre, también hay que enterarse
+            monitor.start()
+        frames = _open_frames(settings)
+        logger.info("Privacidad: caras difuminadas en la captura")
         for frame, ts in frames:
             if recorder is not None:
                 recorder = _record(recorder, frame, ts)
             if readings == 0:
                 # la luz, antes de gastar la primera clasificación en un cuadro negro
                 framing.log_report(frame, None, logger, tables=False)
-            pipeline.process_frame(frame, ts)
+            observations = pipeline.process_frame(frame, ts)
             if readings == 0:
                 # las mesas, ya detectadas: ¿entra entera, con aire, se ve grande?
                 found_none = pipeline.tables is not None and not pipeline.tables.tables
@@ -262,7 +266,10 @@ def run(settings: Settings, limit: int | None = None) -> int:
                     frame, None if found_none else pipeline.zones, logger, light=False
                 )
             readings += 1
-            if monitor is not None:
+            # Un latido es una lectura que llegó a los avisos. Si todas las mesas
+            # fallaron (el modelo caído), el loop sigue pero los mozos no se enteran
+            # de nada: no cuenta. Sin mesas detectadas no hay nada que avisar.
+            if monitor is not None and (observations or not pipeline.zones.tables):
                 monitor.beat()
             if limit is not None and readings >= limit:
                 break
@@ -279,6 +286,25 @@ def run(settings: Settings, limit: int | None = None) -> int:
         pipeline.close()
     logger.info("%d lecturas", readings)
     return 0 if readings else 1
+
+
+def _open_frames(settings: Settings):
+    """La fuente de frames. Una cámara que no abre se reintenta con esperas que
+    crecen, sin rendirse: tras un corte de luz el router o el celular pueden
+    arrancar después que la PC. Cualquier otro error de apertura sale tal cual."""
+    waits = retry_waits(CAMERA_RETRY_S, CAMERA_RETRY_MAX_S)
+    while True:
+        try:
+            return open_source(
+                settings.source,
+                settings.interval,
+                settings.speed,
+                face_model=settings.face_model,
+            )
+        except CameraUnavailable as error:
+            wait = next(waits)
+            logger.warning("%s: reintento en %g s", error, wait)
+            time.sleep(wait)
 
 
 def _record(recorder: FrameRecorder, frame, ts) -> FrameRecorder | None:
