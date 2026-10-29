@@ -38,8 +38,8 @@ logger = logging.getLogger(__name__)
 MODEL_NAME = "face_detection_yunet_2023mar.onnx"
 MODEL_PATH = VISION_DIR / "models" / MODEL_NAME
 MODEL_URL = (
-    "https://github.com/opencv/opencv_zoo/raw/main/models/face_detection_yunet/"
-    + MODEL_NAME
+    "https://media.githubusercontent.com/media/opencv/opencv_zoo/main/models/"
+    "face_detection_yunet/" + MODEL_NAME
 )
 MODEL_SHA256 = "8f2383e4dd3cfbb4553ea8718107fc0423210dc964f9f4280604804ed2552fa4"
 MODEL_ENV = "FACE_MODEL"
