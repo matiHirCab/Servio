@@ -5,10 +5,20 @@ on:
   push:
     branches: [main, develop]
 
+permissions:
+  contents: read
+
+# Un push nuevo a la misma rama o PR cancela la corrida anterior.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
+  # El nombre `vision` es el check obligatorio de la regla de rama: no cambiarlo.
   vision:
     # Para usar runners de Tenki, cambiar `runs-on` por la etiqueta que indique su documentación.
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     defaults:
       run:
         working-directory: vision
@@ -17,8 +27,62 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
+          cache: pip
+          cache-dependency-path: vision/requirements*.txt
       # Versiones fijas en requirements-dev.txt: `ruff format --check` cambia entre releases.
       - run: pip install -r requirements-dev.txt
       - run: ruff check .
       - run: ruff format --check .
+      # El piso de cobertura (`fail_under`) está en pyproject.toml.
+      - name: Tests con cobertura
+        run: pytest -q --cov --cov-report=term --cov-report=xml
+      - name: Resumen de cobertura
+        if: always()
+        run: |
+          if [ -f coverage.xml ]; then
+            python - >> "$GITHUB_STEP_SUMMARY" <<'PY'
+          import xml.etree.ElementTree as ET
+          rate = float(ET.parse("coverage.xml").getroot().get("line-rate")) * 100
+          print(f"### Cobertura: {rate:.1f} %")
+          PY
+          fi
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: coverage-xml
+          path: vision/coverage.xml
+          if-no-files-found: ignore
+
+  # Que no se rompa con la versión de Python con la que se desarrolla (3.13).
+  compat-py313:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: vision
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: vision/requirements*.txt
+      - run: pip install -r requirements-dev.txt
       - run: pytest -q
+
+  # Reglas de «Privacidad y datos» (docs/context/09-convenciones.md): nada de secretos,
+  # pesos, imágenes ni videos en el repo.
+  higiene:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Sin secretos, pesos ni medios versionados
+        run: |
+          bad=$(git ls-files | grep -E '(^|/)\.env$|\.(pt|pth|onnx|ts|mp4|mov|avi|mkv|jpg|jpeg|png)$' \
+            | grep -v -E '^docs/' || true)
+          if [ -n "$bad" ]; then
+            echo "::error::Archivos que no van al repo (ver «Privacidad y datos»):"
+            echo "$bad"
+            exit 1
+          fi

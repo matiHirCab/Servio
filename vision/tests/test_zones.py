@@ -1,6 +1,7 @@
 """Tests de zonas: recorte por mesa y editor de draw_zones (sin ventana)."""
 
 import sys
+from datetime import datetime
 from pathlib import Path
 
 import cv2
@@ -14,8 +15,12 @@ from servio_vision.zones import (
     crop_table,
     crop_tables,
     load_zones,
+    remap_bbox,
     save_zones,
+    table_rect,
+    to_jpeg,
 )
+from servio_vision.zones import main as zones_main
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
 from draw_zones import ZoneEditor
@@ -90,3 +95,96 @@ def test_editor_reuses_free_numbers_after_delete():
     for p in [(0, 0), (5, 0), (5, 5)]:
         editor.add_point(*p)
     assert editor.close_table().table_id == "T2"
+
+
+def test_remap_bbox_identity_when_the_crop_does_not_change():
+    rect = (10, 10, 110, 60)
+    assert remap_bbox((0.2, 0.2, 0.5, 0.5), rect, rect) == pytest.approx(
+        (0.2, 0.2, 0.5, 0.5)
+    )
+
+
+def test_remap_bbox_into_a_bigger_crop_shrinks_the_box():
+    old, new = (50, 50, 150, 150), (0, 0, 200, 200)
+    assert remap_bbox((0.0, 0.0, 1.0, 1.0), old, new) == pytest.approx(
+        (0.25, 0.25, 0.5, 0.5)
+    )
+
+
+def test_remap_bbox_is_clipped_to_the_new_crop():
+    old, new = (0, 0, 100, 100), (50, 0, 150, 100)
+    x, y, w, h = remap_bbox((0.0, 0.0, 1.0, 1.0), old, new)
+    assert (x, w) == pytest.approx((0.0, 0.5))
+    assert (y, h) == pytest.approx((0.0, 1.0))
+
+
+def test_remap_bbox_outside_the_new_crop_is_none():
+    assert (
+        remap_bbox((0.0, 0.0, 0.2, 0.2), (0, 0, 100, 100), (80, 80, 180, 180)) is None
+    )
+
+
+def test_table_outside_the_frame_is_rejected():
+    zones = Zones(
+        frame_size=(100, 100),
+        tables=[
+            TableZone(table_id="T1", name="Mesa", polygon=[(0, 0), (10, 0), (10, 10)])
+        ],
+    )
+    frame = np.zeros((100, 100, 3), np.uint8)
+    # el polígono se corre fuera del frame al escalar a un frame sin área en común
+    zones.tables[0].polygon = [(-30, -30), (-20, -30), (-20, -20)]
+    with pytest.raises(ValueError, match="fuera del frame"):
+        table_rect(frame, zones.tables[0], zones)
+
+
+def test_to_jpeg_returns_a_jpeg():
+    assert to_jpeg(np.zeros((4, 4, 3), np.uint8))[:2] == b"\xff\xd8"
+
+
+def test_main_saves_a_crop_per_table(tmp_path, monkeypatch, capsys):
+    zones_path = tmp_path / "zones.json"
+    save_zones(ZONES, zones_path)
+    out = tmp_path / "crops"
+    frame = np.full((100, 200, 3), 128, np.uint8)
+    ts = datetime(2026, 10, 28, 20, 30, 15)
+    monkeypatch.setattr(
+        "servio_vision.capture.open_source", lambda *a, **k: iter([(frame, ts)])
+    )
+
+    code = zones_main(
+        ["--source", "x", "--zones", str(zones_path), "--out", str(out), "--limit", "1"]
+    )
+
+    assert code == 0
+    assert sorted(p.name for p in out.glob("*.jpg")) == [
+        "203015_T1.jpg",
+        "203015_T2.jpg",
+    ]
+
+
+def test_main_without_frames_exits_with_1(tmp_path, monkeypatch):
+    zones_path = tmp_path / "zones.json"
+    save_zones(ZONES, zones_path)
+    monkeypatch.setattr("servio_vision.capture.open_source", lambda *a, **k: iter([]))
+    assert (
+        zones_main(
+            ["--source", "x", "--zones", str(zones_path), "--out", str(tmp_path)]
+        )
+        == 1
+    )
+
+
+def test_main_reports_unreadable_source_with_exit_2(tmp_path, monkeypatch, capsys):
+    zones_path = tmp_path / "zones.json"
+    save_zones(ZONES, zones_path)
+
+    def broken(*a, **k):
+        raise OSError("no se puede abrir")
+
+    monkeypatch.setattr("servio_vision.capture.open_source", broken)
+    code = zones_main(
+        ["--source", "x", "--zones", str(zones_path), "--out", str(tmp_path)]
+    )
+    assert code == 2
+    assert "no se puede abrir" in capsys.readouterr().err

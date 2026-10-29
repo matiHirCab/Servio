@@ -57,3 +57,18 @@
   - Video de la demo grabado por el equipo: carpeta compartida del equipo.
   - Dataset *AI Smart Restaurant Surveillance* de Roboflow (CC BY 4.0): se baja en local para entrenar y evaluar; se cita en `vision/README.md`.
   - Videos de YouTube: solo para probar, no se muestran en la demo ni se redistribuyen.
+
+## CI y tests
+
+El CI (`.github/workflows/ci.yml`) corre en cada PR y en cada push a `main` y `develop`:
+
+| Job | Qué verifica |
+|---|---|
+| `vision` | `ruff check`, `ruff format --check` y `pytest` con cobertura en Python 3.11. Falla si la cobertura baja del piso (`fail_under` en `vision/pyproject.toml`). Es el check obligatorio. |
+| `compat-py313` | `pytest` en Python 3.13. |
+| `higiene` | No hay `.env`, pesos, imágenes ni videos versionados (ver «Privacidad y datos»). |
+| `origen-develop` | Un PR a `main` solo viene de `develop`. |
+
+- Todo PR con lógica nueva trae sus tests. Los tests no usan red, ni YOLO, ni Telegram: se mockean (`httpx.MockTransport`, clasificador `fake`, módulos falsos para `ultralytics`).
+- Cobertura en local: `cd vision && pytest --cov` (agregá `--cov-report=term-missing` para ver qué líneas faltan). Si la cobertura sube bastante, subí `fail_under`; nunca lo bajes para que pase un PR.
+- Las migraciones de Alembic se prueban en `tests/test_migrations.py`: una sola cabeza, subir, bajar y volver a subir en SQLite.
