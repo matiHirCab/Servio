@@ -107,7 +107,6 @@ _FORMATS = {
 
 
 def build_content(
-    table_jpeg: bytes,
     plate_jpegs: list[bytes],
     table_id: str,
     references: list[bytes | None] | None = None,
@@ -115,12 +114,14 @@ def build_content(
 ) -> list:
     """Bloques del mensaje (texto + imágenes) en el formato `fmt`.
 
-    `references[i]`, si está, es el plato i recién servido y va antes del recorte actual."""
+    Al proveedor van **solo los recortes de plato** (C-3, docs/legal-uruguay.md),
+    nunca la mesa. `references[i]`, si está, es el plato i recién servido y va antes
+    del recorte actual."""
 
     def image(jpeg: bytes) -> dict:
         return fmt.image(base64.standard_b64encode(jpeg).decode())
 
-    content: list[dict] = [fmt.text(prompt.table_caption(table_id)), image(table_jpeg)]
+    content: list[dict] = [fmt.text(prompt.table_caption(table_id))]
     references = references or [None] * len(plate_jpegs)
     # strict: un plato sin su lugar en `references` no se manda en silencio
     for i, (jpeg, ref) in enumerate(zip(plate_jpegs, references, strict=True), start=1):
@@ -451,7 +452,6 @@ def _parse(data: dict, n_plates: int) -> PlatesReport:
 
 
 def estimate_plates(
-    table_jpeg: bytes,
     plate_jpegs: list[bytes],
     table_id: str,
     *,
@@ -480,9 +480,7 @@ def estimate_plates(
     # `references` de otro largo es un bug del que llama (ValueError), no un fallo de Claude.
     # `references` se normaliza acá y lo usan igual las imágenes y las preguntas.
     references = references or [None] * len(plate_jpegs)
-    content = build_content(
-        table_jpeg, plate_jpegs, table_id, references, _FORMATS[provider]
-    )
+    content = build_content(plate_jpegs, table_id, references, _FORMATS[provider])
     request = PlatesRequest(content, [r is not None for r in references])
     backend = _BACKENDS[provider]
 
@@ -516,14 +514,14 @@ def estimate_plates(
 
 
 def main(argv: list[str]) -> int:
-    if len(argv) < 2:
+    if not argv:
         print(
-            "Uso: python -m servio_vision.classifiers.claude_plates mesa.jpg plato1.jpg [plato2.jpg ...]"
+            "Uso: python -m servio_vision.classifiers.claude_plates plato1.jpg [plato2.jpg ...]"
         )
         return 2
     logging.basicConfig(level=logging.INFO)
-    table, *plates = (Path(p).read_bytes() for p in argv)
-    report = estimate_plates(table, plates, "T1")
+    plates = [Path(p).read_bytes() for p in argv]
+    report = estimate_plates(plates, "T1")
     if report is None:
         print("Claude no devolvió una respuesta válida")
         return 1

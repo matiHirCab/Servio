@@ -101,9 +101,7 @@ def main() -> None:
         imgs = [Image.open(folder / r["archivo"]) for r in batch]
         t0 = time.monotonic()
         report = estimate_plates(
-            jpeg(table_sheet(imgs), 1024),
-            [jpeg(i, CROP_SIDE) for i in imgs],
-            f"EVAL{start // a.por_llamada + 1}",
+            [jpeg(i, CROP_SIDE) for i in imgs], f"EVAL{start // a.por_llamada + 1}"
         )
         latencies.append(time.monotonic() - t0)
         for r, est in zip(batch, report.plates if report else [None] * len(batch)):

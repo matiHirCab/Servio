@@ -39,7 +39,7 @@ def claude(monkeypatch):
     """Claude falso: devuelve `fake.answer` (None = Claude falló) y guarda los recortes."""
     fake = SimpleNamespace(answer=None, calls=[], references=[])
 
-    def estimate(table, plates, table_id, **kwargs):
+    def estimate(plates, table_id, **kwargs):
         fake.calls.append(plates)
         fake.references.append(kwargs.get("references"))
         return fake.answer

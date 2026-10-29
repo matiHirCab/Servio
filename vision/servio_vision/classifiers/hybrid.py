@@ -6,8 +6,11 @@ estima cuánta comida queda en cada uno.
    `IdCounter` lo recuerda (`MAX_MISSING` lecturas): si Claude lo ve, sigue con su id
    y su lectura, y se lo recuerda de nuevo. Si su caja se pisa con una que YOLO sí vio,
    es el mismo plato con otro id y no se manda.
-3. Cada plato se recorta con 10 % de margen.
-4. Una llamada a Claude por mesa (`claude_plates.estimate_plates`) con la mesa y los platos;
+3. Cada plato se recorta con 10 % de margen. Lo que entre de una persona en el
+   recorte (una mano, un brazo) va pixelado: las personas las encuentra en la máquina
+   `people.py` (C-3). **La imagen de la mesa no se manda**: al modelo van solo los
+   recortes, y `people_present` sale del detector local (si no hay, del modelo).
+4. Una llamada a Claude por mesa (`claude_plates.estimate_plates`) con los platos;
    cada plato que ya tiene referencia (su recorte recién servido) la lleva al lado.
 5. Si Claude falla, usa el estado de la clase de YOLO con confianza más baja; si el
    detector no da estado (YOLOE sin entrenar), la lectura se descarta (`None`).
@@ -23,6 +26,7 @@ from dataclasses import dataclass
 
 from PIL import Image
 
+from servio_vision import people
 from servio_vision.classifiers import claude_plates
 from servio_vision.classifiers.yolo import (
     FoundPlate,
@@ -38,7 +42,6 @@ logger = logging.getLogger(__name__)
 
 CROP_MARGIN = 0.10
 CROP_SIDE = 384  # px del lado mayor de cada recorte de plato
-TABLE_SIDE = 1024  # px del lado mayor de la mesa que ve Claude
 # Lecturas seguidas sin ver la comida para mostrar un plato como «tapado». Antes de
 # eso conserva su última lectura (un brazo que pasa no lo tapa).
 HIDDEN_READINGS = 3
@@ -73,13 +76,22 @@ def _jpeg(img: Image.Image, side: int) -> bytes:
     return buf.getvalue()
 
 
-def _crop(img: Image.Image, bbox) -> Image.Image:
+def _crop_box(img: Image.Image, bbox) -> tuple[float, float, float, float]:
+    """(left, top, right, bottom) del recorte del plato, con margen, en píxeles."""
     w, h = img.size
     x, y, bw, bh = bbox[0] * w, bbox[1] * h, bbox[2] * w, bbox[3] * h
     mx, my = CROP_MARGIN * bw, CROP_MARGIN * bh
-    return img.crop(
-        (max(0, x - mx), max(0, y - my), min(w, x + bw + mx), min(h, y + bh + my))
-    )
+    return (max(0, x - mx), max(0, y - my), min(w, x + bw + mx), min(h, y + bh + my))
+
+
+def _crop(
+    img: Image.Image, bbox, persons: list[people.Box] | None = None
+) -> Image.Image:
+    """El recorte del plato; con `persons` (cajas en la imagen de la mesa), lo que
+    de ellas entre en el recorte va pixelado."""
+    box = _crop_box(img, bbox)
+    crop = img.crop(box)
+    return people.anonymize_crop(crop, (box[0], box[1]), persons or [])
 
 
 def _looks_taken(fill_ratio: float, last_fill: float | None) -> bool:
@@ -99,9 +111,9 @@ class Prepared:
     table_id: str
     plates: list[FoundPlate]  # primero los que vio YOLO, después los perdidos
     lost: set[str]  # ids de los platos que YOLO no vio en esta lectura
-    table_jpeg: bytes
-    plate_jpegs: list[bytes]
+    plate_jpegs: list[bytes]  # ya con las personas pixeladas
     references: list[bytes | None]  # por plato, su recorte recién servido
+    people_present: bool | None = None  # del detector local; None si no hay
 
     @property
     def seen_items(self) -> list[Item]:
@@ -121,11 +133,15 @@ class HybridClassifier:
         provider: str | None = None,
         model: str | None = None,
         timeout_s: float | None = None,
+        person_detector: people.PersonDetector | None = None,
         **detector_kwargs,
     ):
         self.detector = detector or PlateDetector(**detector_kwargs)
+        # personas en la mesa: para pixelarlas en los recortes y saber si hay gente
+        # sin mandar la mesa al modelo (C-3)
+        self.people = person_detector or people.load_detector()
         self.ids = IdCounter()
-        self.people_present: dict[str, bool] = {}  # último que dijo Claude, por mesa
+        self.people_present: dict[str, bool] = {}  # última lectura, por mesa
         self.hidden: dict[tuple[str, str], int] = {}  # lecturas seguidas sin verlo
         self.last_fill: dict[tuple[str, str], float] = {}  # última lectura visible
         self.lost_readings: dict[tuple[str, str], int] = {}  # seguidas sin YOLO
@@ -160,21 +176,27 @@ class HybridClassifier:
             and self.last_fill.get((table_id, pid), 1.0) >= LOST_EMPTY_FILL
         ]
         everything = plates + lost
+        # personas solo si hay algo que mandar: en una mesa vacía no se gasta YOLO
+        persons = (
+            self.people.detect(img) if everything and self.people is not None else None
+        )
         return Prepared(
             table_id=table_id,
             plates=everything,
             lost={p.id for p in lost},
-            table_jpeg=_jpeg(img, TABLE_SIDE) if everything else b"",
-            plate_jpegs=[_jpeg(_crop(img, p.bbox), CROP_SIDE) for p in everything],
+            plate_jpegs=[
+                _jpeg(_crop(img, p.bbox, persons), CROP_SIDE) for p in everything
+            ],
             references=[self.references.get((table_id, p.id)) for p in everything],
+            people_present=None if persons is None else bool(persons),
         )
 
     def ask(self, prepared: Prepared) -> claude_plates.PlatesReport | None:
-        """La llamada a Claude. No toca el estado del clasificador."""
+        """La llamada a Claude: solo los recortes de plato, nunca la mesa (C-3). No
+        toca el estado del clasificador."""
         if not prepared.plates:
             return claude_plates.PlatesReport(plates=[], people_present=True)
         return claude_plates.estimate_plates(
-            prepared.table_jpeg,
             prepared.plate_jpegs,
             prepared.table_id,
             references=prepared.references,
@@ -190,6 +212,16 @@ class HybridClassifier:
         table_id = prepared.table_id
         if not prepared.plates:
             return TableReport(items=[])
+        # Lo que vio el detector local **o** lo que infiere el modelo de los recortes
+        # (manos, cubiertos en uso): desde arriba, los comensales quedan casi fuera
+        # del recorte de la mesa y el detector solo diría "nadie" con gente sentada,
+        # y eso cierra avisos de plato lleno (engine.py). Si Claude falló, el detector
+        # solo suma: un "nadie" suyo no pisa la última lectura buena.
+        local = prepared.people_present
+        if report is not None:
+            self.people_present[table_id] = bool(local) or report.people_present
+        elif local:
+            self.people_present[table_id] = True
         if report is None:
             # sin Claude no hay cómo saber si un plato perdido sigue ahí: se omite
             detected = [p for p in prepared.plates if p.id not in prepared.lost]
@@ -202,7 +234,6 @@ class HybridClassifier:
                 people_present=self.people_present.get(table_id, True),
                 notes="sin Claude: estado de YOLO",
             )
-        self.people_present[table_id] = report.people_present
         last = {i.id: i for i in previous_items if i.state is not None}
         items = []
         for p, est, crop, ref in zip(
@@ -247,7 +278,7 @@ class HybridClassifier:
                     **reading,
                 )
             )
-        return TableReport(items=items, people_present=report.people_present)
+        return TableReport(items=items, people_present=self.people_present[table_id])
 
     def _update_reference(
         self, key, est: claude_plates.PlateEstimate, crop: bytes, sent: bool

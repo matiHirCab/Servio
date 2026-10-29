@@ -61,7 +61,7 @@ class Scene:
 def claude(monkeypatch):
     """Claude falso: todos los platos llenos y a la vista."""
 
-    def estimate(table, plates, table_id, **kwargs):
+    def estimate(plates, table_id, **kwargs):
         return PlatesReport(
             plates=[
                 PlateEstimate(

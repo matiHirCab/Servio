@@ -181,7 +181,8 @@ def decision_questions(has_reference: list[bool]) -> list[dict]:
 
 
 def table_caption(table_id: str) -> str:
-    return f"Mesa {table_id}, vista desde arriba:"
+    # solo texto: la imagen de la mesa no se manda (C-3), van los recortes de plato
+    return f"Mesa {table_id}, recortes de sus platos vistos desde arriba:"
 
 
 def plate_caption(index: int) -> str:

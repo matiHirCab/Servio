@@ -12,6 +12,7 @@ El resultado es un `Zones` como el de `config/zones.json`, así el resto del
 pipeline (recorte por mesa, suavizado, avisos) no cambia.
 """
 
+import functools
 import logging
 from dataclasses import dataclass
 from typing import Protocol
@@ -41,13 +42,20 @@ class BoxDetector(Protocol):
     def detect(self, frame: np.ndarray) -> list[tuple[Box, float]]: ...
 
 
+@functools.lru_cache(maxsize=4)
+def coco_model(weights: str = DEFAULT_TABLE_WEIGHTS):
+    """El YOLO de COCO cargado una sola vez por pesos: lo comparten las mesas y las
+    personas (`people.py`, C-3) en vez de tener dos copias en memoria."""
+    from ultralytics import YOLO
+
+    return YOLO(weights)
+
+
 class TableDetector:
     """Mesas con un YOLO de COCO: [(recuadro, confianza)], la más segura primero."""
 
     def __init__(self, weights: str = DEFAULT_TABLE_WEIGHTS, conf: float = MIN_CONF):
-        from ultralytics import YOLO
-
-        self.model = YOLO(weights)
+        self.model = coco_model(weights)
         self.conf = conf
 
     def detect(self, frame: np.ndarray) -> list[tuple[Box, float]]:
