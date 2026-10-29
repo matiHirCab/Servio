@@ -51,6 +51,11 @@ READ_RETRY_S = 0.1  # espera entre lecturas fallidas
 Frame = tuple[np.ndarray, datetime]
 
 
+class CameraUnavailable(OSError):
+    """La cámara no abre. Es pasajero (el router o el celular arrancan después que
+    la PC): `app.run` lo reintenta, a diferencia de un archivo que falta."""
+
+
 def is_live_source(source: str) -> bool:
     """¿Es una cámara (webcam o stream) y no un video, una carpeta o una foto?"""
     return source.isdigit() or source.startswith(STREAM_PREFIXES)
@@ -255,7 +260,7 @@ class CameraReader:
         """Abre la cámara (`OSError` si no abre) y empieza a leer."""
         cap = self._open()
         if cap is None:
-            raise OSError(f"No se pudo abrir la cámara: {self.source}")
+            raise CameraUnavailable(f"No se pudo abrir la cámara: {self.source}")
         self.fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
         self._thread = threading.Thread(target=self._run, args=(cap,), daemon=True)
         self._thread.start()

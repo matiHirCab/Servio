@@ -185,6 +185,16 @@ def test_camera_that_opens_but_sends_no_frames_does_not_start(fake_camera):
         next(open_source("0", interval=0.01))
 
 
+def test_a_camera_that_does_not_open_is_a_camera_unavailable_error(fake_camera):
+    """Un error propio: `app.run` reintenta este y no otros `OSError` (un archivo
+    que falta o el modelo de caras no se arreglan esperando)."""
+    from servio_vision.capture import CameraUnavailable
+
+    fake_camera(fail_after=0)
+    with pytest.raises(CameraUnavailable):
+        next(open_source("0", interval=0.01))
+
+
 def test_camera_reconnect_deadline_counts_since_the_last_good_frame(
     fake_camera, monkeypatch
 ):

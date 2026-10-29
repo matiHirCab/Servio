@@ -15,6 +15,7 @@ import dataclasses
 import json
 import logging
 import threading
+import time
 from collections.abc import Callable, Sequence
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -41,6 +42,12 @@ logger = logging.getLogger(__name__)
 RESOLVED_LINE_MARK = " ✅"
 # Un estado guardado hace más que esto ya no describe la sala: se arranca de cero.
 RESUME_MAX_AGE_S = 600.0
+# El estado se guarda cada tanto y no en cada lectura (una vuelta por mesa, con la
+# base remota son idas y vueltas del loop); un aviso que se abre o se cierra lo
+# guarda al instante y `close()` guarda lo último.
+SAVE_STATE_EVERY_S = 5.0
+# Una base caída falla en cada lectura: el traceback se loguea una vez por minuto.
+DB_LOG_EVERY_S = 60.0
 
 
 class EventLog:
@@ -113,6 +120,10 @@ class AlertProcessor:
         # aviso de mesa terminada cerrado porque retiraron los platos → la línea
         # que reemplaza al "ya resuelto" (quién y cuánto tardó)
         self._close_notes: dict[str, str] = {}
+        self._state_dirty = False  # hay estado sin guardar
+        self._saved_at = float("-inf")  # time.monotonic() del último intento
+        self._db_logged: dict[str, float] = {}  # qué escritura, cuándo se logueó
+        self._db_muted: dict[str, int] = {}  # y cuántos fallos se callaron
         if resume and db is not None:
             self._resume(db, resume_max_age_s)
 
@@ -164,6 +175,11 @@ class AlertProcessor:
             self._on_table,
         )
         self.db.save_state(persist.dumps(snapshot), datetime.now(UTC))
+        self._state_dirty = False
+
+    def _flush_state(self) -> None:
+        self._saved_at = time.monotonic()  # también si falla: no insistir cada lectura
+        self._db_write("el estado", self._save_state)
 
     def _record_plates(
         self, obs: TableObservation, table: TableState, ts: datetime
@@ -190,23 +206,27 @@ class AlertProcessor:
                 obs.table_id, dish.dish_id if dish else None, plate.track_id, ts
             )
         readings = []
+        states: dict[str, str] = {}
         for item in obs.items:
             served_id = self._served_rows.get(item.track_id)
             if served_id is None:
                 continue
             changed = self._plate_states.get(item.track_id) != item.state
-            self._plate_states[item.track_id] = item.state
+            states[item.track_id] = item.state
             readings.append((served_id, item.state, item.fill_ratio, changed))
         # los que estaban y ya no están (salvo que otro id haya heredado el plato)
         inherited = {p.inherited_from for p in table.plates.values()}
         before = self._on_table.get(obs.table_id, set())
         gone = before - set(table.plates) - inherited
-        for track_id in gone:
-            self._plate_states.pop(track_id, None)
-        self._on_table[obs.table_id] = {p.track_id for p in active}
         self.db.plate_readings(
             readings, [self._served_rows[t] for t in sorted(gone)], ts
         )
+        # Recién con la base al día: si la escritura falló, la próxima lectura
+        # repite estos cambios de estado y estos platos retirados en vez de perderlos.
+        self._plate_states.update(states)
+        for track_id in gone:
+            self._plate_states.pop(track_id, None)
+        self._on_table[obs.table_id] = {p.track_id for p in active}
 
     def _record_opened(self, alert: Alert, ts: datetime) -> None:
         if self.db is None:
@@ -223,14 +243,23 @@ class AlertProcessor:
             ts,
         )
 
-    @staticmethod
-    def _db_write(what: str, write: Callable[..., Any], *args: Any) -> None:
+    def _db_write(self, what: str, write: Callable[..., Any], *args: Any) -> None:
         """Una escritura a la base. La base es auxiliar (métricas e historial): si
-        falla se loguea y se sigue, así el aviso al mozo sale igual."""
+        falla se loguea y se sigue, así el aviso al mozo sale igual. Con la base
+        caída falla en cada lectura: el traceback sale una vez por `DB_LOG_EVERY_S`
+        y los demás se cuentan."""
         try:
             write(*args)
         except Exception:
-            logger.exception("No se pudo guardar %s en la base", what)
+            now = time.monotonic()
+            last = self._db_logged.get(what)
+            if last is not None and now - last < DB_LOG_EVERY_S:
+                self._db_muted[what] = self._db_muted.get(what, 0) + 1
+                return
+            self._db_logged[what] = now
+            muted = self._db_muted.pop(what, 0)
+            more = f" (y {muted} fallos más desde el último aviso)" if muted else ""
+            logger.exception("No se pudo guardar %s en la base%s", what, more)
 
     def _send_metrics(self) -> None:
         """`/metricas` en el grupo: la imagen de métricas con un resumen corto.
@@ -348,10 +377,16 @@ class AlertProcessor:
                 )
 
         if self.db is not None:
-            self._db_write("el estado", self._save_state)
+            self._state_dirty = True
+            alerts_changed = any(e["event"] != "observation" for e in events)
+            due = time.monotonic() - self._saved_at >= SAVE_STATE_EVERY_S
+            if alerts_changed or due:
+                self._flush_state()
         return events
 
     def close(self) -> None:
+        if self.db is not None and self._state_dirty:
+            self._flush_state()
         if self.feedback is not None:
             self.feedback.stop()
         self.log.close()
