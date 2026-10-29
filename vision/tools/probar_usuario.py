@@ -8,6 +8,7 @@ solo comando, en la nube o en la PC, y después revise lo que vio cada rol:
    `fake`, así lo que se ve coincide con lo que el sistema "lee".
 2. Aparta el log y la base de corridas anteriores (`out/respaldo/<hora>/`), para que
    las métricas y el resumen sean solo de esta prueba más el historial simulado.
+   Siempre usa el SQLite local, aunque el `.env` tenga `DATABASE_URL`.
 3. Corre el servicio: `tools/vista_demo.py` sin ventana, grabando la vista de
    reconocimiento, con `--demo` y sin Telegram (los avisos salen por consola).
 4. Arma lo que ve cada rol según `config/servio.toml` y `fixtures/restaurante/salon.json`:
@@ -147,8 +148,15 @@ def set_aside_previous() -> Path | None:
 
 
 def child_env() -> dict[str, str]:
-    # emojis en la consola de Windows aunque la salida vaya a un archivo
-    return {**os.environ, "PYTHONIOENCODING": "utf-8", "PYTHONUTF8": "1"}
+    # emojis en la consola de Windows aunque la salida vaya a un archivo. Sin
+    # DATABASE_URL: la prueba escribe en el SQLite local, nunca en el Postgres
+    # compartido (vacía, el .env no la pisa y settings la toma como "sin valor")
+    return {
+        **os.environ,
+        "PYTHONIOENCODING": "utf-8",
+        "PYTHONUTF8": "1",
+        "DATABASE_URL": "",
+    }
 
 
 def run_tool(args: list[str], output: Path | None = None) -> tuple[int, str]:
