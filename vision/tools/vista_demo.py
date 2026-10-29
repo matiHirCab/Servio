@@ -43,6 +43,7 @@ from servio_vision import privacy
 from servio_vision.alerts.state import table_status
 from servio_vision.app import build_pipeline, setup_logging
 from servio_vision.capture import (
+    CAMERA_RECONNECT_S,
     IMAGE_SUFFIXES,
     STREAM_PREFIXES,
     CameraReader,
@@ -195,7 +196,9 @@ def open_view_source(source: str, interval: float, detect_every: int = 1) -> Vie
         # el mismo lector que main.py: descarta los frames negros del arranque,
         # se reconecta si el celular se corta y difumina las caras
         faces = privacy.default_anonymizer(every=detect_every)
-        reader = CameraReader(int(source) if source.isdigit() else source)
+        reader = CameraReader(
+            int(source) if source.isdigit() else source, CAMERA_RECONNECT_S
+        )
         reader.start()
         t0 = time.monotonic()
         frames = ((faces(frame), time.monotonic() - t0) for frame in reader.frames())

@@ -188,21 +188,87 @@ def test_camera_that_opens_but_sends_no_frames_does_not_start(fake_camera):
 def test_camera_reconnect_deadline_counts_since_the_last_good_frame(
     fake_camera, monkeypatch
 ):
-    """Cada conexión abre y se corta enseguida: no reconecta para siempre, se da por
-    vencida a los CAMERA_RECONNECT_S del último frame bueno."""
-    from servio_vision import capture
-
-    monkeypatch.setattr(capture, "CAMERA_RECONNECT_S", 0.3)
+    """Cada conexión abre y se corta enseguida: con tope, no reconecta para siempre, se da por
+    vencida a los `reconnect_s` del último frame bueno."""
     fake_camera(fail_after=1)  # el único frame de cada conexión lo usa la apertura
     done = threading.Event()
 
     def run():
-        list(open_source("0", interval=0.01))
+        list(open_source("0", interval=0.01, reconnect_s=0.3))
         done.set()
 
     threading.Thread(target=run, daemon=True).start()
     assert done.wait(timeout=3), "la cámara siguió reconectando"
     assert len(_FakeCamera.instances) >= 2
+
+
+class _OutageCamera(_FakeCamera):
+    """Cámara que se corta a los 3 frames y vuelve recién después de `down_opens`
+    intentos de abrirla (un corte de Wi-Fi largo)."""
+
+    opens = 0
+    down_opens = 0
+
+    def __init__(self, source, *args):
+        type(self).opens += 1
+        # la primera conexión anda; las siguientes no abren hasta pasado el corte
+        self.up = type(self).opens == 1 or type(self).opens > 1 + type(self).down_opens
+        super().__init__(source, *args, fail_after=3 if type(self).opens == 1 else None)
+
+    def isOpened(self):
+        return self.up
+
+    def read(self):
+        return super().read() if self.up else (False, None)
+
+
+def _outage(monkeypatch, down_opens):
+    from servio_vision import capture
+
+    _OutageCamera.opens = 0
+    _OutageCamera.down_opens = down_opens
+    _FakeCamera.instances = []
+    monkeypatch.setattr(capture, "CAMERA_WARMUP_S", 0)
+    monkeypatch.setattr(capture, "READ_RETRY_S", 0.001)
+    monkeypatch.setattr(capture, "CAMERA_RETRY_S", 0.01)
+    monkeypatch.setattr(capture, "CAMERA_RETRY_MAX_S", 0.02)
+    monkeypatch.setattr(
+        capture.cv2, "VideoCapture", lambda source, *args: _OutageCamera(source, *args)
+    )
+
+
+def test_camera_gives_up_after_the_configured_outage(monkeypatch):
+    _outage(monkeypatch, down_opens=1000)  # no vuelve
+    done = threading.Event()
+
+    def run():
+        list(open_source("0", interval=0.01, reconnect_s=0.2))
+        done.set()
+
+    threading.Thread(target=run, daemon=True).start()
+    assert done.wait(timeout=3), "la cámara siguió reconectando"
+
+
+def test_camera_without_limit_survives_a_long_outage(monkeypatch):
+    """Un corte más largo que cualquier tope viejo: sin `reconnect_s` no se rinde y
+    sigue entregando frames cuando la cámara vuelve."""
+    _outage(monkeypatch, down_opens=40)  # ~0,8 s sin cámara con el backoff de arriba
+    frames = []
+    source = open_source("0", interval=0.01, reconnect_s=None)
+    for frame, _ in source:
+        frames.append(frame)
+        if len(frames) == 6:  # la primera conexión da 2 y el resto, tras el corte
+            break
+    source.close()
+    assert len(frames) == 6
+    assert _OutageCamera.opens > 40
+
+
+def test_camera_retry_waits_grow_up_to_the_cap(monkeypatch):
+    from servio_vision import capture
+
+    waits = capture.retry_waits(first=2.0, cap=30.0)
+    assert [next(waits) for _ in range(7)] == [2.0, 4.0, 8.0, 16.0, 30.0, 30.0, 30.0]
 
 
 def test_network_stream_opens_with_timeouts(fake_camera):
