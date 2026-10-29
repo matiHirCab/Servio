@@ -3,13 +3,14 @@
 #   docker compose up -d --build
 #   docker compose logs -f servio
 #
-# Antes: .env con las claves (ver .env.example) y vision/config/zones.json con las mesas.
+# Antes: .env con las claves (ver .env.example) y vision/config/zones.json con las mesas
+# (con SERVIO_ZONES=config/zones.json en el .env: sin eso las mesas se detectan solas, A-1).
 services:
   servio:
     build: .
     image: servio
     # main.py termina si la cámara no vuelve en 60 s: Docker lo levanta de nuevo.
-    # Ojo: un error de configuración (sin zones.json, umbrales inválidos) también reinicia,
+    # Ojo: un error de configuración (zones.json o umbrales inválidos) también reinicia,
     # con hasta 1 minuto entre intentos: mirá `docker compose logs`. Al reiniciar se
     # pierden los avisos abiertos.
     restart: unless-stopped
