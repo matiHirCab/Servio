@@ -21,6 +21,7 @@ from pathlib import Path
 from typing import Any
 
 from servio_vision import metrics
+from servio_vision.alerts import persist
 from servio_vision.alerts.config import AlertConfig
 from servio_vision.alerts.engine import evaluate, table_name
 from servio_vision.alerts.feedback import FeedbackDesk, Question
@@ -38,6 +39,8 @@ from servio_vision.restaurant import Restaurant
 logger = logging.getLogger(__name__)
 
 RESOLVED_LINE_MARK = " ✅"
+# Un estado guardado hace más que esto ya no describe la sala: se arranca de cero.
+RESUME_MAX_AGE_S = 600.0
 
 
 class EventLog:
@@ -68,7 +71,12 @@ class AlertProcessor:
         log_path: Path,
         restaurant: Restaurant | None = None,
         db: Database | None = None,
+        resume: bool = False,
+        resume_max_age_s: float = RESUME_MAX_AGE_S,
     ) -> None:
+        """`resume`: seguir con el estado que dejó la corrida anterior en `db` (si es
+        de hace menos de `resume_max_age_s`). Solo para una cámara en vivo: un video
+        o un fixture empiezan siempre de cero."""
         self.config = config
         self.notifier = notifier
         self.log = EventLog(log_path)
@@ -105,6 +113,57 @@ class AlertProcessor:
         # aviso de mesa terminada cerrado porque retiraron los platos → la línea
         # que reemplaza al "ya resuelto" (quién y cuánto tardó)
         self._close_notes: dict[str, str] = {}
+        if resume and db is not None:
+            self._resume(db, resume_max_age_s)
+
+    def _resume(self, db: Database, max_age_s: float) -> None:
+        """Sigue con las mesas y los avisos abiertos de la corrida anterior: los
+        tiempos de los platos no se reinician, un aviso abierto no se repite y su
+        mensaje de Telegram se sigue pudiendo editar."""
+        try:
+            saved = db.load_state()
+            if saved is None:
+                return
+            text, saved_at = saved
+            age = (datetime.now(UTC) - saved_at).total_seconds()
+            if age > max_age_s:
+                logger.info("El estado guardado es de hace %d s: arranco de cero", age)
+                return
+            snapshot = persist.loads(text)
+        except Exception:
+            # ilegible o la base caída: arrancar de cero es lo que pasaba antes
+            logger.exception("No se pudo recuperar el estado guardado: arranco de cero")
+            return
+        self.tables = snapshot.tables
+        self.open_alerts = snapshot.open_alerts
+        self._messages = snapshot.messages
+        self._resolved_ids = snapshot.resolved_ids
+        self._close_notes = snapshot.close_notes
+        self._alert_plate = snapshot.alert_plate
+        self._served_rows = snapshot.served_rows
+        self._plate_states = snapshot.plate_states
+        self._on_table = snapshot.on_table
+        logger.info(
+            "Sigo donde quedé hace %d s: %d mesas, %d avisos abiertos",
+            age,
+            len(self.tables),
+            len(self.open_alerts),
+        )
+
+    def _save_state(self) -> None:
+        assert self.db is not None
+        snapshot = persist.Snapshot(
+            self.tables,
+            self.open_alerts,
+            self._messages,
+            self._resolved_ids,
+            self._close_notes,
+            self._alert_plate,
+            self._served_rows,
+            self._plate_states,
+            self._on_table,
+        )
+        self.db.save_state(persist.dumps(snapshot), datetime.now(UTC))
 
     def _record_plates(
         self, obs: TableObservation, table: TableState, ts: datetime
@@ -288,6 +347,8 @@ class AlertProcessor:
                     reasons[alert.id],
                 )
 
+        if self.db is not None:
+            self._db_write("el estado", self._save_state)
         return events
 
     def close(self) -> None:

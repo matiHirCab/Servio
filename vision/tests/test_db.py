@@ -102,7 +102,7 @@ def test_a_database_from_before_alembic_upgrades_itself(tmp_path):
     db = Database(path)
     try:
         [version] = db.query("SELECT version_num FROM alembic_version")
-        assert version[0] == "0004"
+        assert version[0] == "0005"
         rows = db.query(
             "SELECT local_id, id, motivo_cierre FROM avisos ORDER BY abierto_at"
         )

@@ -51,6 +51,11 @@ READ_RETRY_S = 0.1  # espera entre lecturas fallidas
 Frame = tuple[np.ndarray, datetime]
 
 
+def is_live_source(source: str) -> bool:
+    """¿Es una cámara (webcam o stream) y no un video, una carpeta o una foto?"""
+    return source.isdigit() or source.startswith(STREAM_PREFIXES)
+
+
 def open_source(
     source: str,
     interval: float = 1.0,
@@ -83,7 +88,7 @@ def open_source(
         raise ValueError("interval tiene que ser mayor a 0")
     start = start or datetime.now(UTC)
     path = Path(source)
-    is_camera = source.isdigit() or source.startswith(STREAM_PREFIXES)
+    is_camera = is_live_source(source)
     if not is_camera and not path.exists():
         raise FileNotFoundError(f"No existe la fuente: {source}")
     # recién con una fuente que existe: un error de tipeo no tiene que terminar en
