@@ -176,7 +176,10 @@ class HybridClassifier:
             and self.last_fill.get((table_id, pid), 1.0) >= LOST_EMPTY_FILL
         ]
         everything = plates + lost
-        persons = self.people.detect(img) if self.people is not None else None
+        # personas solo si hay algo que mandar: en una mesa vacía no se gasta YOLO
+        persons = (
+            self.people.detect(img) if everything and self.people is not None else None
+        )
         return Prepared(
             table_id=table_id,
             plates=everything,
@@ -211,8 +214,13 @@ class HybridClassifier:
         if not prepared.plates:
             return TableReport(items=[])
         if prepared.people_present is not None:
-            # lo vio el detector local; el modelo no vio la mesa
-            self.people_present[table_id] = prepared.people_present
+            # Lo que vio el detector local **o** lo que infiere el modelo de los
+            # recortes (manos, cubiertos en uso): desde arriba, los comensales quedan
+            # casi fuera del recorte de la mesa y el detector solo diría "nadie" con
+            # gente sentada, y eso cierra avisos de plato lleno (engine.py).
+            self.people_present[table_id] = prepared.people_present or bool(
+                report is not None and report.people_present
+            )
         if report is None:
             # sin Claude no hay cómo saber si un plato perdido sigue ahí: se omite
             detected = [p for p in prepared.plates if p.id not in prepared.lost]

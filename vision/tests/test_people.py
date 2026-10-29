@@ -1,5 +1,5 @@
 """C-3, la mitad del modelo: al proveedor van solo recortes de platos, con las
-personas y manos pixeladas, y people_present sale del detector local."""
+personas y manos pixeladas, y people_present sale del detector local o del modelo."""
 
 import io
 
@@ -86,7 +86,7 @@ def test_people_in_a_plate_crop_are_pixelated(monkeypatch):
     table = noisy_jpeg()
     plain = HybridClassifier(FakeDetector(PLATES), person_detector=FakePeople([]))
     plain.classify(table, "T1", [])
-    # una persona cuyo brazo entra en el plato 1 (220..300 × 20..100), no en el 2
+    # una persona cuyo brazo entra en el plato de 220..300 × 20..100, no en el otro
     arm = FakePeople([(280.0, 60.0, 400.0, 200.0)])
     with_person = HybridClassifier(FakeDetector(PLATES), person_detector=arm)
     with_person.classify(table, "T1", [])
@@ -109,12 +109,20 @@ def test_anonymize_crop_only_touches_the_overlap():
     assert people.anonymize_crop(crop, (0, 0), [(500.0, 500.0, 600.0, 600.0)]) is crop
 
 
-def test_people_present_comes_from_the_local_detector(monkeypatch):
+def test_people_present_is_the_local_detector_or_the_model(monkeypatch):
+    """Desde arriba, los comensales quedan casi fuera del recorte de la mesa: el
+    detector solo diría "nadie" con gente sentada. Vale lo que vea cualquiera."""
+    model_says = {"people": False}
     monkeypatch.setattr(
-        claude_plates, "estimate_plates", lambda *a, **k: answer(2, people_present=True)
+        claude_plates,
+        "estimate_plates",
+        lambda *a, **k: answer(2, people_present=model_says["people"]),
     )
     nobody = HybridClassifier(FakeDetector(PLATES), person_detector=FakePeople([]))
     assert nobody.classify(noisy_jpeg(), "T1", []).people_present is False
+    model_says["people"] = True  # el modelo ve manos en los recortes
+    assert nobody.classify(noisy_jpeg(), "T1", []).people_present is True
+    model_says["people"] = False
     someone = HybridClassifier(
         FakeDetector(PLATES), person_detector=FakePeople([(0.0, 0.0, 50.0, 50.0)])
     )
@@ -122,6 +130,14 @@ def test_people_present_comes_from_the_local_detector(monkeypatch):
     # si Claude falla, queda lo último que vio el detector
     monkeypatch.setattr(claude_plates, "estimate_plates", lambda *a, **k: None)
     assert someone.classify(noisy_jpeg(), "T1", []).people_present is True
+
+
+def test_no_person_detection_on_an_empty_table(monkeypatch):
+    monkeypatch.setattr(claude_plates, "estimate_plates", lambda *a, **k: answer(0))
+    arm = FakePeople([(0.0, 0.0, 50.0, 50.0)])
+    clf = HybridClassifier(FakeDetector([]), person_detector=arm)
+    assert clf.classify(noisy_jpeg(), "T1", []).items == []
+    assert arm.calls == 0
 
 
 def test_without_a_local_detector_the_model_decides(monkeypatch):
@@ -134,3 +150,13 @@ def test_without_a_local_detector_the_model_decides(monkeypatch):
     clf = HybridClassifier(FakeDetector(PLATES))
     assert clf.people is None
     assert clf.classify(noisy_jpeg(), "T1", []).people_present is False
+
+
+def test_load_detector_never_breaks_the_classifier(monkeypatch):
+    """Sin ultralytics, sin pesos o sin internet: aviso y seguir sin detector."""
+
+    def broken(*args, **kwargs):
+        raise OSError("sin internet para bajar yolo11s.pt")
+
+    monkeypatch.setattr(people, "YoloPersonDetector", broken)
+    assert people.load_detector() is None

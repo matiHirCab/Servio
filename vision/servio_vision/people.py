@@ -21,14 +21,18 @@ import numpy as np
 from PIL import Image
 
 from servio_vision.privacy import pixelate
+from servio_vision.tables import DEFAULT_TABLE_WEIGHTS, coco_model
 
 logger = logging.getLogger(__name__)
 
 Box = tuple[float, float, float, float]  # x0, y0, x1, y1 en píxeles de la imagen
 
-DEFAULT_WEIGHTS = "yolo11s.pt"  # COCO; los mismos que tables.py
 COCO_PERSON = 0
-MIN_CONF = 0.25
+# Ante la duda se pixela de más (como en privacy.py): umbral bajo y el recorte de la
+# mesa a 1280 px, que es lo que hace falta para ver una mano de 25 px desde arriba
+# (a 640 px el detector de platos tampoco los ve).
+MIN_CONF = 0.15
+IMAGE_SIZE = 1280
 PIXEL_MARGIN = 0.1  # la caja de la persona se agranda esto de cada lado al pixelar
 
 
@@ -39,20 +43,19 @@ class PersonDetector(Protocol):
 
 
 class YoloPersonDetector:
-    """`person` de COCO sobre el recorte de la mesa. Desde arriba, una mano o un
-    brazo apoyado también salen como `person` (con menos confianza)."""
+    """`person` de COCO sobre el recorte de la mesa, con el mismo modelo cargado que
+    usa `tables.py` (una sola copia en memoria). Desde arriba, una mano o un brazo
+    apoyado también salen como `person` (con menos confianza)."""
 
-    def __init__(self, weights: str = DEFAULT_WEIGHTS, conf: float = MIN_CONF) -> None:
-        from ultralytics import YOLO
-
-        self.model = YOLO(weights)
+    def __init__(self, weights: str = DEFAULT_TABLE_WEIGHTS, conf: float = MIN_CONF):
+        self.model = coco_model(weights)
         self.conf = conf
 
     def detect(self, img: Image.Image) -> list[Box]:
         r = self.model.predict(
             img,
             conf=self.conf,
-            imgsz=640,
+            imgsz=IMAGE_SIZE,
             device="cpu",
             classes=[COCO_PERSON],
             verbose=False,
@@ -61,14 +64,15 @@ class YoloPersonDetector:
 
 
 def load_detector() -> PersonDetector | None:
-    """El detector, o `None` (con aviso) si no está ultralytics."""
+    """El detector, o `None` (con aviso) si no se puede: sin ultralytics, sin los
+    pesos y sin internet para bajarlos… `hybrid` sigue andando igual."""
     try:
         return YoloPersonDetector()
-    except ImportError:
+    except Exception as e:  # noqa: BLE001 — ImportError, descarga, pesos rotos
         logger.warning(
-            "Sin ultralytics no se detectan personas: los recortes de plato van sin "
-            "pixelar y people_present lo estima el modelo (pip install -r "
-            "requirements-yolo.txt)"
+            "Sin detector de personas (%s): los recortes de plato van sin pixelar y "
+            "people_present lo estima el modelo. pip install -r requirements-yolo.txt",
+            e,
         )
         return None
 

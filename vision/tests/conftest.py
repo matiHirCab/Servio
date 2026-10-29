@@ -4,7 +4,7 @@ import os
 
 import pytest
 
-from servio_vision import alerts, privacy, settings
+from servio_vision import alerts, people, privacy, settings
 from servio_vision.alerts.notify import ConsoleNotifier
 
 # SERVIO_TEST_TELEGRAM=1 pytest → los tests que pasan por alerts mandan al grupo de verdad
@@ -51,3 +51,11 @@ def no_face_model(monkeypatch):
     esto cada test que lee un video intentaría bajar el detector. Un test que quiera
     ver caras pixeladas pone su propio detector con `monkeypatch`."""
     monkeypatch.setattr(privacy, "load_detector", lambda *a, **k: NoFaces())
+
+
+@pytest.fixture(autouse=True)
+def no_person_model(monkeypatch):
+    """`HybridClassifier()` arma un detector de personas (YOLO) si puede; en los
+    tests, ninguno: `people_present` queda como lo diga el Claude falso. Un test que
+    quiera personas pasa `person_detector=`."""
+    monkeypatch.setattr(people, "load_detector", lambda *a, **k: None)
