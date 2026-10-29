@@ -274,15 +274,34 @@ def test_restaurant_reload_drops_answers_that_went_away(tmp_path):
         db.close()
 
 
-def test_query_rejects_a_bare_string_and_unknown_columns(tmp_path):
+def test_query_takes_named_params_and_rejects_the_rest(tmp_path):
     db = Database(tmp_path / "servio.db")
     try:
         with pytest.raises(TypeError):
-            db.query("SELECT * FROM mesas WHERE id = ?", "T1")
+            db.query("SELECT * FROM mesas WHERE id = ?", ("T1",))  # solo con nombre
         db.load_restaurant(Restaurant.load())
-        [row] = db.query("SELECT id FROM mesas WHERE id = ?", ("T1",))
+        [row] = db.query("SELECT id FROM mesas WHERE id = :mesa", {"mesa": "T1"})
         assert row["id"] == "T1"
         with pytest.raises(KeyError):
             row["typo"]
+    finally:
+        db.close()
+
+
+def test_history_without_served_plates_imports_the_alerts(tmp_path):
+    """Un historial solo con mesas terminadas no tiene platos servidos: igual entra."""
+    history = tmp_path / "historial.jsonl"
+    history.write_text(
+        '{"fecha": "2026-10-01", "servicio": "cena", "mesa": "T1", "mozo": "Juan",'
+        ' "tipo": "mesa_terminada", "minutos_hasta_atender": 3}\n',
+        encoding="utf-8",
+    )
+    db = Database(tmp_path / "servio.db")
+    try:
+        restaurant = Restaurant.load()
+        db.load_restaurant(restaurant)
+        assert db.import_history(history, restaurant) == 1
+        [(local, motivo)] = db.query("SELECT local_id, motivo_cierre FROM avisos")
+        assert (local, motivo) == ("historial", "retirados")
     finally:
         db.close()

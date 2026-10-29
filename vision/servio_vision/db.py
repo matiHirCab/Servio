@@ -19,6 +19,10 @@ Guarda lo que pasa en el salón para sacar métricas con SQL:
   `{mesa}-{tipo}-{segundo}`, único solo dentro de un local).
 - `origen` distingue lo que pasó en vivo ("camara") del historial simulado
   ("historial").
+- `mozos`, `mesas`, `platos` y `respuestas_tipicas` (la comanda) son **compartidas**
+  entre casas: hoy todas cargan el mismo `fixtures/restaurante/`. Si dos casas
+  tuvieran cartas o mozos distintos, la última en arrancar pisaría a la otra; eso
+  es separar la comanda por local (D-2, alta del local desde la web), no esta tarea.
 - Sin `DATABASE_URL` es un archivo SQLite (`vision/out/servio.db`), sin servidor: para
   los tests y para trabajar sin internet. Con `DATABASE_URL` (Neon o Supabase, en el
   `.env`) todas las casas escriben en el mismo Postgres y el dashboard lee de ahí.
@@ -60,6 +64,7 @@ MIGRATIONS_DIR = Path(__file__).resolve().parent / "migrations"
 DEFAULT_PATH = VISION_DIR / "out" / "servio.db"
 HISTORY_LOCAL = "historial"  # el historial simulado no es de ninguna casa
 HISTORY_LOCK = 4211  # pg_advisory_xact_lock: una sola casa importa el historial
+MIGRATE_LOCK = 4212  # pg_advisory_lock: una sola casa migra a la vez
 
 # Hora de inicio de cada servicio, para fechar el historial simulado.
 SERVICE_START = {"almuerzo": "13:00:00", "cena": "21:00:00"}
@@ -209,17 +214,27 @@ class Database:
             if self.dialect == "sqlite":
                 # batch de tablas (copiar y renombrar) sin que las FK lo frenen
                 conn.exec_driver_sql("PRAGMA foreign_keys=OFF")
-            cfg.attributes["connection"] = conn
-            inspector = sa.inspect(conn)
-            tables = set(inspector.get_table_names())
-            if "alembic_version" not in tables and "avisos" in tables:
-                columns = {c["name"] for c in inspector.get_columns("avisos")}
-                command.stamp(cfg, "0002" if "motivo_cierre" in columns else "0001")
-            command.upgrade(cfg, "head")
-            conn.commit()
-            if self.dialect == "sqlite":
-                # la conexión vuelve al pool: que no quede con las FK apagadas
-                conn.exec_driver_sql("PRAGMA foreign_keys=ON")
+            elif self.dialect == "postgresql":
+                # dos casas arrancando a la vez: migra una, la otra espera y ya
+                # encuentra la base al día (lock de sesión, se suelta al final)
+                conn.execute(sa.text(f"SELECT pg_advisory_lock({MIGRATE_LOCK})"))
+                conn.commit()
+            try:
+                cfg.attributes["connection"] = conn
+                inspector = sa.inspect(conn)
+                tables = set(inspector.get_table_names())
+                if "alembic_version" not in tables and "avisos" in tables:
+                    columns = {c["name"] for c in inspector.get_columns("avisos")}
+                    command.stamp(cfg, "0002" if "motivo_cierre" in columns else "0001")
+                command.upgrade(cfg, "head")
+                conn.commit()
+            finally:
+                if self.dialect == "sqlite":
+                    # la conexión vuelve al pool: que no quede con las FK apagadas
+                    conn.exec_driver_sql("PRAGMA foreign_keys=ON")
+                elif self.dialect == "postgresql":
+                    conn.execute(sa.text(f"SELECT pg_advisory_unlock({MIGRATE_LOCK})"))
+                    conn.commit()
 
     def close(self) -> None:
         with self._lock:
@@ -316,30 +331,41 @@ class Database:
         )
         return rows[0]["mozo_id"] if rows else None
 
-    def _ensure_table(self, table_id: str) -> None:
-        self._write(
+    def _ensure_table(self, table_id: str):
+        """La mesa, si no está en la comanda (INSERT OR IGNORE). Se ejecuta en la
+        misma transacción que la escritura que la necesita."""
+        return (
             self._upsert(mesas)
             .values(id=table_id, nombre=f"Mesa {table_id[1:]}")
             .on_conflict_do_nothing(index_elements=["id"])
         )
 
+    def _waiter_of(self, table_id: str):
+        """El mozo de la mesa, como subconsulta: una ida y vuelta menos."""
+        return (
+            sa.select(mesas.c.mozo_id).where(mesas.c.id == table_id).scalar_subquery()
+        )
+
     # --- lo que pasa en vivo ---
+    # Una sola transacción por escritura: con un Postgres remoto, cada ida y vuelta
+    # bajo el lock frena el loop de la cámara y el hilo de Telegram.
 
     def served(
         self, table_id: str, dish_id: str | None, track_id: str, at: datetime
     ) -> int:
-        self._ensure_table(table_id)
-        result = self._write(
-            platos_servidos.insert().values(
-                local_id=self.local_id,
-                mesa_id=table_id,
-                plato_id=dish_id,
-                track_id=track_id,
-                servido_at=_iso(at),
-                origen="camara",
+        with self._lock, self._engine.begin() as conn:
+            conn.execute(self._ensure_table(table_id))
+            result = conn.execute(
+                platos_servidos.insert().values(
+                    local_id=self.local_id,
+                    mesa_id=table_id,
+                    plato_id=dish_id,
+                    track_id=track_id,
+                    servido_at=_iso(at),
+                    origen="camara",
+                )
             )
-        )
-        return result.inserted_primary_key[0]
+            return result.inserted_primary_key[0]
 
     def alert_opened(
         self,
@@ -349,24 +375,25 @@ class Database:
         served_id: int | None,
         at: datetime,
     ) -> None:
-        self._ensure_table(table_id)
         row = {
             "local_id": self.local_id,
             "id": alert_id,
             "tipo": kind,
             "mesa_id": table_id,
-            "mozo_id": self.waiter_id(table_id),
+            "mozo_id": self._waiter_of(table_id),
             "plato_servido_id": served_id,
             "abierto_at": _iso(at),
             "resuelto_at": None,
             "origen": "camara",
             "motivo_cierre": None,
         }
-        self._write(
-            self._upsert(avisos)
-            .values(row)
-            .on_conflict_do_update(index_elements=["local_id", "id"], set_=row)
-        )
+        with self._lock, self._engine.begin() as conn:
+            conn.execute(self._ensure_table(table_id))
+            conn.execute(
+                self._upsert(avisos)
+                .values(row)
+                .on_conflict_do_update(index_elements=["local_id", "id"], set_=row)
+            )
 
     def alert_resolved(
         self, alert_id: str, at: datetime, reason: str | None = None
@@ -413,13 +440,15 @@ class Database:
                 conn.execute(sa.text(f"SELECT pg_advisory_xact_lock({HISTORY_LOCK})"))
             if conn.execute(exists).first():  # la otra casa llegó primero
                 return 0
-            ids = conn.execute(
-                platos_servidos.insert().returning(
-                    platos_servidos.c.id, sort_by_parameter_order=True
-                ),
-                served_rows,
-            ).scalars()
-            served_ids = dict(zip(served_keys, ids, strict=True))
+            served_ids: dict = {}
+            if served_rows:  # un insert vacío no es "nada": es una fila por defecto
+                ids = conn.execute(
+                    platos_servidos.insert().returning(
+                        platos_servidos.c.id, sort_by_parameter_order=True
+                    ),
+                    served_rows,
+                ).scalars()
+                served_ids = dict(zip(served_keys, ids, strict=True))
             for alert in alert_rows:
                 alert["plato_servido_id"] = served_ids.get(alert.pop("served_key"))
             if alert_rows:
@@ -521,13 +550,12 @@ def _bind(sql: str, params: Mapping[str, Any] | Sequence[Any]):
     """`text()` con parámetros con nombre; los posicionales (`?`) se numeran."""
     if isinstance(params, Mapping):
         return sa.text(sql), dict(params)
-    if isinstance(params, str | bytes):
-        raise TypeError("params: una tupla o un dict, no un texto suelto")
-    bound: dict[str, Any] = {}
-    for i, value in enumerate(params):
-        sql = sql.replace("?", f":p{i}", 1)
-        bound[f"p{i}"] = value
-    return sa.text(sql), bound
+    if params:
+        # un `?` adentro de un literal ('%?%') haría cualquier cosa: solo con nombre
+        raise TypeError(
+            "params: un dict con nombres (`WHERE id = :mesa`), no posicionales"
+        )
+    return sa.text(sql), {}
 
 
 def _iso(at: datetime) -> str:

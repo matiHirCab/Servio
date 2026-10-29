@@ -21,22 +21,20 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from servio_vision import settings
-from servio_vision.db import Database
+from servio_vision.db import DEFAULT_PATH, Database
 from servio_vision.metrics import (
     HISTORY,
     REPORT_METRICS,
     SQL_ANSWER,
     SQL_ATTEND,
     SQL_DISHES,
-    VISION_DIR,
     compute,
     print_report,
     render,
 )
 from servio_vision.restaurant import Restaurant
 from servio_vision.roles import DEFAULT_CONFIG, Roles
-
-DB = VISION_DIR / "out" / "servio.db"
+from servio_vision.settings import Settings
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -44,7 +42,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--db",
         type=Path,
-        help=f"un SQLite puntual (por defecto {DB}, o DATABASE_URL del .env si está)",
+        help=f"un SQLite puntual (por defecto {DEFAULT_PATH}, o DATABASE_URL si está)",
     )
     parser.add_argument("--historial", type=Path, default=HISTORY)
     parser.add_argument("--image", type=Path, help="guardar también como imagen")
@@ -64,13 +62,19 @@ def main(argv: list[str] | None = None) -> int:
         if not visible:
             print(f"El rol {role.nombre} no ve estas métricas (ver {args.config}).")
             return 3
-    # un --db explícito gana; si no, DATABASE_URL del .env (Postgres compartido) o
-    # el SQLite local
-    cfg = settings.current()
+    # la configuración de la casa (--config, el mismo toml de los roles) dice el
+    # local_id; un --db explícito gana a DATABASE_URL (Postgres compartido)
+    try:
+        cfg = settings.activate(
+            Settings.load(args.config if args.config.exists() else None)
+        )
+    except (OSError, ValueError) as e:
+        print(f"Configuración: {settings.explain(e)}", file=sys.stderr)
+        return 2
     url = None if args.db else cfg.database_url
-    db = Database(args.db or DB, url=url, local_id=cfg.local_id)
+    db = Database(args.db, url=url, local_id=cfg.local_id)
     if url:
-        print("(base compartida: DATABASE_URL)\n")
+        print(f"(base compartida: DATABASE_URL, local {cfg.local_id})\n")
     restaurant = Restaurant.load()
     db.load_restaurant(restaurant)
     if args.historial.exists():

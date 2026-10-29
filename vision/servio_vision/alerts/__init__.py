@@ -43,11 +43,10 @@ def configure(
     # con datos del restaurante, todo queda también en la base (junto al log)
     db = None
     if restaurant is not None:
-        cfg = settings.current() if local_id is None else None
         db = Database(
             log_path.parent / "servio.db",
             url=database_url,
-            local_id=local_id if local_id is not None else cfg.local_id,
+            local_id=local_id or settings.current().local_id,
         )
     _processor = AlertProcessor(
         config, get_notifier(telegram, env), log_path, restaurant, db

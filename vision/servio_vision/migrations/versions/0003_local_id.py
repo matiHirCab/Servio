@@ -18,12 +18,14 @@ Revises: 0002
 import sqlalchemy as sa
 from alembic import op
 
-from servio_vision import DEFAULT_LOCAL as LOCAL
-
 revision = "0003"
 down_revision = "0002"
 branch_labels = None
 depends_on = None
+
+# Congelado acá a propósito: una migración es historia, y lo que se escribió en las
+# filas viejas no tiene que cambiar si algún día cambia el default del código.
+LOCAL = "local"
 
 
 def upgrade() -> None:
