@@ -37,8 +37,11 @@ logger = logging.getLogger(__name__)
 IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png", ".webp", ".bmp"}
 STREAM_PREFIXES = ("http://", "https://", "rtsp://", "rtmp://")
 CAMERA_WARMUP_S = 1.5  # frames de la cámara que se descartan al abrirla
-CAMERA_RECONNECT_S = 60.0  # cuánto se reintenta, en total, una cámara que se cortó
-CAMERA_RETRY_S = 2.0  # espera entre intentos de abrirla
+# Tope de reconexión para las herramientas que corren a mano (vista_demo): el servicio
+# no lo usa, `reconnect_s=None` reintenta hasta que la cámara vuelva.
+CAMERA_RECONNECT_S = 60.0
+CAMERA_RETRY_S = 2.0  # espera antes del segundo intento de abrirla
+CAMERA_RETRY_MAX_S = 30.0  # la espera se duplica en cada intento hasta este tope
 STREAM_TIMEOUT_MS = (
     5000  # una apertura o lectura de un stream por red colgada corta acá
 )
@@ -55,6 +58,7 @@ def open_source(
     start: datetime | None = None,
     anonymize: Anonymizer | None = None,
     face_model: Path | None = None,
+    reconnect_s: float | None = None,
 ) -> Iterator[Frame]:
     """Iterador de `(frame, ts)` según el tipo de `source`.
 
@@ -67,6 +71,9 @@ def open_source(
     difuminadas (`privacy.default_anonymizer()`, con el detector `face_model` de la
     configuración si se pasa). Es el **único** lugar donde se engancha: los lectores
     devuelven el frame crudo y acá se envuelve.
+    `reconnect_s`: solo cámaras; cuánto reintenta una cámara que se cortó antes de
+    darse por vencida. `None` (lo normal) no se rinde: un corte de Wi-Fi o un reinicio
+    del router no tienen que dejar el servicio apagado.
 
     Abre la fuente y resuelve el anonimizador antes de devolver el iterador: una
     fuente que no existe o no abre, o el modelo de caras que falta
@@ -83,7 +90,9 @@ def open_source(
     # "no se pudo bajar el modelo"
     anonymize = anonymize or privacy.default_anonymizer(face_model=face_model)
     if is_camera:
-        raw = read_camera(int(source) if source.isdigit() else source, interval)
+        raw = read_camera(
+            int(source) if source.isdigit() else source, interval, reconnect_s
+        )
     elif path.is_dir():
         raw = read_folder(path, interval, speed, start)
     elif path.suffix.lower() in IMAGE_SUFFIXES:
@@ -182,8 +191,10 @@ def read_image(path: Path, start: datetime) -> Iterator[Frame]:
     return iter([(frame, start)])
 
 
-def read_camera(source: int | str, interval: float) -> Iterator[Frame]:
-    reader = CameraReader(source)
+def read_camera(
+    source: int | str, interval: float, reconnect_s: float | None = None
+) -> Iterator[Frame]:
+    reader = CameraReader(source, reconnect_s)
     reader.start()  # OSError si no abre
     frames = _camera_frames(reader, interval)
     # si nadie llega a iterar (falló algo entre abrir y el primer frame), el hilo de
@@ -214,16 +225,18 @@ class CameraReader:
     Se lee siempre, aunque el loop esté ocupado clasificando: si no, el buffer
     se llena, el frame entregado es viejo y un stream por red (DroidCam, IP
     Webcam) corta la conexión. Un fallo suelto de lectura se reintenta; con
-    `READ_FAILURES_TO_RECONNECT` seguidos, reabre la cámara. Se da por vencida si
-    pasan `CAMERA_RECONNECT_S` sin un frame bueno, aunque abra y se vuelva a cortar.
+    `READ_FAILURES_TO_RECONNECT` seguidos, reabre la cámara, con esperas que crecen
+    hasta `CAMERA_RETRY_MAX_S`. Con `reconnect_s` se da por vencida si pasan tantos
+    segundos sin un frame bueno, aunque abra y se vuelva a cortar; con `None` no.
     Lo usan `read_camera` y `tools/vista_demo.py`. Entrega frames **crudos**: quien
     los consume los pasa por el anonimizador (`open_source` lo hace; `vista_demo`
     también). No se hace en el hilo porque detectar caras tarda ~120 ms y a 30 fps
     el hilo no daría abasto: el buffer se llenaría y los frames saldrían viejos.
     """
 
-    def __init__(self, source: int | str) -> None:
+    def __init__(self, source: int | str, reconnect_s: float | None = None) -> None:
         self.source = source
+        self.reconnect_s = reconnect_s
         self.fps = 30.0
         self._cond = threading.Condition()
         self._frame: np.ndarray | None = None
@@ -321,7 +334,10 @@ class CameraReader:
                     self._stop.wait(READ_RETRY_S)
                     continue
                 cap.release()
-                cap = self._reconnect(down_since + CAMERA_RECONNECT_S)
+                deadline = (
+                    None if self.reconnect_s is None else down_since + self.reconnect_s
+                )
+                cap = self._reconnect(deadline)
                 if cap is None:
                     break
                 failures = 0
@@ -332,16 +348,36 @@ class CameraReader:
                 self._done = True
                 self._cond.notify_all()
 
-    def _reconnect(self, deadline: float) -> cv2.VideoCapture | None:
-        """Reabre la cámara hasta `deadline` (`time.monotonic()`)."""
+    def _reconnect(self, deadline: float | None) -> cv2.VideoCapture | None:
+        """Reabre la cámara hasta `deadline` (`time.monotonic()`); sin `deadline`,
+        hasta que vuelva o se llame a `stop()`."""
         logger.warning("La cámara se cortó, reintento: %s", self.source)
-        while not self._stop.is_set() and time.monotonic() < deadline:
+        waits = retry_waits(CAMERA_RETRY_S, CAMERA_RETRY_MAX_S)
+        attempts = 0
+        while not self._stop.is_set() and (
+            deadline is None or time.monotonic() < deadline
+        ):
             cap = self._open()
+            attempts += 1
             if cap is not None:
                 logger.info("Cámara reconectada: %s", self.source)
                 return cap
-            self._stop.wait(CAMERA_RETRY_S)
+            if attempts % 10 == 0:  # un corte largo no llena el log, pero se nota
+                logger.warning(
+                    "La cámara sigue sin volver (%d intentos): %s",
+                    attempts,
+                    self.source,
+                )
+            self._stop.wait(next(waits))
         return None
+
+
+def retry_waits(first: float, cap: float) -> Iterator[float]:
+    """Esperas entre intentos: `first`, el doble, el doble... hasta `cap`."""
+    wait = first
+    while True:
+        yield min(wait, cap)
+        wait *= 2
 
 
 class _Pacer:
