@@ -31,8 +31,11 @@ def configure(
     env: Mapping[str, str] | None = None,
     database_url: str | None = None,
     local_id: str | None = None,
+    resume: bool = False,
 ) -> AlertProcessor:
-    """Arranca un estado nuevo (sin mesas ni avisos abiertos) con estos umbrales.
+    """Arranca un estado nuevo (sin mesas ni avisos abiertos) con estos umbrales;
+    con `resume`, sigue con el que dejó la corrida anterior en la base (A-5), si es
+    reciente. Solo vale con la base, o sea con datos del restaurante.
     `env`: token y grupo de Telegram (los pasa `app.py`); sin él, los de la
     configuración del entorno. `database_url` y `local_id`: la base compartida y
     con qué nombre escribe esta casa (A-6); sin URL, SQLite junto al log."""
@@ -51,7 +54,7 @@ def configure(
             local_id=local_id or cfg.local_id,
         )
     _processor = AlertProcessor(
-        config, get_notifier(telegram, env), log_path, restaurant, db
+        config, get_notifier(telegram, env), log_path, restaurant, db, resume=resume
     )
     return _processor
 

@@ -154,6 +154,13 @@ respuestas = Table(
     Column("respondido_at", String, nullable=False),
     ForeignKeyConstraint(["local_id", "aviso_id"], ["avisos.local_id", "avisos.id"]),
 )
+estado_servicio = Table(
+    "estado_servicio",
+    metadata,
+    Column("local_id", String, primary_key=True),
+    Column("guardado_at", String, nullable=False),
+    Column("estado", String, nullable=False),  # JSON de alerts/persist.py
+)
 
 
 class Row(tuple):
@@ -479,6 +486,28 @@ class Database:
                 respondido_at=event["ts"],
             )
         )
+
+    # --- estado para seguir después de un reinicio (A-5) ---
+
+    def save_state(self, state: str, at: datetime) -> None:
+        """Guarda la foto del estado de esta casa (pisa la anterior)."""
+        row = {"local_id": self.local_id, "guardado_at": _iso(at), "estado": state}
+        with self._lock, self._engine.begin() as conn:
+            conn.execute(
+                self._upsert(estado_servicio)
+                .values(row)
+                .on_conflict_do_update(index_elements=["local_id"], set_=row)
+            )
+
+    def load_state(self) -> tuple[str, datetime] | None:
+        """`(foto, cuándo se guardó)` de esta casa, o None si nunca se guardó."""
+        rows = self.query(
+            "SELECT estado, guardado_at FROM estado_servicio WHERE local_id = :local",
+            {"local": self.local_id},
+        )
+        if not rows:
+            return None
+        return rows[0]["estado"], datetime.fromisoformat(rows[0]["guardado_at"])
 
     # --- historial simulado ---
 

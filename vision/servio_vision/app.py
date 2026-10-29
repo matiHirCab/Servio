@@ -14,7 +14,7 @@ import warnings
 
 from servio_vision import alerts, framing, prompt
 from servio_vision.alerts.config import load_config
-from servio_vision.capture import open_source
+from servio_vision.capture import is_live_source, open_source
 from servio_vision.classifier import get_classifier
 from servio_vision.cli import require_source
 from servio_vision.dish_match import DishMatcher
@@ -179,6 +179,8 @@ def build_pipeline(settings: Settings) -> Pipeline | None:
         env=telegram_env,
         database_url=settings.database_url,
         local_id=settings.local_id,
+        # una cámara en vivo sigue donde quedó tras un reinicio; un video, no
+        resume=bool(settings.source) and is_live_source(settings.source),
     )
     return Pipeline(
         classifier,
