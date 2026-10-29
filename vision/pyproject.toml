@@ -4,3 +4,12 @@ target-version = "py311"
 [tool.pytest.ini_options]
 pythonpath = ["."]
 testpaths = ["tests"]
+
+[tool.coverage.run]
+source = ["servio_vision"]
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = true
+# Piso de cobertura: el CI falla si baja. Subirlo cuando se agreguen tests.
+fail_under = 90
