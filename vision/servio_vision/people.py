@@ -15,25 +15,32 @@ la mesa igual, y `people_present` lo estima el modelo con los recortes.
 """
 
 import logging
+import threading
 from typing import Protocol
 
 import numpy as np
 from PIL import Image
 
 from servio_vision.privacy import pixelate
-from servio_vision.tables import DEFAULT_TABLE_WEIGHTS, coco_model
+from servio_vision.tables import DEFAULT_TABLE_WEIGHTS, Box, coco_model
 
 logger = logging.getLogger(__name__)
 
-Box = tuple[float, float, float, float]  # x0, y0, x1, y1 en píxeles de la imagen
-
 COCO_PERSON = 0
+# El modelo es uno solo (compartido con las mesas) y el pipeline clasifica varias
+# mesas a la vez en hilos: el predictor de ultralytics no es seguro entre hilos.
+_predict_lock = threading.Lock()
 # Ante la duda se pixela de más (como en privacy.py): umbral bajo y el recorte de la
 # mesa a 1280 px, que es lo que hace falta para ver una mano de 25 px desde arriba
 # (a 640 px el detector de platos tampoco los ve).
 MIN_CONF = 0.15
 IMAGE_SIZE = 1280
 PIXEL_MARGIN = 0.1  # la caja de la persona se agranda esto de cada lado al pixelar
+# Bloques de ~12 px, no una cantidad fija: la caja de una persona que cruza el brazo
+# sobre la mesa puede tapar el recorte entero, y con 6 bloques el plato desaparecía.
+# Una mano no identifica a nadie (las caras ya van difuminadas): alcanza con que no
+# se vea con detalle.
+PIXEL_BLOCK = 12
 
 
 class PersonDetector(Protocol):
@@ -52,14 +59,15 @@ class YoloPersonDetector:
         self.conf = conf
 
     def detect(self, img: Image.Image) -> list[Box]:
-        r = self.model.predict(
-            img,
-            conf=self.conf,
-            imgsz=IMAGE_SIZE,
-            device="cpu",
-            classes=[COCO_PERSON],
-            verbose=False,
-        )[0]
+        with _predict_lock:
+            r = self.model.predict(
+                img,
+                conf=self.conf,
+                imgsz=IMAGE_SIZE,
+                device="cpu",
+                classes=[COCO_PERSON],
+                verbose=False,
+            )[0]
         return [tuple(box) for box in r.boxes.xyxy.tolist()]
 
 
@@ -102,5 +110,7 @@ def anonymize_crop(
     if not boxes:
         return crop
     pixels = np.asarray(crop).copy()
-    pixelate(pixels, boxes, margin=0)
+    for box in boxes:
+        blocks = max(4, min(box[2], box[3]) // PIXEL_BLOCK)
+        pixelate(pixels, [box], margin=0, blocks=blocks)
     return Image.fromarray(pixels)

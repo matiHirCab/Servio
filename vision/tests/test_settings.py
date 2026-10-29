@@ -284,7 +284,7 @@ def test_estimate_plates_falls_back_for_empty_values(monkeypatch):
     monkeypatch.setattr(claude_plates, "RETRY_WAIT_S", 0)
     monkeypatch.delenv("CLAUDE_MODEL", raising=False)
     monkeypatch.delenv("CLAUDE_TIMEOUT_S", raising=False)
-    claude_plates.estimate_plates(b"jpeg", [b"jpeg"], "T1", provider="cli", model="")
+    claude_plates.estimate_plates([b"jpeg"], "T1", provider="cli", model="")
     assert calls[0] == ("haiku", 15.0)
 
 

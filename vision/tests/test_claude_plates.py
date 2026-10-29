@@ -13,7 +13,7 @@ from servio_vision.classifiers.claude_plates import ClaudeCallError, estimate_pl
 
 JPEG = b"\xff\xd8fake"
 REQUEST = claude_plates.PlatesRequest(
-    claude_plates.build_content(JPEG, [JPEG], "T1"), [False]
+    claude_plates.build_content([JPEG], "T1"), [False]
 )
 
 
@@ -51,7 +51,7 @@ def backend(monkeypatch):
 def test_three_plates(backend):
     calls, answers = backend
     answers.append(_answer(3, people=False))
-    report = estimate_plates(JPEG, [JPEG] * 3, "T1")
+    report = estimate_plates([JPEG] * 3, "T1")
     assert [p.index for p in report.plates] == [1, 2, 3]
     assert report.people_present is False
     # 3 platos = 3 imágenes, en ese orden; la mesa no se manda (C-3)
@@ -64,7 +64,7 @@ def test_three_plates(backend):
 def test_reference_goes_before_its_plate(backend):
     calls, answers = backend
     answers.append(_answer(2))
-    estimate_plates(b"mesa", [b"p1", b"p2"], "T1", references=[None, b"ref2"])
+    estimate_plates([b"p1", b"p2"], "T1", references=[None, b"ref2"])
     images = [
         claude_plates.base64.b64decode(b["source"]["data"])
         for b in calls[0]["content"]
@@ -76,7 +76,7 @@ def test_reference_goes_before_its_plate(backend):
 def test_retries_once_then_succeeds(backend):
     calls, answers = backend
     answers += [ClaudeCallError("timeout"), _answer(2)]
-    assert estimate_plates(JPEG, [JPEG] * 2, "T1") is not None
+    assert estimate_plates([JPEG] * 2, "T1") is not None
     assert len(calls) == 2
     # el contenido se arma una sola vez, no en cada intento
     assert calls[0]["content"] is calls[1]["content"]
@@ -85,21 +85,21 @@ def test_retries_once_then_succeeds(backend):
 def test_references_of_another_length_is_a_bug_not_a_retry(backend):
     calls, _ = backend
     with pytest.raises(ValueError):
-        estimate_plates(JPEG, [JPEG] * 2, "T1", references=[None])
+        estimate_plates([JPEG] * 2, "T1", references=[None])
     assert calls == []
 
 
 def test_returns_none_after_two_failures(backend):
     calls, answers = backend
     answers += [ClaudeCallError("x"), {"plates": "mal"}]
-    assert estimate_plates(JPEG, [JPEG], "T1") is None
+    assert estimate_plates([JPEG], "T1") is None
     assert len(calls) == 2
 
 
 def test_wrong_plate_count_is_retried(backend):
     _, answers = backend
     answers += [_answer(1), _answer(1)]
-    assert estimate_plates(JPEG, [JPEG] * 2, "T1") is None
+    assert estimate_plates([JPEG] * 2, "T1") is None
 
 
 def test_out_of_range_fill_ratio_is_rejected(backend):
@@ -107,7 +107,7 @@ def test_out_of_range_fill_ratio_is_rejected(backend):
     bad = _answer(1)
     bad["plates"][0]["fill_ratio"] = 1.4
     answers += [bad, bad]
-    assert estimate_plates(JPEG, [JPEG], "T1") is None
+    assert estimate_plates([JPEG], "T1") is None
 
 
 def test_unordered_answer_is_sorted(backend):
@@ -115,13 +115,13 @@ def test_unordered_answer_is_sorted(backend):
     answer = _answer(2)
     answer["plates"].reverse()
     answers.append(answer)
-    report = estimate_plates(JPEG, [JPEG] * 2, "T1")
+    report = estimate_plates([JPEG] * 2, "T1")
     assert [p.index for p in report.plates] == [1, 2]
 
 
 def test_no_plates_skips_claude(backend):
     calls, _ = backend
-    report = estimate_plates(JPEG, [], "T1")
+    report = estimate_plates([], "T1")
     assert report.plates == []
     assert calls == []
 
@@ -131,14 +131,14 @@ def test_env_overrides(backend, monkeypatch):
     monkeypatch.setenv("CLAUDE_MODEL", "sonnet")
     monkeypatch.setenv("CLAUDE_TIMEOUT_S", "20")
     answers.append(_answer(1))
-    estimate_plates(JPEG, [JPEG], "T1")
+    estimate_plates([JPEG], "T1")
     assert calls[0]["model"] == "sonnet"
     assert calls[0]["timeout_s"] == 20.0
 
 
 def test_unknown_provider():
     with pytest.raises(ValueError):
-        estimate_plates(JPEG, [JPEG], "T1", provider="bedrock")
+        estimate_plates([JPEG], "T1", provider="bedrock")
 
 
 def test_cli_reads_structured_output(monkeypatch):
@@ -305,7 +305,7 @@ def openai_api(monkeypatch):
 
 def test_openai_maps_answers_to_report(openai_api):
     openai_api.responses.append(_decisions(2, refs={2}, fill_score=1.0, same=0.2))
-    report = estimate_plates(b"mesa", [b"p1", b"p2"], "T1", references=[None, b"ref2"])
+    report = estimate_plates([b"p1", b"p2"], "T1", references=[None, b"ref2"])
     assert [p.fill_ratio for p in report.plates] == [0.15, 0.15]  # "restos"
     assert [p.confidence for p in report.plates] == [0.7, 0.7]
     assert [p.same_plate for p in report.plates] == [True, False]
@@ -326,7 +326,7 @@ def test_openai_maps_answers_to_report(openai_api):
 
 def test_openai_sends_images_as_data_urls(openai_api):
     openai_api.responses.append(_decisions(1))
-    estimate_plates(b"mesa", [b"p1"], "T1")
+    estimate_plates([b"p1"], "T1")
     parts = openai_api.requests[0]["input"][0]["content"]
     assert parts[0]["text"] == claude_plates.prompt.openai_instructions()
     # con preguntas tipadas no se pide JSON en ningún lado
@@ -339,7 +339,7 @@ def test_openai_sends_images_as_data_urls(openai_api):
 
 def test_openai_low_visibility_marks_not_visible(openai_api):
     openai_api.responses.append(_decisions(1, visible=0.1, people=0.1))
-    report = estimate_plates(JPEG, [JPEG], "T1")
+    report = estimate_plates([JPEG], "T1")
     assert report.plates[0].visible is False
     assert report.people_present is False
 
@@ -347,75 +347,75 @@ def test_openai_low_visibility_marks_not_visible(openai_api):
 def test_openai_refusal_retries_then_none(openai_api):
     refusal = [_decision("refusal", "fill_1")]
     openai_api.responses += [refusal, refusal]
-    assert estimate_plates(JPEG, [JPEG], "T1") is None
+    assert estimate_plates([JPEG], "T1") is None
     assert len(openai_api.requests) == 2
 
 
 def test_openai_api_error_then_success(openai_api):
     openai_api.responses += [_FakeOpenAI.OpenAIError("429"), _decisions(1)]
-    assert estimate_plates(JPEG, [JPEG], "T1") is not None
+    assert estimate_plates([JPEG], "T1") is not None
 
 
 def test_openai_missing_answer_is_retried(openai_api):
     incomplete = _decisions(2)[:-2]  # falta visible_2 y people_present
     openai_api.responses += [incomplete, incomplete]
-    assert estimate_plates(JPEG, [JPEG] * 2, "T1") is None
+    assert estimate_plates([JPEG] * 2, "T1") is None
 
 
 def test_openai_score_none_is_retried(openai_api):
     answers = _decisions(1)
     answers[0].score = None
     openai_api.responses += [answers, answers]
-    assert estimate_plates(JPEG, [JPEG], "T1") is None
+    assert estimate_plates([JPEG], "T1") is None
 
 
 def test_openai_score_out_of_scale_is_rejected(openai_api):
     # 5 niveles: score va de 0 a 4; un 5 es otra escala y no se recorta a 1
     too_high = _decisions(1, fill_score=5.0)
     openai_api.responses += [too_high, too_high]
-    assert estimate_plates(JPEG, [JPEG], "T1") is None
+    assert estimate_plates([JPEG], "T1") is None
 
 
 def test_openai_top_score_is_full(openai_api):
     openai_api.responses.append(_decisions(1, fill_score=4.0))
-    assert estimate_plates(JPEG, [JPEG], "T1").plates[0].fill_ratio == 1.0
+    assert estimate_plates([JPEG], "T1").plates[0].fill_ratio == 1.0
 
 
 def test_openai_refusal_without_name_is_retried(openai_api):
     refusal = [SimpleNamespace(type="refusal")]
     openai_api.responses += [refusal, refusal]
-    assert estimate_plates(JPEG, [JPEG], "T1") is None
+    assert estimate_plates([JPEG], "T1") is None
 
 
 def test_openai_duplicate_answer_is_rejected(openai_api):
     dup = _decisions(1) + [_decision("score", "fill_1", score=4.0, confidence=0.9)]
     openai_api.responses += [dup, dup]
-    assert estimate_plates(JPEG, [JPEG], "T1") is None
+    assert estimate_plates([JPEG], "T1") is None
 
 
 def test_openai_unexpected_answer_is_rejected(openai_api):
     extra = _decisions(1) + [_decision("predicate", "same_plate_1", probability=0.9)]
     openai_api.responses += [extra, extra]
-    assert estimate_plates(JPEG, [JPEG], "T1") is None
+    assert estimate_plates([JPEG], "T1") is None
 
 
 def test_openai_ignores_claude_model(openai_api, monkeypatch):
     monkeypatch.setenv("CLAUDE_MODEL", "haiku")
     openai_api.responses.append(_decisions(1))
-    estimate_plates(JPEG, [JPEG], "T1")
+    estimate_plates([JPEG], "T1")
     assert openai_api.requests[0]["model"] == "gpt-6-luna"
 
 
 def test_openai_model_env(openai_api, monkeypatch):
     monkeypatch.setenv("OPENAI_MODEL", "gpt-otro")
     openai_api.responses.append(_decisions(1))
-    estimate_plates(JPEG, [JPEG], "T1")
+    estimate_plates([JPEG], "T1")
     assert openai_api.requests[0]["model"] == "gpt-otro"
 
 
 def test_openai_missing_package_falls_back(openai_api, monkeypatch):
     monkeypatch.setitem(sys.modules, "openai", None)  # import openai → ImportError
-    assert estimate_plates(JPEG, [JPEG], "T1") is None
+    assert estimate_plates([JPEG], "T1") is None
 
 
 def test_fill_levels_land_in_their_state():
@@ -429,7 +429,7 @@ def test_fill_levels_land_in_their_state():
 
 def test_openai_fractional_score_is_interpolated(openai_api):
     openai_api.responses.append(_decisions(1, fill_score=2.5))
-    report = estimate_plates(JPEG, [JPEG], "T1")
+    report = estimate_plates([JPEG], "T1")
     assert report.plates[0].fill_ratio == pytest.approx(0.55)  # entre mitad y parte
 
 
@@ -441,39 +441,39 @@ def test_openai_fill_ratio_is_the_expected_value(openai_api):
     # score 2.0 interpolado daría 0.45; con las probabilidades da el valor esperado
     probs = _level_probs(vacío=0.5, intacto=0.5)
     openai_api.responses.append(_decisions(1, fill_score=2.0, probabilities=probs))
-    report = estimate_plates(JPEG, [JPEG], "T1")
+    report = estimate_plates([JPEG], "T1")
     assert report.plates[0].fill_ratio == pytest.approx(0.5)
 
 
 def test_openai_unknown_level_label_is_rejected(openai_api):
     bad = _decisions(1, probabilities=_level_probs(otro=1.0))
     openai_api.responses += [bad, bad]
-    assert estimate_plates(JPEG, [JPEG], "T1") is None
+    assert estimate_plates([JPEG], "T1") is None
 
 
 @pytest.mark.parametrize("probabilities", [0.7, _level_probs(intacto=float("nan"))])
 def test_openai_malformed_probabilities_are_rejected(openai_api, probabilities):
     bad = _decisions(1, probabilities=probabilities)
     openai_api.responses += [bad, bad]
-    assert estimate_plates(JPEG, [JPEG], "T1") is None
+    assert estimate_plates([JPEG], "T1") is None
 
 
 def test_openai_partial_probabilities_fall_back_to_score(openai_api):
     # solo llegó un nivel (suma 0.3): no se reescala a 1, se interpola el score
     probs = _level_probs(intacto=0.3)
     openai_api.responses.append(_decisions(1, fill_score=1.0, probabilities=probs))
-    assert estimate_plates(JPEG, [JPEG], "T1").plates[0].fill_ratio == 0.15
+    assert estimate_plates([JPEG], "T1").plates[0].fill_ratio == 0.15
 
 
 def test_openai_answers_as_dicts(openai_api):
     answers = [vars(a) for a in _decisions(1, fill_score=4.0)]
     openai_api.responses.append(answers)
-    assert estimate_plates(JPEG, [JPEG], "T1").plates[0].fill_ratio == 1.0
+    assert estimate_plates([JPEG], "T1").plates[0].fill_ratio == 1.0
 
 
 def test_openai_fill_question_ignores_a_different_reference(openai_api):
     openai_api.responses.append(_decisions(1, refs={1}))
-    estimate_plates(JPEG, [JPEG], "T1", references=[b"ref"])
+    estimate_plates([JPEG], "T1", references=[b"ref"])
     fill = openai_api.requests[0]["questions"][0]
     assert "ignorala" in fill["instructions"]
 
@@ -484,24 +484,24 @@ def test_openai_old_sdk_without_decisions_falls_back(openai_api, monkeypatch):
             pass
 
     monkeypatch.setattr(openai_api, "OpenAI", OldClient)
-    assert estimate_plates(JPEG, [JPEG], "T1") is None
+    assert estimate_plates([JPEG], "T1") is None
 
 
 @pytest.mark.parametrize("probability", [float("nan"), 50.0])
 def test_openai_bad_probability_is_rejected(openai_api, probability):
     bad = _decisions(1, people=probability)
     openai_api.responses += [bad, bad]
-    assert estimate_plates(JPEG, [JPEG], "T1") is None
+    assert estimate_plates([JPEG], "T1") is None
 
 
 def test_openai_has_its_own_timeout(openai_api, monkeypatch):
     monkeypatch.setenv("CLAUDE_TIMEOUT_S", "10")
     openai_api.responses.append(_decisions(1))
-    estimate_plates(JPEG, [JPEG], "T1")
+    estimate_plates([JPEG], "T1")
     assert openai_api.client_kwargs["timeout"] == 14.0
     monkeypatch.setenv("OPENAI_TIMEOUT_S", "30")
     openai_api.responses.append(_decisions(1))
-    estimate_plates(JPEG, [JPEG], "T1")
+    estimate_plates([JPEG], "T1")
     assert openai_api.client_kwargs["timeout"] == 30.0
 
 

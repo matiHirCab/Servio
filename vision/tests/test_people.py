@@ -59,8 +59,8 @@ def test_only_plate_crops_reach_the_provider(monkeypatch):
     """Hecho cuando: un test verifica que al proveedor solo llegan recortes de platos."""
     sent = {}
 
-    def estimate(table, plates, table_id, **kwargs):
-        sent["table"] = table
+    def estimate(plates, table_id, **kwargs):
+        sent["table"] = None  # no hay imagen de mesa que mandar
         sent["plates"] = plates
         return answer(2)
 
@@ -70,7 +70,7 @@ def test_only_plate_crops_reach_the_provider(monkeypatch):
     assert sent["table"] is None and len(sent["plates"]) == 2
     # y build_content tampoco la agrega aunque se la pasen: una imagen por plato
     jpeg = noisy_jpeg(60, 60)
-    content = claude_plates.build_content(jpeg, [jpeg, jpeg], "T1", [None, jpeg])
+    content = claude_plates.build_content([jpeg, jpeg], "T1", [None, jpeg])
     images = [b for b in content if b["type"] == "image"]
     assert len(images) == 3  # dos platos y una referencia; la mesa, nunca
     assert content[0]["type"] == "text" and "recortes" in content[0]["text"]
@@ -81,7 +81,7 @@ def test_people_in_a_plate_crop_are_pixelated(monkeypatch):
     monkeypatch.setattr(
         claude_plates,
         "estimate_plates",
-        lambda t, plates, *a, **k: sent.append(plates) or answer(2),
+        lambda plates, *a, **k: sent.append(plates) or answer(2),
     )
     table = noisy_jpeg()
     plain = HybridClassifier(FakeDetector(PLATES), person_detector=FakePeople([]))

@@ -197,7 +197,6 @@ class HybridClassifier:
         if not prepared.plates:
             return claude_plates.PlatesReport(plates=[], people_present=True)
         return claude_plates.estimate_plates(
-            None,
             prepared.plate_jpegs,
             prepared.table_id,
             references=prepared.references,
@@ -213,14 +212,16 @@ class HybridClassifier:
         table_id = prepared.table_id
         if not prepared.plates:
             return TableReport(items=[])
-        if prepared.people_present is not None:
-            # Lo que vio el detector local **o** lo que infiere el modelo de los
-            # recortes (manos, cubiertos en uso): desde arriba, los comensales quedan
-            # casi fuera del recorte de la mesa y el detector solo diría "nadie" con
-            # gente sentada, y eso cierra avisos de plato lleno (engine.py).
-            self.people_present[table_id] = prepared.people_present or bool(
-                report is not None and report.people_present
-            )
+        # Lo que vio el detector local **o** lo que infiere el modelo de los recortes
+        # (manos, cubiertos en uso): desde arriba, los comensales quedan casi fuera
+        # del recorte de la mesa y el detector solo diría "nadie" con gente sentada,
+        # y eso cierra avisos de plato lleno (engine.py). Si Claude falló, el detector
+        # solo suma: un "nadie" suyo no pisa la última lectura buena.
+        local = prepared.people_present
+        if report is not None:
+            self.people_present[table_id] = bool(local) or report.people_present
+        elif local:
+            self.people_present[table_id] = True
         if report is None:
             # sin Claude no hay cómo saber si un plato perdido sigue ahí: se omite
             detected = [p for p in prepared.plates if p.id not in prepared.lost]
@@ -233,8 +234,6 @@ class HybridClassifier:
                 people_present=self.people_present.get(table_id, True),
                 notes="sin Claude: estado de YOLO",
             )
-        if prepared.people_present is None:
-            self.people_present[table_id] = report.people_present
         last = {i.id: i for i in previous_items if i.state is not None}
         items = []
         for p, est, crop, ref in zip(

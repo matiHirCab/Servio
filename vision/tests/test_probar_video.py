@@ -45,7 +45,7 @@ def _frames():
 
 
 def _run(monkeypatch, tmp_path, parallel: bool):
-    def estimate(table, plates, table_id, **kwargs):
+    def estimate(plates, table_id, **kwargs):
         return PlatesReport(
             plates=[
                 PlateEstimate(index=i, fill_ratio=0.5, confidence=0.8)
