@@ -125,17 +125,13 @@ def test_remap_bbox_outside_the_new_crop_is_none():
 
 
 def test_table_outside_the_frame_is_rejected():
-    zones = Zones(
-        frame_size=(100, 100),
-        tables=[
-            TableZone(table_id="T1", name="Mesa", polygon=[(0, 0), (10, 0), (10, 10)])
-        ],
+    table = TableZone(
+        table_id="T1", name="Mesa", polygon=[(-30, -30), (-20, -30), (-20, -20)]
     )
+    zones = Zones(frame_size=(100, 100), tables=[table])
     frame = np.zeros((100, 100, 3), np.uint8)
-    # el polígono se corre fuera del frame al escalar a un frame sin área en común
-    zones.tables[0].polygon = [(-30, -30), (-20, -30), (-20, -20)]
     with pytest.raises(ValueError, match="fuera del frame"):
-        table_rect(frame, zones.tables[0], zones)
+        table_rect(frame, table, zones)
 
 
 def test_to_jpeg_returns_a_jpeg():

@@ -66,6 +66,8 @@ def test_load_settings_activates_the_configuration():
 
 def test_load_settings_without_source_logs_and_returns_none(caplog, monkeypatch):
     monkeypatch.delenv("SERVIO_SOURCE", raising=False)
+    # con SERVIO_TEST_TELEGRAM=1 el conftest no aísla el .env real
+    monkeypatch.setattr(settings, "ENV_FILE", None)
     with caplog.at_level(logging.ERROR, logger="servio"):
         assert cli.load_settings(parse()) is None
     assert "Falta la fuente" in caplog.text

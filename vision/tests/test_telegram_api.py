@@ -2,6 +2,7 @@
 polling), sin red: httpx.MockTransport."""
 
 import json
+import logging
 
 import httpx
 
@@ -103,7 +104,9 @@ def test_send_photo_posts_a_multipart_form(tmp_path):
 
 def test_non_json_response_is_logged_without_the_token(caplog):
     tg, _ = notifier(lambda r: httpx.Response(502, text="<html>bad gateway</html>"))
-    assert tg.send("hola") is None
+    with caplog.at_level(logging.INFO):
+        assert tg.send("hola") is None
+    assert "sendMessage falló" in caplog.text
     assert TOKEN not in caplog.text
 
 

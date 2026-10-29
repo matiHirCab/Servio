@@ -11,7 +11,8 @@ permissions:
 # Un push nuevo a la misma rama o PR cancela la corrida anterior.
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  # solo en PRs: dos merges seguidos a main o develop tienen que correr completos
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   # El nombre `vision` es el check obligatorio de la regla de rama: no cambiarlo.
@@ -79,8 +80,9 @@ jobs:
       - uses: actions/checkout@v4
       - name: Sin secretos, pesos ni medios versionados
         run: |
-          bad=$(git ls-files | grep -E '(^|/)\.env$|\.(pt|pth|onnx|ts|mp4|mov|avi|mkv|jpg|jpeg|png)$' \
-            | grep -v -E '^docs/' || true)
+          bad=$(git ls-files | grep -i -E \
+            '(^|/)\.env(\..+)?$|(^|/)mobileclip[^/]*\.ts$|\.(pt|pth|onnx|safetensors|ckpt|mp4|mov|avi|mkv|webm|jpg|jpeg|png|gif|webp|bmp|tiff?)$' \
+            | grep -v -E '^\.env\.example$' || true)
           if [ -n "$bad" ]; then
             echo "::error::Archivos que no van al repo (ver «Privacidad y datos»):"
             echo "$bad"
