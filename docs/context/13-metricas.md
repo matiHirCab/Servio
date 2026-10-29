@@ -12,7 +12,7 @@ Las pantallas son una propuesta para F-2: **En vivo** (mesas y avisos ahora), **
 
 ## 1. Internas de operación
 
-Umbrales en `servio_vision/metrics.py`: `UNATTENDED_LIMIT_MIN = 5`, `FORGOTTEN_LIMIT_S = 120`, almuerzo antes de las 17 h (`LUNCH_UNTIL_HOUR`).
+Umbrales en `servio_vision/metrics.py`: `UNATTENDED_LIMIT_MIN = 5`, `FORGOTTEN_LIMIT_S = 120`, almuerzo antes de las 17 h (`LUNCH_UNTIL_HOUR`) y `VISIT_GAP_MIN = 120`. Las horas se cuentan en hora de Uruguay (`LOCAL_TZ`, UTC−3): la cámara guarda en UTC y el historial ya está en hora local.
 
 | id | Qué responde | Cómo se calcula | De qué tablas | Rol (default) | Pantalla | Estado |
 |---|---|---|---|---|---|---|
@@ -20,7 +20,7 @@ Umbrales en `servio_vision/metrics.py`: `UNATTENDED_LIMIT_MIN = 5`, `FORGOTTEN_L
 | `tiempo_respuesta` | ¿Cuánto tarda cada mozo en reaccionar a un aviso? | Promedio de `respuestas.segundos` (de que salta el aviso a que responde), por mozo y por servicio. Con C-5 pasa a ser hasta el "Voy". | `respuestas`, `mozos` | Encargado, Dueño | Turno | **Se calcula** (`SQL_ANSWER`). |
 | `mesa_terminada_sin_atender` | Cuando una mesa termina, ¿cuánto espera hasta que le retiran los platos? | Minutos `resuelto_at − abierto_at` de avisos `mesa_terminada` cerrados por `retirados`. Promedio, peor y **% que esperó más de 5 min**; por mozo en `SQL_ATTEND`. | `avisos`, `mozos` | Encargado, Dueño | Turno | **Se calcula** (`SQL_UNATTENDED`). |
 | `mesas_olvidadas` | ¿Cuántas veces un plato quedó lleno y nadie fue? | Avisos `plato_lleno_mucho` sin respuesta o con la primera respuesta después de 2 min, sobre el total, por mozo. Un aviso abierto todavía sin respuesta no cuenta. | `avisos`, `respuestas`, `mozos` | Encargado, Dueño | Turno | **Se calcula** (`SQL_FORGOTTEN`). |
-| `rotacion` | ¿Cuánto dura una mesa y cuántas mesas atiende el salón por servicio? | Visita = del primer plato servido después del último retiro hasta el retiro de la mesa terminada. Minutos promedio por visita y visitas por servicio (almuerzo o cena de un día), en total y por tipo. Cada minuto que baja es capacidad para otra mesa. | `platos_servidos`, `avisos` | Encargado, Dueño | Turno | **Se calcula** (`rotation()`). No cuenta el tiempo desde que se sientan hasta el primer plato (no miramos personas). |
+| `rotacion` | ¿Cuánto dura una mesa y cuántas mesas atiende el salón por servicio? | Visita = del primer plato servido después del último retiro hasta el retiro de la mesa terminada. Si la mesa pasa más de 2 h sin novedades, la visita abierta se descarta. Así, una mesa que nadie retiró no se cierra con el retiro de otra visita horas después. Minutos promedio por visita y visitas por servicio (almuerzo o cena de un día), en total y por tipo. Cada minuto que baja es capacidad para otra mesa. | `platos_servidos`, `avisos` | Encargado, Dueño | Turno | **Se calcula** (`rotation()`). No cuenta el tiempo desde que se sientan hasta el primer plato (no miramos personas). |
 | `resumen_cierre` | ¿Cómo fue el servicio? | Las de esta tabla para un solo servicio, en un mensaje al cerrar. | las de arriba | Encargado, Dueño | Telegram / Turno | D-3. |
 | `platos_que_vuelven` | ¿Qué platos vuelven con comida y por qué? | Platos servidos con aviso `plato_lleno_mucho` / platos servidos, por plato de la carta, con el motivo más respondido. | `platos`, `platos_servidos`, `avisos`, `respuestas` | Encargado, Dueño | Carta | **Se calcula** (`SQL_DISHES`, `SQL_PROBLEMS`). D-4 agrupa los textos libres. |
 | `desperdicio` | ¿Cuánta plata vuelve a la cocina? | Suma del precio de la carta de los platos que volvieron con un problema (el mozo respondió algo distinto de "Está todo bien…"). Total y por servicio, por plato. Es una cota alta: cuenta el plato entero aunque vuelva a medias. | `platos.precio`, `platos_servidos`, `avisos`, `respuestas` | Dueño | Carta / Resultados | **Se calcula** (`SQL_WASTE`). Precio nuevo en `carta.json` (`precio`, en pesos). |
@@ -40,10 +40,15 @@ Tomás pidió sumar todas las propuestas internas. Ya están en el catálogo (`M
 | `horas_pico` | ¿A qué hora se cae la atención? | Por franja de 30 min (`PEAK_SLOT_MIN`): avisos abiertos y % de mesas terminadas que esperaron más de 5 min. Sirve para decidir cuántos mozos poner por turno. | `avisos` | Encargado, Dueño | Turno | **Se calcula** (`peak_hours()`). |
 | `espera_siguiente_plato` | ¿Una mesa quedó sin nada esperando el siguiente plato? | Minutos de los avisos `mesa_terminada` que se cerraron porque llegó otro plato (`motivo_cierre = 'servido'`), por mozo. | `avisos`, `mozos` | Encargado, Dueño | Turno | **Se calcula** (`SQL_NEXT_DISH`). Solo con datos en vivo: el historial simulado no tiene estos casos. |
 | `ritmo_por_plato` | ¿Qué platos se comen lento? | Minutos desde que se sirvió hasta la primera lectura en `vacio`, promedio por plato de la carta. Lento + vuelve lleno = porción grande o no gusta. | `estados_plato` (nueva), `platos_servidos`, `platos` | Dueño | Carta | **Se calcula** (`SQL_PACE`). Solo con datos en vivo. |
-| `sobra_por_plato` | ¿Cuánto queda en el plato cuando se lo llevan? | Último `fill_ratio` de los platos que dejaron de verse hace más de 2 min (`GONE_AFTER_MIN`) mientras la cámara seguía leyendo, promedio por plato. Más adelante puede afinar el desperdicio en $ (precio × lo que sobra, en vez del plato entero). | `platos_servidos.ultimo_fill_ratio` y `visto_at` (nuevas) | Dueño | Carta | **Se calcula** (`SQL_LEFTOVER`). Solo con datos en vivo. |
+| `sobra_por_plato` | ¿Cuánto queda en el plato cuando se lo llevan? | Último `fill_ratio` de los platos que se fueron de la mesa (el loop marca `retirado_at` en la lectura en que dejan de estar; si vuelven a verse, se borra), promedio por plato. Más adelante puede afinar el desperdicio en $ (precio × lo que sobra, en vez del plato entero). | `platos_servidos.ultimo_fill_ratio` y `retirado_at` (nuevas) | Dueño | Carta | **Se calcula** (`SQL_LEFTOVER`). Solo con datos en vivo. |
 | `adopcion` | ¿Los mozos usan Servio? | Avisos de plato lleno ya cerrados que tuvieron respuesta / total, y cuántos se marcaron "No hacía falta". Si baja, el local deja de usar Servio: para nosotros avisa que el cliente se puede ir. | `avisos`, `respuestas` | Dueño | Resultados | **Se calcula** (`SQL_ADOPTION`). Con C-5 cuenta todos los avisos y el botón "No hacía falta". |
 
-Datos nuevos que guarda el loop (`alerts/processor.py`): en cada lectura, el último `fill_ratio` del plato y cuándo se vio (`platos_servidos`). Además guarda una fila en `estados_plato` cada vez que el plato cambia de estado.
+Datos nuevos que guarda el loop (`alerts/processor.py`), en una transacción por lectura de mesa:
+- En `platos_servidos`, el último `fill_ratio` del plato. Si la lectura no lo trae queda vacío, para no arrastrar uno viejo.
+- También en `platos_servidos`, `retirado_at`: la lectura en que el plato se fue de la mesa.
+- Una fila en `estados_plato` cada vez que el plato cambia de estado.
+
+Si el tracker le cambia el id a un plato (hereda los tiempos del anterior), sigue siendo el mismo plato servido: no cuenta como retirado ni como plato nuevo.
 
 ## 2. Externas
 

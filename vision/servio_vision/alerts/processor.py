@@ -79,6 +79,7 @@ class AlertProcessor:
         self.db = db
         self._served_rows: dict[str, int] = {}  # track_id → platos_servidos.id
         self._plate_states: dict[str, str] = {}  # track_id → último estado guardado
+        self._on_table: dict[str, set[str]] = {}  # mesa → track_ids en la base
         self._alert_plate: dict[str, str] = {}  # aviso → track_id del plato
         if db is not None and restaurant is not None:
             db.load_restaurant(restaurant)
@@ -109,23 +110,44 @@ class AlertProcessor:
         self, obs: TableObservation, table: TableState, ts: datetime
     ) -> None:
         """Cada plato nuevo de la mesa, a la base (con el plato del pedido que es),
-        y la lectura de cada plato: estado y cuánto le queda (métricas de M-1)."""
+        y la lectura de cada plato: estado, cuánto le queda y si se fue de la
+        mesa (métricas de M-1). Un plato que heredó los tiempos de otro (cambió
+        de id) sigue siendo el mismo plato servido."""
         if self.db is None or self.restaurant is None:
             return
-        for plate in table.active_plates():
+        active = table.active_plates()
+        for plate in active:
             if plate.track_id in self._served_rows:
                 continue
             dish = self.restaurant.dish(obs.table_id, plate.track_id)
+            same = self._served_rows.get(plate.inherited_from or "")
+            if same is not None:
+                self._served_rows[plate.track_id] = same
+                last = self._plate_states.pop(plate.inherited_from, None)
+                if last is not None:
+                    self._plate_states[plate.track_id] = last
+                continue
             self._served_rows[plate.track_id] = self.db.served(
                 obs.table_id, dish.dish_id if dish else None, plate.track_id, ts
             )
+        readings = []
         for item in obs.items:
             served_id = self._served_rows.get(item.track_id)
             if served_id is None:
                 continue
             changed = self._plate_states.get(item.track_id) != item.state
             self._plate_states[item.track_id] = item.state
-            self.db.plate_reading(served_id, item.state, item.fill_ratio, ts, changed)
+            readings.append((served_id, item.state, item.fill_ratio, changed))
+        # los que estaban y ya no están (salvo que otro id haya heredado el plato)
+        inherited = {p.inherited_from for p in table.plates.values()}
+        before = self._on_table.get(obs.table_id, set())
+        gone = before - set(table.plates) - inherited
+        for track_id in gone:
+            self._plate_states.pop(track_id, None)
+        self._on_table[obs.table_id] = {p.track_id for p in active}
+        self.db.plate_readings(
+            readings, [self._served_rows[t] for t in sorted(gone)], ts
+        )
 
     def _record_opened(self, alert: Alert, ts: datetime) -> None:
         if self.db is None:
@@ -140,7 +162,7 @@ class AlertProcessor:
         if self.db is None or self.restaurant is None:
             return
         self.db.import_history(metrics.HISTORY, self.restaurant)
-        m = metrics.compute(self.db)
+        m = metrics.compute(self.db, operation=False)  # la imagen no las usa
         if not m["dishes"]:
             self.notifier.send("📊 Todavía no hay datos para las métricas.")
             return

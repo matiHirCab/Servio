@@ -7,7 +7,7 @@ Guarda lo que pasa en el salón para sacar métricas con SQL:
     platos (id, nombre, precio)                           -- la carta
     respuestas_tipicas (plato_id → platos, orden, texto)  -- opciones del aviso
     platos_servidos (id, mesa_id → mesas, plato_id → platos, track_id, servido_at, origen,
-                     ultimo_fill_ratio, visto_at)    -- última lectura del plato
+                     ultimo_fill_ratio, retirado_at)  -- última lectura del plato
     estados_plato (id, plato_servido_id → platos_servidos, estado, fill_ratio, desde)
     avisos (id, tipo, mesa_id → mesas, mozo_id → mozos,
             plato_servido_id → platos_servidos, abierto_at, resuelto_at, origen)
@@ -56,7 +56,7 @@ CREATE TABLE IF NOT EXISTS platos_servidos (
     servido_at TEXT NOT NULL,
     origen TEXT NOT NULL,
     ultimo_fill_ratio REAL,
-    visto_at TEXT
+    retirado_at TEXT
 );
 CREATE TABLE IF NOT EXISTS estados_plato (
     id INTEGER PRIMARY KEY,
@@ -110,7 +110,7 @@ class Database:
         for table, column, kind in (
             ("platos", "precio", "REAL"),
             ("platos_servidos", "ultimo_fill_ratio", "REAL"),
-            ("platos_servidos", "visto_at", "TEXT"),
+            ("platos_servidos", "retirado_at", "TEXT"),
         ):
             existing = {
                 r["name"] for r in self._conn.execute(f"PRAGMA table_info({table})")
@@ -188,27 +188,39 @@ class Database:
             (table_id, dish_id, track_id, _iso(at)),
         )
 
-    def plate_reading(
+    def plate_readings(
         self,
-        served_id: int,
-        state: str,
-        fill_ratio: float | None,
+        readings: list[tuple[int, str, float | None, bool]],
+        gone: list[int],
         at: datetime,
-        state_changed: bool,
     ) -> None:
-        """Última lectura del plato (para lo que sobra cuando se lo llevan) y, si
-        cambió de estado, desde cuándo (para el ritmo por plato)."""
+        """Lecturas de los platos de una mesa, en una sola transacción.
+
+        `readings`: (plato servido, estado, fill_ratio, cambió de estado). Guarda
+        el último fill_ratio (vacío si la lectura no lo trae: no se arrastra uno
+        viejo) y, si cambió de estado, desde cuándo (ritmo por plato). Un plato
+        que se ve otra vez deja de estar retirado.
+        `gone`: platos que se fueron de la mesa en esta lectura (sobra por plato).
+        """
+        ts = _iso(at)
         with self._lock, self._conn:
-            self._conn.execute(
-                "UPDATE platos_servidos SET ultimo_fill_ratio ="
-                " COALESCE(?, ultimo_fill_ratio), visto_at = ? WHERE id = ?",
-                (fill_ratio, _iso(at), served_id),
-            )
-            if state_changed:
-                self._conn.execute(
-                    "INSERT INTO estados_plato (plato_servido_id, estado, fill_ratio,"
-                    " desde) VALUES (?, ?, ?, ?)",
-                    (served_id, state, fill_ratio, _iso(at)),
+            c = self._conn
+            for served_id, state, fill_ratio, changed in readings:
+                c.execute(
+                    "UPDATE platos_servidos SET ultimo_fill_ratio = ?,"
+                    " retirado_at = NULL WHERE id = ?",
+                    (fill_ratio, served_id),
+                )
+                if changed:
+                    c.execute(
+                        "INSERT INTO estados_plato (plato_servido_id, estado,"
+                        " fill_ratio, desde) VALUES (?, ?, ?, ?)",
+                        (served_id, state, fill_ratio, ts),
+                    )
+            for served_id in gone:
+                c.execute(
+                    "UPDATE platos_servidos SET retirado_at = ? WHERE id = ?",
+                    (ts, served_id),
                 )
 
     def alert_opened(

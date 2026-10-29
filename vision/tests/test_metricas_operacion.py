@@ -9,13 +9,20 @@ from pathlib import Path
 import pytest
 
 from servio_vision.db import Database
-from servio_vision.metrics import FORGOTTEN_LIMIT_S, operation, print_report
+from servio_vision.metrics import (
+    FORGOTTEN_LIMIT_S,
+    VISIT_GAP_MIN,
+    operation_metrics,
+    print_report,
+    table_visits,
+)
 from servio_vision.restaurant import Restaurant
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
 import metricas
 
-T0 = datetime(2026, 10, 18, 21, 0, tzinfo=UTC)
+# 21:00 del 18/10 en Montevideo (UTC−3): la cámara guarda en UTC.
+T0 = datetime(2026, 10, 19, 0, 0, tzinfo=UTC)
 
 
 def _db(tmp_path) -> Database:
@@ -48,7 +55,7 @@ def test_one_visit_gives_every_operation_metric(tmp_path):
     db.alert_opened("a3", "mesa_terminada", "T2", None, T0 + timedelta(minutes=40))
     db.alert_resolved("a3", T0 + timedelta(minutes=48), "retirados")
 
-    ops = operation(db)
+    ops = operation_metrics(db)
     assert ops["unattended"]["mesas"] == 1
     assert round(ops["unattended"]["promedio"]) == 8
     assert ops["unattended"]["fuera_de_tiempo"] == 1
@@ -67,10 +74,10 @@ def test_a_new_dish_does_not_close_the_visit(tmp_path):
     db.alert_opened("t1", "mesa_terminada", "T1", None, T0 + timedelta(minutes=10))
     db.alert_resolved("t1", T0 + timedelta(minutes=11), "servido")
     db.served("T1", "donas", "T1-p2", T0 + timedelta(minutes=11))
-    assert operation(db)["rotation"] is None  # nadie retiró todavía
+    assert operation_metrics(db)["rotation"] is None  # nadie retiró todavía
     db.alert_opened("t2", "mesa_terminada", "T1", None, T0 + timedelta(minutes=30))
     db.alert_resolved("t2", T0 + timedelta(minutes=32), "retirados")
-    rot = operation(db)["rotation"]
+    rot = operation_metrics(db)["rotation"]
     assert (rot["visits"], round(rot["minutes"])) == (1, 32)
     db.close()
 
@@ -124,7 +131,7 @@ def test_live_readings_give_pace_and_leftover(tmp_path):
         for s in range(90, 301, 30):  # se llevan las donas llenas; las cookies, vacías
             p.process(obs(s, (cookies[0], "vacio", cookies[1])))
         [states] = db.query("SELECT COUNT(*) AS n FROM estados_plato")
-        ops = operation(db)
+        ops = operation_metrics(db)
     finally:
         p.close()
     assert states["n"] == 4  # cookies lleno, comiendo, vacío; donas lleno
@@ -142,9 +149,72 @@ def test_waiting_for_next_dish_load_and_peaks(tmp_path):
     db.served("T1", "donas", "T1-p2", T0 + timedelta(minutes=16))
     db.alert_opened("t2", "mesa_terminada", "T1", None, T0 + timedelta(minutes=40))
     db.alert_resolved("t2", T0 + timedelta(minutes=43), "retirados")
-    ops = operation(db)
+    ops = operation_metrics(db)
     assert ops["next_dish"] == [("Juan", 1, ops["next_dish"][0][2])]
     assert round(ops["next_dish"][0][2]) == 6
     assert ops["load"][0][:2] == ("Juan", 1.0)
     assert [(slot, n) for slot, n, _ in ops["peaks"]] == [("21:00", 1), ("21:30", 1)]
+    db.close()
+
+
+def test_camera_times_are_local_time(tmp_path):
+    db = _db(tmp_path)
+    db.served("T1", "cookies", "T1-p1", T0)
+    db.alert_opened("t1", "mesa_terminada", "T1", None, T0 + timedelta(minutes=20))
+    db.alert_resolved("t1", T0 + timedelta(minutes=22), "retirados")
+    [(_, start, _)] = table_visits(db)
+    assert start == datetime(2026, 10, 18, 21, 0)  # cena del 18, no almuerzo del 19
+    assert operation_metrics(db)["rotation"]["by_kind"].keys() == {"cena"}
+    db.close()
+
+
+def test_a_visit_left_open_is_not_closed_days_later(tmp_path):
+    db = _db(tmp_path)
+    db.served("T1", "cookies", "T1-p1", T0)  # nadie la retiró
+    later = T0 + timedelta(minutes=VISIT_GAP_MIN + 60)
+    db.served("T1", "donas", "T1-p2", later)
+    db.alert_opened("t1", "mesa_terminada", "T1", None, later + timedelta(minutes=30))
+    db.alert_resolved("t1", later + timedelta(minutes=31), "retirados")
+    [(_, start, _)] = table_visits(db)
+    assert start == datetime(2026, 10, 19, 0, 0)  # empieza con las donas
+    assert round(operation_metrics(db)["rotation"]["minutes"]) == 31
+    db.close()
+
+
+def test_a_plate_that_changes_id_is_the_same_served_plate(tmp_path):
+    from servio_vision.alerts.config import AlertConfig
+    from servio_vision.alerts.processor import AlertProcessor
+    from tests.test_alert_engine import obs
+    from tests.test_feedback import FakeTelegram
+
+    db = Database(tmp_path / "servio.db")
+    p = AlertProcessor(
+        AlertConfig(interval=30, t1=60, t2=600, reminder=600),
+        FakeTelegram(),
+        tmp_path / "eventos.jsonl",
+        Restaurant.load(),
+        db,
+    )
+    try:
+        p.process(obs(0, ("T1-p1", "lleno", "centro")))
+        p.process(obs(30, ("T1-p1", "comiendo", "centro")))
+        p.process(
+            obs(60, ("T1-p7", "comiendo", "centro"))
+        )  # el tracker le cambió el id
+        p.process(obs(90, ("T1-p7", "vacio", "centro")))
+        rows = db.query("SELECT ultimo_fill_ratio, retirado_at FROM platos_servidos")
+        [changes] = db.query("SELECT COUNT(*) AS n FROM estados_plato")
+    finally:
+        p.close()
+    assert len(rows) == 1 and rows[0]["retirado_at"] is None
+    assert changes["n"] == 3  # lleno, comiendo, vacío: el cambio de id no cuenta
+
+
+def test_a_reading_without_fill_ratio_does_not_keep_the_old_one(tmp_path):
+    db = _db(tmp_path)
+    served = db.served("T1", "cookies", "T1-p1", T0)
+    db.plate_readings([(served, "lleno", 0.9, True)], [], T0)
+    db.plate_readings([(served, "vacio", None, True)], [], T0 + timedelta(minutes=9))
+    [row] = db.query("SELECT ultimo_fill_ratio FROM platos_servidos")
+    assert row["ultimo_fill_ratio"] is None
     db.close()

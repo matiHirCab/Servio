@@ -7,7 +7,7 @@ y espera del siguiente plato. Las usan `tools/metricas.py` (terminal e imagen) y
 Qué es cada una, cómo se calcula y quién la ve: docs/context/13-metricas.md.
 """
 
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from servio_vision import VISION_DIR
@@ -100,7 +100,10 @@ UNATTENDED_LIMIT_MIN = 5  # mesa terminada esperando más que esto = mal
 FORGOTTEN_LIMIT_S = 120  # aviso de plato lleno sin respuesta en esto = olvidada
 LUNCH_UNTIL_HOUR = 17  # antes de esta hora es almuerzo, después cena
 PEAK_SLOT_MIN = 30  # franja de las horas pico
-GONE_AFTER_MIN = 2  # plato que no se ve hace esto (y la cámara sigue) = se lo llevaron
+VISIT_GAP_MIN = 120  # una mesa sin novedades este rato: la visita abierta se descarta
+# Hora del local: Uruguay es UTC−3 todo el año (sin horario de verano desde 2015).
+# Lo de la cámara se guarda en UTC; el historial simulado ya está en hora local.
+LOCAL_TZ = timezone(timedelta(hours=-3))
 
 # Mesa terminada sin atender: minutos desde que todos terminaron hasta que se
 # retiraron los platos (solo cierres por retiro, no porque llegó otro plato).
@@ -158,15 +161,14 @@ SELECT p.nombre AS plato, COUNT(*) AS platos,
  ORDER BY minutos DESC
 """
 # Sobra por plato: cuánto le quedaba (fill_ratio) en la última lectura, de los
-# platos que dejaron de verse hace más de GONE_AFTER_MIN mientras la cámara
-# seguía leyendo (se los llevaron).
+# platos que se fueron de la mesa (el loop marca `retirado_at` en la lectura en
+# que dejan de estar).
 SQL_LEFTOVER = """
 SELECT p.nombre AS plato, COUNT(*) AS platos, AVG(ps.ultimo_fill_ratio) AS sobra
   FROM platos_servidos ps
   JOIN platos p ON p.id = ps.plato_id
  WHERE ps.ultimo_fill_ratio IS NOT NULL
-   AND (julianday((SELECT MAX(visto_at) FROM platos_servidos))
-        - julianday(ps.visto_at)) * 24 * 60 > ?
+   AND ps.retirado_at IS NOT NULL
  GROUP BY p.id
  ORDER BY sobra DESC
 """
@@ -215,8 +217,12 @@ SELECT mesa_id, abierto_at AS at, resuelto_at AS fin FROM avisos
 
 
 def _time(ts: str) -> datetime:
-    """Hora de la base sin zona (el historial no tiene; lo de la cámara es UTC)."""
-    return datetime.fromisoformat(ts.removesuffix("Z")).replace(tzinfo=None)
+    """Hora local del salón, sin zona: lo de la cámara (UTC, termina en "Z") se
+    pasa a LOCAL_TZ; el historial (sin zona) ya está en hora local."""
+    at = datetime.fromisoformat(ts)
+    if at.tzinfo is not None:
+        at = at.astimezone(LOCAL_TZ)
+    return at.replace(tzinfo=None)
 
 
 def _service(at: datetime) -> tuple[str, str]:
@@ -227,22 +233,31 @@ def _service(at: datetime) -> tuple[str, str]:
 def table_visits(db: Database) -> list[tuple[str, datetime, datetime]]:
     """Visitas de mesa: (mesa, primer plato servido, platos retirados). Una visita
     empieza con el primer plato después del último retiro y termina con el
-    retiro de la mesa terminada. Lo que queda sin retirar no cuenta."""
+    retiro de la mesa terminada. Lo que queda sin retirar no cuenta: si la mesa
+    pasa más de VISIT_GAP_MIN sin novedades, la visita abierta se descarta (no
+    la cierra el retiro de otra visita horas o días después)."""
     visits = []
     start: dict[str, datetime] = {}
-    for r in db.query(SQL_TABLE_EVENTS):
-        at = _time(r["at"])
-        if r["fin"] is None:
-            start.setdefault(r["mesa_id"], at)
-        elif r["mesa_id"] in start:
-            visits.append((r["mesa_id"], start.pop(r["mesa_id"]), _time(r["fin"])))
+    last: dict[str, datetime] = {}
+    rows = sorted(
+        ((r["mesa_id"], _time(r["at"]), r["fin"]) for r in db.query(SQL_TABLE_EVENTS)),
+        key=lambda r: (r[0], r[1]),
+    )
+    for table_id, at, end in rows:
+        previous = last.get(table_id)
+        if previous is not None and at - previous > timedelta(minutes=VISIT_GAP_MIN):
+            start.pop(table_id, None)
+        last[table_id] = at
+        if end is None:
+            start.setdefault(table_id, at)
+        elif table_id in start:
+            visits.append((table_id, start.pop(table_id), _time(end)))
     return visits
 
 
-def rotation(db: Database) -> dict | None:
+def rotation(visits: list[tuple[str, datetime, datetime]]) -> dict | None:
     """Tiempo de mesa y rotación: minutos por visita y mesas por servicio
     (almuerzo o cena de un día), en total y por tipo de servicio."""
-    visits = table_visits(db)
     if not visits:
         return None
     by_kind: dict[str, list[float]] = {}
@@ -297,12 +312,12 @@ def peak_hours(db: Database) -> list[tuple[str, int, float | None]]:
     ]
 
 
-def operation(db: Database) -> dict:
+def operation_metrics(db: Database) -> dict:
     """Métricas de operación de M-1 que no estaban en el reporte del pitch."""
     unattended = db.query(SQL_UNATTENDED, (UNATTENDED_LIMIT_MIN,))[0]
     waste = [(r["plato"], r["platos"], r["pesos"]) for r in db.query(SQL_WASTE)]
-    rot = rotation(db)
-    visits = table_visits(db) if rot else []
+    visits = table_visits(db)
+    rot = rotation(visits)
     adoption = db.query(SQL_ADOPTION)[0]
     return {
         "unattended": dict(unattended) if unattended["mesas"] else None,
@@ -318,8 +333,7 @@ def operation(db: Database) -> dict:
         "peaks": peak_hours(db),
         "pace": [(r["plato"], r["platos"], r["minutos"]) for r in db.query(SQL_PACE)],
         "leftover": [
-            (r["plato"], r["platos"], r["sobra"])
-            for r in db.query(SQL_LEFTOVER, (GONE_AFTER_MIN,))
+            (r["plato"], r["platos"], r["sobra"]) for r in db.query(SQL_LEFTOVER)
         ],
         "adoption": dict(adoption) if adoption["avisos"] else None,
         "next_dish": [
@@ -328,7 +342,9 @@ def operation(db: Database) -> dict:
     }
 
 
-def compute(db: Database) -> dict:
+def compute(db: Database, operation: bool = True) -> dict:
+    """Todas las métricas. `operation=False` deja afuera las de operación (la
+    imagen y el resumen de `/metricas` no las usan)."""
     totals = db.query(SQL_TOTALS)[0]
     problems: dict[str, list[tuple[str, float]]] = {}
     for r in db.query(SQL_PROBLEMS):
@@ -348,7 +364,7 @@ def compute(db: Database) -> dict:
         "days": totals["dias"],
         "alerts": totals["respuestas"],
         "live_answers": totals["en_vivo"],
-        "ops": operation(db),
+        "ops": operation_metrics(db) if operation else None,
     }
 
 
@@ -393,7 +409,8 @@ def print_report(m: dict, metrics: set[str] | None = None) -> None:
                 print(f"  {dish}")
                 for text, pct in problem_lines(m, dish):
                     print(f"    {text:30} {pct * 100:5.1f} %")
-    print_operation(m["ops"], show)
+    if m["ops"]:
+        print_operation(m["ops"], show)
     if m["live_answers"]:
         print(f"\n(incluye {m['live_answers']} respuestas reales de las demos)")
 
