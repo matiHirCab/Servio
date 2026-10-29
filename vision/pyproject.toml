@@ -12,4 +12,4 @@ source = ["servio_vision"]
 show_missing = true
 skip_covered = true
 # Piso de cobertura: el CI falla si baja. Subirlo cuando se agreguen tests.
-fail_under = 88
+fail_under = 90
