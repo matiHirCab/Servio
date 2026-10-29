@@ -81,10 +81,11 @@ jobs:
           BASE_REF: ${{ github.base_ref }}
         run: |
           # lo versionado hoy y, en un PR, todo lo que algún commit suyo agregó
-          files=$(git ls-files)
+          # (quotePath=false: git entrecomilla los nombres con tildes y el `$` no calzaría)
+          files=$(git -c core.quotePath=false ls-files)
           if [ -n "$BASE_REF" ]; then
             files="$files
-          $(git log --diff-filter=A --name-only --pretty=format: "origin/$BASE_REF..HEAD")"
+          $(git -c core.quotePath=false log --diff-filter=A --name-only --pretty=format: "origin/$BASE_REF..HEAD")"
           fi
           bad=$(echo "$files" | sort -u | grep -i -E \
             '(^|/)\.env(\..+)?$|(^|/)mobileclip[^/]*\.ts$|\.(pt|pth|onnx|engine|tflite|safetensors|ckpt|npz|npy|db|sqlite3?|zip|tar|gz|csv|mp4|mov|avi|mkv|webm|jpg|jpeg|png|gif|webp|bmp|tiff?)$' \
