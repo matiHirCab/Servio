@@ -19,13 +19,16 @@ MUTED = (90, 90, 86)
 BAR = (57, 135, 229)
 
 
-# Las consultas, a la vista: es lo que se puede mostrar en el pitch (--sql).
+# Las consultas, a la vista: es lo que se puede mostrar en el pitch (--sql). Son
+# plantillas: `{elapsed_minutes}` / `{elapsed_seconds}` (cuánto tardó un aviso) los
+# rellena `Database.render` según el motor, SQLite o Postgres (A-6). Los avisos se
+# juntan con sus respuestas por `(local_id, id)`: cada casa escribe con su local_id.
 SQL_DISHES = """
 SELECT p.nombre AS plato,
-       COUNT(DISTINCT a.id) * 1.0 / COUNT(DISTINCT ps.id) AS vuelve_lleno,
+       COUNT(DISTINCT a.local_id || ':' || a.id) * 1.0 / COUNT(DISTINCT ps.id) AS vuelve_lleno,
        (SELECT r.texto
           FROM respuestas r
-          JOIN avisos a2 ON a2.id = r.aviso_id
+          JOIN avisos a2 ON a2.id = r.aviso_id AND a2.local_id = r.local_id
           JOIN platos_servidos ps2 ON ps2.id = a2.plato_servido_id
          WHERE ps2.plato_id = p.id
          GROUP BY r.texto ORDER BY COUNT(*) DESC LIMIT 1) AS motivo
@@ -37,7 +40,7 @@ SELECT p.nombre AS plato,
 """
 SQL_ATTEND = """
 SELECT m.nombre AS mozo,
-       AVG((julianday(a.resuelto_at) - julianday(a.abierto_at)) * 24 * 60) AS minutos
+       AVG({elapsed_minutes}) AS minutos
   FROM avisos a JOIN mozos m ON m.id = a.mozo_id
  WHERE a.tipo = 'mesa_terminada' AND a.motivo_cierre = 'retirados'
  GROUP BY m.id
@@ -46,12 +49,12 @@ SELECT m.nombre AS mozo,
 # El último retiro de platos en vivo (cámara): para mostrarlo en la demo.
 SQL_LAST_PICKUP = """
 SELECT m.nombre AS mozo, me.nombre AS mesa,
-       (julianday(a.resuelto_at) - julianday(a.abierto_at)) * 24 * 3600 AS segundos
+       {elapsed_seconds} AS segundos
   FROM avisos a
   JOIN mesas me ON me.id = a.mesa_id
   LEFT JOIN mozos m ON m.id = a.mozo_id
  WHERE a.tipo = 'mesa_terminada' AND a.motivo_cierre = 'retirados'
-   AND a.origen = 'camara'
+   AND a.origen = 'camara' AND a.local_id = :local
  ORDER BY a.resuelto_at DESC
  LIMIT 1
 """
@@ -65,8 +68,9 @@ SQL_TOTALS = """
 SELECT (SELECT COUNT(DISTINCT substr(abierto_at, 1, 10)) FROM avisos
          WHERE origen = 'historial') AS dias,
        (SELECT COUNT(*) FROM respuestas) AS respuestas,
-       (SELECT COUNT(*) FROM respuestas r JOIN avisos a ON a.id = r.aviso_id
-         WHERE a.origen = 'camara') AS en_vivo
+       (SELECT COUNT(*) FROM respuestas r
+         JOIN avisos a ON a.id = r.aviso_id AND a.local_id = r.local_id
+         WHERE a.origen = 'camara' AND a.local_id = :local) AS en_vivo
 """
 
 
@@ -76,11 +80,11 @@ SQL_PROBLEMS = """
 SELECT p.nombre AS plato, r.texto AS problema,
        COUNT(*) * 1.0 / (SELECT COUNT(*)
                            FROM respuestas r2
-                           JOIN avisos a2 ON a2.id = r2.aviso_id
+                           JOIN avisos a2 ON a2.id = r2.aviso_id AND a2.local_id = r2.local_id
                            JOIN platos_servidos ps2 ON ps2.id = a2.plato_servido_id
                           WHERE ps2.plato_id = p.id) AS porcentaje
   FROM respuestas r
-  JOIN avisos a ON a.id = r.aviso_id
+  JOIN avisos a ON a.id = r.aviso_id AND a.local_id = r.local_id
   JOIN platos_servidos ps ON ps.id = a.plato_servido_id
   JOIN platos p ON p.id = ps.plato_id
  WHERE r.texto NOT LIKE 'Está todo bien%'
@@ -90,22 +94,28 @@ SELECT p.nombre AS plato, r.texto AS problema,
 
 
 def compute(db: Database) -> dict:
-    totals = db.query(SQL_TOTALS)[0]
+    def query(template: str):
+        # lo que pasó en vivo (`:local`) es solo de esta casa; el historial y los
+        # promedios por plato y mozo juntan todo
+        params = {"local": db.local_id} if ":local" in template else {}
+        return db.query(db.render(template), params)
+
+    totals = query(SQL_TOTALS)[0]
     problems: dict[str, list[tuple[str, float]]] = {}
-    for r in db.query(SQL_PROBLEMS):
+    for r in query(SQL_PROBLEMS):
         problems.setdefault(r["plato"], []).append((r["problema"], r["porcentaje"]))
     return {
         "problems": problems,
         "dishes": [
             (r["plato"], r["vuelve_lleno"], r["motivo"] or "-")
-            for r in db.query(SQL_DISHES)
+            for r in query(SQL_DISHES)
         ],
-        "attend": [(r["mozo"], r["minutos"]) for r in db.query(SQL_ATTEND)],
+        "attend": [(r["mozo"], r["minutos"]) for r in query(SQL_ATTEND)],
         "last_pickup": next(
-            ((r["mozo"], r["mesa"], r["segundos"]) for r in db.query(SQL_LAST_PICKUP)),
+            ((r["mozo"], r["mesa"], r["segundos"]) for r in query(SQL_LAST_PICKUP)),
             None,
         ),
-        "answer": [(r["mozo"], r["segundos"]) for r in db.query(SQL_ANSWER)],
+        "answer": [(r["mozo"], r["segundos"]) for r in query(SQL_ANSWER)],
         "days": totals["dias"],
         "alerts": totals["respuestas"],
         "live_answers": totals["en_vivo"],

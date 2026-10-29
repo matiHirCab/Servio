@@ -93,9 +93,13 @@ Con la comanda del restaurante, Servio sabe **qué plato es cada uno** y **qué 
 - **Los avisos** empiezan con el emoji, el mozo y la mesa ("🍽️ Juan · Mesa 1: terminó."). El de plato lleno nombra el plato y trae **botones** con las respuestas típicas de ese plato, más "✏️ Otra respuesta" (el bot pide que escriban y toma lo que respondan).
 - **Las respuestas** se escuchan en un hilo aparte (long polling: sin servidor ni webhook), se agregan al mensaje ("📝 Ana: Muy dulces") y quedan en el log (`alert_feedback`).
 
-## Base de datos (SQLite)
+## Base de datos (SQLite local o Postgres compartido)
 
-Con datos del restaurante, todo queda también en una base relacional: `vision/out/servio.db` (SQLite, un archivo, sin servidor; en producción sería Postgres con el mismo esquema, ver `servio_vision/db.py`). Tablas: `mozos`, `mesas`, `platos`, `respuestas_tipicas`, `platos_servidos`, `avisos` y `respuestas`. En vivo se guardan los platos que aparecen (con el plato del pedido que son), los avisos que se abren y cierran, y las respuestas de los mozos (de botón o escritas). Se puede abrir con cualquier cliente de SQLite.
+Con datos del restaurante, todo queda también en una base relacional (`servio_vision/db.py`, SQLAlchemy Core). Tablas: `mozos`, `mesas`, `platos`, `respuestas_tipicas`, `platos_servidos`, `avisos` y `respuestas`. En vivo se guardan los platos que aparecen (con el plato del pedido que son), los avisos que se abren y cierran, y las respuestas de los mozos (de botón o escritas).
+
+- **Sin `DATABASE_URL`**: `vision/out/servio.db`, SQLite, un archivo sin servidor (tests, sin internet). Se abre con cualquier cliente de SQLite.
+- **Con `DATABASE_URL`** en el `.env` (Postgres en Neon o Supabase; la URL va por un canal privado, nunca por el repo): todas las casas escriben en la misma base y `tools/metricas.py` lee de ahí. Driver: `pip install -r requirements-postgres.txt`. Cada casa escribe con su **`local_id`** (`local_id = "casa-jessica"` en su toml): los avisos van con clave `(local_id, id)`, así dos casas con una "Mesa 1" no se pisan. La comanda (`mozos`, `mesas`, `platos`) es compartida: todas las casas cargan el mismo `fixtures/restaurante/`. `tools/metricas.py --config casa.toml` muestra lo que pasó en vivo en esa casa.
+- **Migraciones** (Alembic, `servio_vision/migrations/`): al abrir la base se aplican las que falten, así se agregan columnas sin borrar datos; una base de antes de Alembic se reconoce y se actualiza sola. Para una migración nueva: `python -m alembic -c servio_vision/migrations/alembic.ini revision -m "qué cambia"` y escribir el `upgrade()` a mano (SQLite y Postgres tienen que poder correrla).
 
 ## Métricas de platos y mozos
 
