@@ -24,13 +24,16 @@ MUTED = (90, 90, 86)
 BAR = (57, 135, 229)
 
 
-# Las consultas, a la vista: es lo que se puede mostrar en el pitch (--sql).
+# Las consultas, a la vista: es lo que se puede mostrar en el pitch (--sql). Son
+# plantillas: `{elapsed_minutes}` / `{elapsed_seconds}` (cuánto tardó un aviso) los
+# rellena `Database.render` según el motor, SQLite o Postgres (A-6). Los avisos se
+# juntan con sus respuestas por `(local_id, id)`: cada casa escribe con su local_id.
 SQL_DISHES = """
 SELECT p.nombre AS plato,
-       COUNT(DISTINCT a.id) * 1.0 / COUNT(DISTINCT ps.id) AS vuelve_lleno,
+       COUNT(DISTINCT a.local_id || ':' || a.id) * 1.0 / COUNT(DISTINCT ps.id) AS vuelve_lleno,
        (SELECT r.texto
           FROM respuestas r
-          JOIN avisos a2 ON a2.id = r.aviso_id
+          JOIN avisos a2 ON a2.id = r.aviso_id AND a2.local_id = r.local_id
           JOIN platos_servidos ps2 ON ps2.id = a2.plato_servido_id
          WHERE ps2.plato_id = p.id
          GROUP BY r.texto ORDER BY COUNT(*) DESC LIMIT 1) AS motivo
@@ -42,7 +45,7 @@ SELECT p.nombre AS plato,
 """
 SQL_ATTEND = """
 SELECT m.nombre AS mozo,
-       AVG((julianday(a.resuelto_at) - julianday(a.abierto_at)) * 24 * 60) AS minutos
+       AVG({elapsed_minutes}) AS minutos
   FROM avisos a JOIN mozos m ON m.id = a.mozo_id
  WHERE a.tipo = 'mesa_terminada' AND a.motivo_cierre = 'retirados'
  GROUP BY m.id
@@ -51,12 +54,12 @@ SELECT m.nombre AS mozo,
 # El último retiro de platos en vivo (cámara): para mostrarlo en la demo.
 SQL_LAST_PICKUP = """
 SELECT m.nombre AS mozo, me.nombre AS mesa,
-       (julianday(a.resuelto_at) - julianday(a.abierto_at)) * 24 * 3600 AS segundos
+       {elapsed_seconds} AS segundos
   FROM avisos a
   JOIN mesas me ON me.id = a.mesa_id
   LEFT JOIN mozos m ON m.id = a.mozo_id
  WHERE a.tipo = 'mesa_terminada' AND a.motivo_cierre = 'retirados'
-   AND a.origen = 'camara'
+   AND a.origen = 'camara' AND a.local_id = :local
  ORDER BY a.resuelto_at DESC
  LIMIT 1
 """
@@ -70,8 +73,9 @@ SQL_TOTALS = """
 SELECT (SELECT COUNT(DISTINCT substr(abierto_at, 1, 10)) FROM avisos
          WHERE origen = 'historial') AS dias,
        (SELECT COUNT(*) FROM respuestas) AS respuestas,
-       (SELECT COUNT(*) FROM respuestas r JOIN avisos a ON a.id = r.aviso_id
-         WHERE a.origen = 'camara') AS en_vivo
+       (SELECT COUNT(*) FROM respuestas r
+         JOIN avisos a ON a.id = r.aviso_id AND a.local_id = r.local_id
+         WHERE a.origen = 'camara' AND a.local_id = :local) AS en_vivo
 """
 
 
@@ -81,11 +85,11 @@ SQL_PROBLEMS = """
 SELECT p.nombre AS plato, r.texto AS problema,
        COUNT(*) * 1.0 / (SELECT COUNT(*)
                            FROM respuestas r2
-                           JOIN avisos a2 ON a2.id = r2.aviso_id
+                           JOIN avisos a2 ON a2.id = r2.aviso_id AND a2.local_id = r2.local_id
                            JOIN platos_servidos ps2 ON ps2.id = a2.plato_servido_id
                           WHERE ps2.plato_id = p.id) AS porcentaje
   FROM respuestas r
-  JOIN avisos a ON a.id = r.aviso_id
+  JOIN avisos a ON a.id = r.aviso_id AND a.local_id = r.local_id
   JOIN platos_servidos ps ON ps.id = a.plato_servido_id
   JOIN platos p ON p.id = ps.plato_id
  WHERE r.texto NOT LIKE 'Está todo bien%'
@@ -105,16 +109,20 @@ VISIT_GAP_MIN = 120  # una mesa sin novedades este rato: la visita abierta se de
 # Lo de la cámara se guarda en UTC; el historial simulado ya está en hora local.
 LOCAL_TZ = timezone(timedelta(hours=-3))
 
+# Las de operación siguen la misma regla que las de arriba: plantillas que
+# `Database.render` completa según el motor (`{elapsed_minutes}`), parámetros con
+# nombre y nada propio de SQLite (los booleanos se suman con CASE, no a pelo).
+
 # Mesa terminada sin atender: minutos desde que todos terminaron hasta que se
 # retiraron los platos (solo cierres por retiro, no porque llegó otro plato).
 SQL_UNATTENDED = """
 SELECT COUNT(*) AS mesas,
        AVG(minutos) AS promedio,
-       AVG(minutos > ?) AS fuera_de_tiempo,
+       AVG(CASE WHEN minutos > :limite THEN 1.0 ELSE 0.0 END) AS fuera_de_tiempo,
        MAX(minutos) AS peor
-  FROM (SELECT (julianday(resuelto_at) - julianday(abierto_at)) * 24 * 60 AS minutos
-          FROM avisos
-         WHERE tipo = 'mesa_terminada' AND motivo_cierre = 'retirados')
+  FROM (SELECT {elapsed_minutes} AS minutos
+          FROM avisos a
+         WHERE a.tipo = 'mesa_terminada' AND a.motivo_cierre = 'retirados') t
 """
 # Mesas olvidadas: avisos de plato lleno que nadie respondió, o que tardaron más
 # de FORGOTTEN_LIMIT_S en responder. Un aviso abierto todavía sin respuesta no
@@ -122,15 +130,16 @@ SELECT COUNT(*) AS mesas,
 SQL_FORGOTTEN = """
 SELECT COALESCE(m.nombre, '(sin mozo)') AS mozo,
        COUNT(*) AS avisos,
-       SUM(r.segundos IS NULL OR r.segundos > ?) AS olvidadas
+       SUM(CASE WHEN r.segundos IS NULL OR r.segundos > :limite THEN 1 ELSE 0 END)
+         AS olvidadas
   FROM avisos a
   LEFT JOIN mozos m ON m.id = a.mozo_id
-  LEFT JOIN (SELECT aviso_id, MIN(segundos) AS segundos
-               FROM respuestas GROUP BY aviso_id) r ON r.aviso_id = a.id
+  LEFT JOIN (SELECT local_id, aviso_id, MIN(segundos) AS segundos
+               FROM respuestas GROUP BY local_id, aviso_id) r
+         ON r.aviso_id = a.id AND r.local_id = a.local_id
  WHERE a.tipo = 'plato_lleno_mucho'
    AND (a.resuelto_at IS NOT NULL OR r.segundos IS NOT NULL)
- GROUP BY a.mozo_id
- ORDER BY olvidadas * 1.0 / COUNT(*) DESC
+ GROUP BY m.id, m.nombre
 """
 # Desperdicio en $: platos que volvieron con comida por un problema (el mozo
 # respondió algo distinto de "Está todo bien…"), al precio de la carta. Es una
@@ -141,23 +150,24 @@ SELECT p.nombre AS plato, COUNT(*) AS platos, SUM(p.precio) AS pesos
   JOIN platos p ON p.id = ps.plato_id
  WHERE p.precio IS NOT NULL
    AND EXISTS (SELECT 1
-                 FROM avisos a JOIN respuestas r ON r.aviso_id = a.id
+                 FROM avisos a
+                 JOIN respuestas r ON r.aviso_id = a.id AND r.local_id = a.local_id
                 WHERE a.plato_servido_id = ps.id
                   AND a.tipo = 'plato_lleno_mucho'
                   AND r.texto NOT LIKE 'Está todo bien%')
- GROUP BY p.id
+ GROUP BY p.id, p.nombre
  ORDER BY pesos DESC
 """
 # Ritmo por plato: minutos desde que se sirvió hasta la primera lectura en vacío.
+# `{pace_minutes}` lo completa operation_metrics() con Database.elapsed.
 SQL_PACE = """
-SELECT p.nombre AS plato, COUNT(*) AS platos,
-       AVG((julianday(v.desde) - julianday(ps.servido_at)) * 24 * 60) AS minutos
+SELECT p.nombre AS plato, COUNT(*) AS platos, AVG({pace_minutes}) AS minutos
   FROM platos_servidos ps
   JOIN platos p ON p.id = ps.plato_id
   JOIN (SELECT plato_servido_id, MIN(desde) AS desde
           FROM estados_plato WHERE estado = 'vacio'
          GROUP BY plato_servido_id) v ON v.plato_servido_id = ps.id
- GROUP BY p.id
+ GROUP BY p.id, p.nombre
  ORDER BY minutos DESC
 """
 # Sobra por plato: cuánto le quedaba (fill_ratio) en la última lectura, de los
@@ -169,17 +179,20 @@ SELECT p.nombre AS plato, COUNT(*) AS platos, AVG(ps.ultimo_fill_ratio) AS sobra
   JOIN platos p ON p.id = ps.plato_id
  WHERE ps.ultimo_fill_ratio IS NOT NULL
    AND ps.retirado_at IS NOT NULL
- GROUP BY p.id
+ GROUP BY p.id, p.nombre
  ORDER BY sobra DESC
 """
 # Adopción: de los avisos con botones (hoy solo plato lleno; con C-5, todos),
 # cuántos tuvieron respuesta y cuántos se marcaron "No hacía falta".
 SQL_ADOPTION = """
 SELECT COUNT(*) AS avisos,
-       SUM(EXISTS (SELECT 1 FROM respuestas r WHERE r.aviso_id = a.id))
-         AS respondidos,
-       SUM(EXISTS (SELECT 1 FROM respuestas r WHERE r.aviso_id = a.id
-                     AND r.texto LIKE 'No hacía falta%')) AS no_hacia_falta
+       SUM(CASE WHEN EXISTS (SELECT 1 FROM respuestas r
+                              WHERE r.aviso_id = a.id AND r.local_id = a.local_id)
+                THEN 1 ELSE 0 END) AS respondidos,
+       SUM(CASE WHEN EXISTS (SELECT 1 FROM respuestas r
+                              WHERE r.aviso_id = a.id AND r.local_id = a.local_id
+                                AND r.texto LIKE 'No hacía falta%')
+                THEN 1 ELSE 0 END) AS no_hacia_falta
   FROM avisos a
  WHERE a.tipo = 'plato_lleno_mucho' AND a.resuelto_at IS NOT NULL
 """
@@ -187,32 +200,31 @@ SELECT COUNT(*) AS avisos,
 # plato (no por retiro): minutos que la mesa estuvo sin nada para comer.
 SQL_NEXT_DISH = """
 SELECT COALESCE(m.nombre, '(sin mozo)') AS mozo, COUNT(*) AS veces,
-       AVG((julianday(a.resuelto_at) - julianday(a.abierto_at)) * 24 * 60) AS minutos
+       AVG({elapsed_minutes}) AS minutos
   FROM avisos a LEFT JOIN mozos m ON m.id = a.mozo_id
  WHERE a.tipo = 'mesa_terminada' AND a.motivo_cierre = 'servido'
- GROUP BY a.mozo_id
+ GROUP BY m.id, m.nombre
  ORDER BY minutos DESC
 """
 # Para las horas pico: cada aviso con su hora y, si es mesa terminada, cuánto esperó.
 SQL_ALERT_TIMES = """
-SELECT abierto_at,
-       CASE WHEN tipo = 'mesa_terminada' AND motivo_cierre = 'retirados'
-            THEN (julianday(resuelto_at) - julianday(abierto_at)) * 24 * 60 END
-         AS espera
-  FROM avisos
+SELECT a.abierto_at,
+       CASE WHEN a.tipo = 'mesa_terminada' AND a.motivo_cierre = 'retirados'
+            THEN {elapsed_minutes} END AS espera
+  FROM avisos a
 """
 # Para la carga por mozo: quién atiende cada mesa.
 SQL_TABLE_WAITER = """
 SELECT me.id AS mesa, COALESCE(m.nombre, '(sin mozo)') AS mozo
   FROM mesas me LEFT JOIN mozos m ON m.id = me.mozo_id
 """
-# Para armar las visitas de cada mesa (rotación): platos servidos y cierres.
+# Para armar las visitas de cada mesa (rotación): platos servidos y cierres, por
+# local (dos casas con una "Mesa 1" son mesas distintas).
 SQL_TABLE_EVENTS = """
-SELECT mesa_id, servido_at AS at, NULL AS fin FROM platos_servidos
+SELECT local_id, mesa_id, servido_at AS at, NULL AS fin FROM platos_servidos
 UNION ALL
-SELECT mesa_id, abierto_at AS at, resuelto_at AS fin FROM avisos
+SELECT local_id, mesa_id, abierto_at AS at, resuelto_at AS fin FROM avisos
  WHERE tipo = 'mesa_terminada' AND motivo_cierre = 'retirados'
- ORDER BY mesa_id, at
 """
 
 
@@ -237,21 +249,24 @@ def table_visits(db: Database) -> list[tuple[str, datetime, datetime]]:
     pasa más de VISIT_GAP_MIN sin novedades, la visita abierta se descarta (no
     la cierra el retiro de otra visita horas o días después)."""
     visits = []
-    start: dict[str, datetime] = {}
-    last: dict[str, datetime] = {}
+    start: dict[tuple[str, str], datetime] = {}
+    last: dict[tuple[str, str], datetime] = {}
     rows = sorted(
-        ((r["mesa_id"], _time(r["at"]), r["fin"]) for r in db.query(SQL_TABLE_EVENTS)),
+        (
+            ((r["local_id"], r["mesa_id"]), _time(r["at"]), r["fin"])
+            for r in db.query(SQL_TABLE_EVENTS)
+        ),
         key=lambda r: (r[0], r[1]),
     )
-    for table_id, at, end in rows:
-        previous = last.get(table_id)
+    for key, at, end in rows:  # key: (local, mesa)
+        previous = last.get(key)
         if previous is not None and at - previous > timedelta(minutes=VISIT_GAP_MIN):
-            start.pop(table_id, None)
-        last[table_id] = at
+            start.pop(key, None)
+        last[key] = at
         if end is None:
-            start.setdefault(table_id, at)
-        elif table_id in start:
-            visits.append((table_id, start.pop(table_id), _time(end)))
+            start.setdefault(key, at)
+        elif key in start:
+            visits.append((key[1], start.pop(key), _time(end)))
     return visits
 
 
@@ -283,7 +298,7 @@ def waiter_load(db: Database, visits: list) -> list[tuple[str, float, float]]:
     """Carga por mozo: mesas atendidas por servicio y minutos promedio hasta
     retirar una mesa terminada (de `SQL_ATTEND`). De la más cargada a la menos."""
     waiter = {r["mesa"]: r["mozo"] for r in db.query(SQL_TABLE_WAITER)}
-    attend = {r["mozo"]: r["minutos"] for r in db.query(SQL_ATTEND)}
+    attend = {r["mozo"]: r["minutos"] for r in db.query(db.render(SQL_ATTEND))}
     tables: dict[str, int] = {}
     services: dict[str, set] = {}
     for table_id, start, _ in visits:
@@ -298,7 +313,7 @@ def peak_hours(db: Database) -> list[tuple[str, int, float | None]]:
     """Horas pico: por franja de PEAK_SLOT_MIN, avisos y % de mesas terminadas que
     esperaron más de UNATTENDED_LIMIT_MIN. Ordenado por hora."""
     slots: dict[str, list] = {}
-    for r in db.query(SQL_ALERT_TIMES):
+    for r in db.query(db.render(SQL_ALERT_TIMES)):
         at = _time(r["abierto_at"])
         minute = at.minute - at.minute % PEAK_SLOT_MIN
         slot = slots.setdefault(f"{at.hour:02d}:{minute:02d}", [0, 0, 0])
@@ -314,30 +329,39 @@ def peak_hours(db: Database) -> list[tuple[str, int, float | None]]:
 
 def operation_metrics(db: Database) -> dict:
     """Métricas de operación de M-1 que no estaban en el reporte del pitch."""
-    unattended = db.query(SQL_UNATTENDED, (UNATTENDED_LIMIT_MIN,))[0]
-    waste = [(r["plato"], r["platos"], r["pesos"]) for r in db.query(SQL_WASTE)]
+
+    def query(template: str, params: dict | None = None):
+        return db.query(db.render(template), params)
+
+    unattended = query(SQL_UNATTENDED, {"limite": UNATTENDED_LIMIT_MIN})[0]
+    waste = [(r["plato"], r["platos"], r["pesos"]) for r in query(SQL_WASTE)]
     visits = table_visits(db)
     rot = rotation(visits)
-    adoption = db.query(SQL_ADOPTION)[0]
+    adoption = query(SQL_ADOPTION)[0]
+    forgotten = [
+        (r["mozo"], r["avisos"], r["olvidadas"])
+        for r in query(SQL_FORGOTTEN, {"limite": FORGOTTEN_LIMIT_S})
+    ]
+    pace = SQL_PACE.replace(
+        "{pace_minutes}", db.elapsed("ps.servido_at", "v.desde", 60)
+    )
     return {
         "unattended": dict(unattended) if unattended["mesas"] else None,
-        "forgotten": [
-            (r["mozo"], r["avisos"], r["olvidadas"])
-            for r in db.query(SQL_FORGOTTEN, (FORGOTTEN_LIMIT_S,))
-        ],
+        # el que más olvida primero (en SQL, ordenar por un alias no anda en Postgres)
+        "forgotten": sorted(forgotten, key=lambda r: -r[2] / r[1]),
         "rotation": rot,
         "waste": waste,
         "waste_total": sum(p for _, _, p in waste),
         "services": rot["services"] if rot else 0,
         "load": waiter_load(db, visits),
         "peaks": peak_hours(db),
-        "pace": [(r["plato"], r["platos"], r["minutos"]) for r in db.query(SQL_PACE)],
+        "pace": [(r["plato"], r["platos"], r["minutos"]) for r in db.query(pace)],
         "leftover": [
-            (r["plato"], r["platos"], r["sobra"]) for r in db.query(SQL_LEFTOVER)
+            (r["plato"], r["platos"], r["sobra"]) for r in query(SQL_LEFTOVER)
         ],
         "adoption": dict(adoption) if adoption["avisos"] else None,
         "next_dish": [
-            (r["mozo"], r["veces"], r["minutos"]) for r in db.query(SQL_NEXT_DISH)
+            (r["mozo"], r["veces"], r["minutos"]) for r in query(SQL_NEXT_DISH)
         ],
     }
 
@@ -345,22 +369,29 @@ def operation_metrics(db: Database) -> dict:
 def compute(db: Database, operation: bool = True) -> dict:
     """Todas las métricas. `operation=False` deja afuera las de operación (la
     imagen y el resumen de `/metricas` no las usan)."""
-    totals = db.query(SQL_TOTALS)[0]
+
+    def query(template: str):
+        # lo que pasó en vivo (`:local`) es solo de esta casa; el historial y los
+        # promedios por plato y mozo juntan todo
+        params = {"local": db.local_id} if ":local" in template else {}
+        return db.query(db.render(template), params)
+
+    totals = query(SQL_TOTALS)[0]
     problems: dict[str, list[tuple[str, float]]] = {}
-    for r in db.query(SQL_PROBLEMS):
+    for r in query(SQL_PROBLEMS):
         problems.setdefault(r["plato"], []).append((r["problema"], r["porcentaje"]))
     return {
         "problems": problems,
         "dishes": [
             (r["plato"], r["vuelve_lleno"], r["motivo"] or "-")
-            for r in db.query(SQL_DISHES)
+            for r in query(SQL_DISHES)
         ],
-        "attend": [(r["mozo"], r["minutos"]) for r in db.query(SQL_ATTEND)],
+        "attend": [(r["mozo"], r["minutos"]) for r in query(SQL_ATTEND)],
         "last_pickup": next(
-            ((r["mozo"], r["mesa"], r["segundos"]) for r in db.query(SQL_LAST_PICKUP)),
+            ((r["mozo"], r["mesa"], r["segundos"]) for r in query(SQL_LAST_PICKUP)),
             None,
         ),
-        "answer": [(r["mozo"], r["segundos"]) for r in db.query(SQL_ANSWER)],
+        "answer": [(r["mozo"], r["segundos"]) for r in query(SQL_ANSWER)],
         "days": totals["dias"],
         "alerts": totals["respuestas"],
         "live_answers": totals["en_vivo"],

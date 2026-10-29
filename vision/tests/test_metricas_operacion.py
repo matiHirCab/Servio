@@ -96,15 +96,40 @@ def test_history_gives_numbers_and_roles_filter_money(tmp_path, capsys):
     db.close()
 
 
-def test_old_database_gets_the_price_column(tmp_path):
+def test_a_database_from_the_m1_branch_keeps_its_columns(tmp_path):
+    """Una base de antes de Alembic que ya tenía las columnas de M-1 (la rama las
+    agregaba a mano) se migra sin crearlas de nuevo ni perder lo guardado."""
+    from tests.test_db import OLD_SCHEMA
+
     path = tmp_path / "servio.db"
-    conn = sqlite3.connect(path)
-    conn.execute("CREATE TABLE platos (id TEXT PRIMARY KEY, nombre TEXT)")
-    conn.close()
+    with sqlite3.connect(path) as conn:
+        conn.executescript(OLD_SCHEMA)
+        conn.executescript(
+            """
+            ALTER TABLE avisos ADD COLUMN motivo_cierre TEXT;
+            ALTER TABLE platos ADD COLUMN precio REAL;
+            ALTER TABLE platos_servidos ADD COLUMN ultimo_fill_ratio REAL;
+            ALTER TABLE platos_servidos ADD COLUMN retirado_at TEXT;
+            CREATE TABLE estados_plato (id INTEGER PRIMARY KEY,
+                plato_servido_id INTEGER NOT NULL REFERENCES platos_servidos(id),
+                estado TEXT NOT NULL, fill_ratio REAL, desde TEXT NOT NULL);
+            UPDATE platos_servidos SET ultimo_fill_ratio = 0.4;
+            INSERT INTO estados_plato (plato_servido_id, estado, fill_ratio, desde)
+                VALUES (1, 'comiendo', 0.4, '2026-10-18T20:05:00Z');
+            """
+        )
     db = _db(tmp_path)
-    [row] = db.query("SELECT precio FROM platos WHERE id = 'lomo'")
-    assert row["precio"] == 890
-    db.close()
+    try:
+        [version] = db.query("SELECT version_num FROM alembic_version")
+        assert version[0] == "0004"
+        [row] = db.query("SELECT precio FROM platos WHERE id = 'lomo'")
+        assert row["precio"] == 890
+        [served] = db.query("SELECT ultimo_fill_ratio FROM platos_servidos")
+        assert served["ultimo_fill_ratio"] == 0.4
+        [states] = db.query("SELECT COUNT(*) AS n FROM estados_plato")
+        assert states["n"] == 1
+    finally:
+        db.close()
 
 
 def test_live_readings_give_pace_and_leftover(tmp_path):

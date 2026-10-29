@@ -32,8 +32,8 @@ from dotenv import load_dotenv
 from pydantic import AliasChoices, Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from servio_vision import DEFAULT_LOCAL, VISION_DIR
 from servio_vision import ENV_FILE as DEFAULT_ENV_FILE
-from servio_vision import VISION_DIR
 
 REPO_DIR = VISION_DIR.parent
 PROMPTS_DIR = VISION_DIR / "prompts"
@@ -79,7 +79,12 @@ HOUSE_KEYS = (
     "record",
     "fake_mode",
     "fixture",
+    "local_id",
 )
+
+# Secciones del toml que son de otro módulo y acá se dejan pasar sin mirar:
+# `[roles]` la lee servio_vision/roles.py (R-1).
+FOREIGN_SECTIONS = ("roles",)
 
 # Rutas del toml que no son archivos del repo: relativas a la carpeta del toml, así
 # `zones = "zones.json"` al lado de `casa.toml` anda desde cualquier carpeta. (Por
@@ -130,6 +135,10 @@ class Settings(BaseSettings):
     )
     fixture: Path | None = Field(None, validation_alias="servio_fixture")
     """jsonl para fake_mode = replay"""
+    local_id: str = Field(
+        DEFAULT_LOCAL, min_length=1, validation_alias="servio_local_id"
+    )
+    """con qué nombre escribe esta casa en la base compartida (A-6)"""
     database_url: str | None = None  # Postgres compartido (A-6); sin esto, SQLite
 
     # --- modelo de platos ---
@@ -248,6 +257,8 @@ def read_toml(path: Path) -> dict[str, Any]:
         raise ValueError(f"{path} no es un TOML válido: {e}") from e
     flat: dict[str, Any] = {}
     for key, value in data.items():
+        if key in FOREIGN_SECTIONS:
+            continue  # la lee otro módulo del mismo archivo
         entries = value.items() if isinstance(value, dict) else [(key, value)]
         for name, item in entries:
             if name in flat:
