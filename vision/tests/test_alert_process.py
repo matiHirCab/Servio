@@ -111,6 +111,20 @@ def test_no_close_note_is_kept_for_an_alert_without_a_telegram_message(tmp_path)
     assert p._close_notes == {}
 
 
+def test_closing_the_processor_closes_the_notifier(tmp_path):
+    """El notificador de Telegram tiene un hilo con la cola de lo que no llegó."""
+
+    class ClosableNotifier(RecordingNotifier):
+        closed = False
+
+        def close(self):
+            self.closed = True
+
+    p = AlertProcessor(PROD, ClosableNotifier(), tmp_path / "eventos.jsonl")
+    p.close()
+    assert p.notifier.closed
+
+
 def test_observation_line_round_trips(tmp_path):
     p = processor(tmp_path)
     o = obs(0, VACIO, COMIENDO)
