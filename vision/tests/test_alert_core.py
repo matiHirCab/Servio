@@ -93,6 +93,18 @@ def test_attach_keeps_the_message_id_of_an_open_alert():
     assert {a.telegram_message_id for a in core.open_alerts.values()} == {7}
 
 
+def test_every_plate_field_is_either_watched_or_ignored_on_purpose():
+    """Un campo nuevo de `PlateTrack` tiene que decidir si lo usan las reglas: si
+    no está en ninguna lista, un cambio suyo no forzaría el guardado del estado."""
+    import dataclasses
+
+    from servio_vision.alerts.core import IGNORED_PLATE_FIELDS, RULES_PLATE_FIELDS
+    from servio_vision.alerts.state import PlateTrack
+
+    names = {f.name for f in dataclasses.fields(PlateTrack)}
+    assert names == set(RULES_PLATE_FIELDS) | set(IGNORED_PLATE_FIELDS)
+
+
 def test_rules_changed_ignores_a_reading_equal_to_the_last():
     core = AlertCore(PROD)
     vacio = ("T1-p1", "vacio", "centro")

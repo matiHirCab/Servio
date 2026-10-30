@@ -289,6 +289,9 @@ class DatabaseOutput:
         self._absent: dict[str, int] = {}
         # pasó algo que no puede esperar al próximo guardado del estado
         self.save_now = False
+        # la última escritura de lecturas falló: la próxima que ande pone al día
+        # `plate_states`/`on_table`, y eso se guarda ya
+        self._readings_failed = False
         # (escritura, tipo de error) → cuándo se logueó, y cuántos fallos se callaron.
         # Con lock: también escribe el hilo del bot (las respuestas de los mozos).
         self._logged: dict[tuple[str, str], float] = {}
@@ -359,6 +362,7 @@ class DatabaseOutput:
         de id) sigue siendo el mismo plato servido."""
         if self.restaurant is None:
             return
+        catching_up, self._readings_failed = self._readings_failed, True
         active = table.active_plates()
         for plate in active:
             if plate.track_id in self.served_rows:
@@ -400,6 +404,10 @@ class DatabaseOutput:
         )
         # Recién con la base al día: si la escritura falló, la próxima lectura
         # repite estos cambios de estado y estos platos retirados en vez de perderlos.
+        self._readings_failed = False
+        if catching_up:
+            # sin guardarlo, un corte acá repetiría filas ya escritas al relanzar
+            self.save_now = True
         self.plate_states.update(states)
         for track_id in gone:
             self.plate_states.pop(track_id, None)

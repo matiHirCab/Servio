@@ -149,3 +149,11 @@ def test_stop_does_not_wait_for_the_long_poll():
     started = time.monotonic()
     b.stop(wait_s=5)
     assert time.monotonic() - started < 0.5
+
+
+def test_a_new_message_is_not_skipped_if_this_clock_is_ahead():
+    """El filtro de mensajes viejos es solo para un arranque sin red, y con margen:
+    con el reloj de esta máquina adelantado, una respuesta nueva no se pierde."""
+    ahead = time.time() - 90  # Telegram dice que llegó "90 s antes" del arranque
+    channel = Channel([[], [metrics_update(5, ahead)]])
+    assert run(channel) == ["metricas"]

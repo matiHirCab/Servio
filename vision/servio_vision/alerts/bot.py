@@ -25,6 +25,10 @@ from servio_vision.restaurant import Restaurant
 
 logger = logging.getLogger(__name__)
 
+# Al arrancar sin red, un mensaje de más de esto antes del arranque es de una
+# corrida anterior (margen por si el reloj de esta máquina va adelantado).
+OLD_MESSAGE_S = 600.0
+
 
 @runtime_checkable
 class BotChannel(Protocol):
@@ -59,6 +63,8 @@ class Bot:
         # consulta larga al canal (que no se puede cortar)
         self._busy = threading.Lock()
         self._started_at = time.time()
+        # arrancó sin red: se lee todo lo pendiente y se saltean los mensajes viejos
+        self._catching_up = False
 
     def start(self) -> None:
         self._started_at = time.time()
@@ -83,16 +89,19 @@ class Bot:
         pending = self.channel.get_updates(offset=-1, timeout=0)
         if pending is None:
             logger.warning("Telegram no contesta: salteo los mensajes viejos")
+            self._catching_up = True
             return None
         return pending[-1]["update_id"] + 1 if pending else None
 
     def _is_old(self, update: dict) -> bool:
-        """Un mensaje (texto o comando) de antes de arrancar el bot."""
+        """Solo si arrancó sin red: un mensaje (texto o comando) de bastante antes del
+        arranque. El margen es porque `date` es la hora de Telegram y `_started_at`
+        la de esta máquina, que puede ir adelantada: una respuesta nueva no se pierde,
+        y los `/metricas` que importan saltear son de horas antes."""
         message = update.get("message")
-        # `date` viene en segundos enteros: uno del mismo segundo del arranque es nuevo
-        return message is not None and message.get("date", time.time()) < int(
-            self._started_at
-        )
+        if not self._catching_up or message is None:
+            return False
+        return message.get("date", time.time()) < self._started_at - OLD_MESSAGE_S
 
     def _listen(self) -> None:
         offset = self._start_offset()

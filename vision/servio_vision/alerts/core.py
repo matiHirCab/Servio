@@ -155,12 +155,6 @@ class AlertCore:
             )
         return events
 
-    def forget(self, alerts: tuple[Alert, ...]) -> None:
-        """Avisos recién abiertos que el canal no pudo mandar (lanzó): se sacan,
-        así la próxima lectura los abre y los manda de nuevo."""
-        for alert in alerts:
-            self.open_alerts.pop(alert.id, None)
-
     def attach(self, alerts: tuple[Alert, ...]) -> None:
         """Los avisos abiertos, ya con el `message_id` que les dio el canal."""
         for alert in alerts:
@@ -210,9 +204,26 @@ def _close_reason(alert: Alert, table: TableState) -> str | None:
     return "retirados"
 
 
+# Campos de `PlateTrack` que usan las reglas: todos menos `last_seen` (cambia en cada
+# lectura y nadie lo mira). Un test falla si `PlateTrack` suma un campo que no está
+# acá ni en `IGNORED_PLATE_FIELDS`: así un cambio que importa no se escapa del guardado.
+RULES_PLATE_FIELDS = (
+    "track_id",
+    "state",
+    "position",
+    "first_seen",
+    "state_since",
+    "id_since",
+    "id_position",
+    "provisional",
+    "inherited_from",
+)
+IGNORED_PLATE_FIELDS = ("last_seen",)
+
+
 def _rules_view(table: TableState) -> tuple:
-    """Lo de la mesa que usan las reglas: cada plato con todos sus campos menos
-    `last_seen` (cambia en cada lectura y nadie lo mira), y de la mesa si hay gente.
+    """Lo de la mesa que usan las reglas: cada plato con `RULES_PLATE_FIELDS`, y de
+    la mesa si hay gente.
 
     `last_ts` sí lo usan (un plato que apareció en la lectura anterior puede
     heredar los tiempos de uno retirado, `state._inherit_from_removed`), pero cambia
@@ -221,7 +232,7 @@ def _rules_view(table: TableState) -> tuple:
     nunca deja «reciente» a un plato que ya no lo es. Las lecturas sin gente cuentan
     hasta el tope que mira el motor: pasado eso, una más no cambia ningún aviso."""
     plates = frozenset(
-        tuple(v for k, v in vars(p).items() if k != "last_seen")
+        tuple(getattr(p, name) for name in RULES_PLATE_FIELDS)
         for p in table.plates.values()
     )
     new = frozenset(t for t, p in table.plates.items() if p.id_since == table.last_ts)

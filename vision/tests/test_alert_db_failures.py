@@ -194,19 +194,39 @@ def test_with_the_db_down_a_reading_does_not_force_a_save_every_time(tmp_path):
     for s in range(10, 30, 5):  # lecturas iguales, cada una 1 s después
         now[0] += 1
         p.process(obs(s, plate))
-    # el primero y un reintento al segundo (por si fue un parpadeo); con el segundo
-    # fallo la base está caída: no uno por lectura
-    assert db.save_attempts == 2
+    # solo el primero: con la base fallando, el cambio de reglas espera a los 5 s
+    assert db.save_attempts == 1
     now[0] += SAVE_STATE_EVERY_S
     p.process(obs(40, plate))
-    assert db.save_attempts == 3  # el periódico
+    assert db.save_attempts == 2  # el periódico
     p.close()
 
 
-def test_a_failed_save_of_a_rules_change_is_retried_after_a_second(tmp_path):
-    """La base parpadea justo al guardar un cambio de reglas: sigue pendiente y se
-    reintenta pasado `SAVE_RULES_EVERY_S`, no recién en el guardado de cada 5 s."""
-    from servio_vision.alerts.processor import SAVE_RULES_EVERY_S
+def test_when_the_db_comes_back_the_caught_up_readings_are_saved(tmp_path):
+    """Las lecturas que no se pudieron escribir se escriben cuando la base vuelve:
+    el estado se guarda ya, así un corte no las repite al relanzar."""
+    db = RecordingDb()
+    p = recording(tmp_path, db, Restaurant.load())
+    p._clock = lambda: 100.0  # sin guardados periódicos
+    plate = ("T1-p9", "comiendo", "izquierda")
+    p.process(obs(0, plate))
+    p.process(obs(5, plate))  # deja de ser reciente
+    saves = db.saves
+    db.fail_readings = 1
+    p.process(obs(10, plate))  # la escritura de lecturas falla
+    assert db.saves == saves
+    p.process(obs(15, plate))  # vuelve: se pone al día y se guarda
+    assert db.saves == saves + 1
+    p.process(obs(20, plate))  # al día: nada que guardar
+    assert db.saves == saves + 1
+    p.close()
+
+
+def test_a_failed_save_keeps_the_rules_change_pending_until_one_works(tmp_path):
+    """La base falla justo al guardar un cambio de reglas: el cambio sigue
+    pendiente, pero con la base fallando espera al guardado de cada 5 s (no una
+    espera de conexión por segundo); cuando anda, se guarda."""
+    from servio_vision.alerts.processor import SAVE_RULES_EVERY_S, SAVE_STATE_EVERY_S
 
     class FlakyDb(RecordingDb):
         def __init__(self) -> None:
@@ -231,8 +251,14 @@ def test_a_failed_save_of_a_rules_change_is_retried_after_a_second(tmp_path):
     p.process(obs(5, ("T1-p9", "comiendo", "izquierda")))  # el guardado falla
     assert db.saves == 1
     now[0] += SAVE_RULES_EVERY_S
-    p.process(obs(10, ("T1-p9", "comiendo", "izquierda")))  # nada nuevo: reintenta
+    p.process(obs(10, ("T1-p9", "por_terminar", "izquierda")))  # otro: espera
+    assert db.saves == 1
+    now[0] += SAVE_STATE_EVERY_S
+    p.process(obs(15, ("T1-p9", "por_terminar", "izquierda")))  # a los 5 s
     assert db.saves == 2
+    now[0] += SAVE_RULES_EVERY_S
+    p.process(obs(20, ("T1-p9", "comiendo", "izquierda")))  # anda: vuelve a 1 s
+    assert db.saves == 3
     p.close()
 
 

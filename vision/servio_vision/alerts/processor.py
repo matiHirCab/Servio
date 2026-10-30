@@ -144,10 +144,15 @@ class AlertProcessor:
             assert isinstance(update, TableUpdated)
             self._rules_dirty = self._rules_dirty or update.rules_changed
             since = self._clock() - self._saved_at
+            # con la base caída, un cambio de reglas espera al guardado de cada 5 s:
+            # no una espera de conexión por segundo hasta que vuelva
+            rules_every = (
+                SAVE_STATE_EVERY_S if self._save_failed else SAVE_RULES_EVERY_S
+            )
             if (
                 len(events) > 1  # se abrió, recordó o cerró un aviso
                 or self.db_output.save_now
-                or (self._rules_dirty and since >= SAVE_RULES_EVERY_S)
+                or (self._rules_dirty and since >= rules_every)
                 or since >= SAVE_STATE_EVERY_S
             ):
                 self._flush_state()
@@ -160,16 +165,12 @@ class AlertProcessor:
 
         Si una salida falla se loguea y siguen las otras: el núcleo ya cambió su
         estado y un evento que no llega a nadie no se repite (un aviso cerrado
-        quedaría sin editar). Salvo un aviso que el canal no pudo ni intentar mandar
-        (lanzó): el núcleo lo olvida y se abre de nuevo en la próxima lectura. Si
-        Telegram contesta que no (`send` devuelve None), el aviso queda abierto sin
-        mensaje, como siempre."""
-        event, sent = self._deliver(self.telegram, event)
+        quedaría sin editar). Un aviso que el canal no pudo mandar (lanzó) queda
+        abierto sin mensaje, igual que con Telegram caído: no se reintenta, así un
+        error que llega después de mandar no repite el aviso en cada lectura."""
+        event = self._deliver(self.telegram, event)
         if isinstance(event, AlertsOpened):
-            if not sent:
-                self.core.forget(event.alerts)
-                return []
-            self.core.attach(event.alerts)  # ya con su message_id
+            self.core.attach(event.alerts)  # ya con su message_id, si salió
         written: list[dict[str, Any]] = []
         try:
             written = self.log_output.write(event)
@@ -180,15 +181,15 @@ class AlertProcessor:
         return written
 
     @staticmethod
-    def _deliver(output: Subscriber, event: Any) -> tuple[Any, bool]:
-        """El evento como lo deja la salida, y si anduvo."""
+    def _deliver(output: Subscriber, event: Any) -> Any:
+        """El evento como lo deja la salida (si falla, como llegó)."""
         try:
-            return output.handle(event), True
+            return output.handle(event)
         except Exception:
             logger.exception(
                 "%s falló con %s", type(output).__name__, type(event).__name__
             )
-            return event, False
+            return event
 
     def close(self) -> None:
         if self.db_output is not None and self._state_dirty:
@@ -270,10 +271,9 @@ class AlertProcessor:
         assert self.db_output is not None  # hay base
         self._saved_at = self._clock()  # también si falla: no insistir cada lectura
         self.db_output.save_now = False
-        # Si falla, un cambio de reglas que estaba esperando se reintenta una vez en
-        # 1 s (un parpadeo de la base); si vuelve a fallar, la base está caída y se
-        # sigue con el guardado de cada 5 s, sin una espera de conexión por segundo.
-        rules_waiting = self._rules_dirty
+        # Si falla, el cambio de reglas sigue pendiente pero espera al guardado de
+        # cada 5 s (`process`) hasta que uno ande.
         saved = self.db_output.write("el estado", self._save_state)
-        self._rules_dirty = rules_waiting and not saved and not self._save_failed
+        if saved:
+            self._rules_dirty = False
         self._save_failed = not saved

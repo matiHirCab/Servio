@@ -208,31 +208,24 @@ def test_reminder_sends_new_message_and_keeps_original_id(tmp_path):
     assert reminder["text"] == p.notifier.sent[1]
 
 
-def test_an_alert_whose_send_raises_opens_again_next_reading(tmp_path):
-    """Si el canal lanza al abrir (no es Telegram caído, que devuelve None), el
-    aviso no queda abierto sin mensaje: la próxima lectura lo abre y lo manda."""
+def test_an_alert_whose_send_raises_stays_open_and_is_not_repeated(tmp_path):
+    """Si el canal lanza al abrir, el aviso queda abierto sin mensaje, igual que
+    con Telegram caído: no se reintenta en cada lectura (si el error llega después
+    de mandar, los mozos recibirían el mismo aviso una y otra vez)."""
 
-    class RaisesOnce(RecordingNotifier):
-        def __init__(self) -> None:
-            super().__init__()
-            self.raise_next = True
-
+    class SendsThenRaises(RecordingNotifier):
         def send(self, text):
-            if self.raise_next:
-                self.raise_next = False
-                raise RuntimeError("canal roto")
-            return super().send(text)
+            super().send(text)
+            raise RuntimeError("canal roto después de mandar")
 
-    p = AlertProcessor(DEMO, RaisesOnce(), tmp_path / "eventos.jsonl")
+    p = AlertProcessor(DEMO, SendsThenRaises(), tmp_path / "eventos.jsonl")
     _created.append(p)
-    for s in (0, 30, 60):  # a los 60 s se abre plato_vacio: el envío lanza
+    for s in (0, 30, 60, 90):  # a los 60 s se abre plato_vacio: el envío lanza
         p.process(obs(s, VACIO, COMIENDO))
-    assert p.open_alerts == {}
-    assert not [e for e in log_lines(p) if e["event"] == "alert_opened"]
-    p.process(obs(90, VACIO, COMIENDO))
     (alert,) = p.open_alerts.values()
-    assert alert.telegram_message_id == 1
+    assert alert.telegram_message_id is None
     assert p.notifier.sent == ["🧹 Mesa 1: hay platos vacíos para retirar."]
+    assert [e["event"] for e in log_lines(p)].count("alert_opened") == 1
 
 
 def test_telegram_down_keeps_alert_open_and_skips_edit(tmp_path):
