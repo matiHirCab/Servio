@@ -138,6 +138,36 @@ def test_state_is_not_saved_on_every_reading(tmp_path):
     assert db.saves == 2  # al cerrar se guarda lo último
 
 
+def test_a_rules_change_is_saved_at_most_once_per_second(tmp_path):
+    """Cambia el estado de un plato en cada lectura (sin avisos): se guarda la
+    primera, después espera `SAVE_RULES_EVERY_S`, y lo que quedó pendiente se
+    guarda en la próxima lectura pasado ese tiempo."""
+    from servio_vision.alerts.processor import SAVE_RULES_EVERY_S
+
+    db = RecordingDb()
+    p = recording(tmp_path, db)
+    now = [100.0]
+    p._clock = lambda: now[0]
+    lleno, comiendo = (
+        ("T1-p9", "lleno", "izquierda"),
+        ("T1-p9", "comiendo", "izquierda"),
+    )
+    p.process(obs(0, lleno))  # plato nuevo: se guarda
+    assert db.saves == 1
+    now[0] += SAVE_RULES_EVERY_S / 4
+    p.process(obs(5, comiendo))  # cambio de reglas, pero hace menos de 1 s
+    now[0] += SAVE_RULES_EVERY_S / 4
+    p.process(obs(10, comiendo))  # nada nuevo
+    assert db.saves == 1
+    now[0] += SAVE_RULES_EVERY_S
+    p.process(obs(15, comiendo))  # nada nuevo, pero quedó un cambio sin guardar
+    assert db.saves == 2
+    now[0] += SAVE_RULES_EVERY_S
+    p.process(obs(20, comiendo))  # nada pendiente: no se guarda
+    assert db.saves == 2
+    p.close()
+
+
 def test_state_is_saved_right_away_when_an_alert_opens(tmp_path):
     db = RecordingDb()
     p = recording(tmp_path, db)

@@ -28,7 +28,7 @@ from servio_vision.alerts.bot import Bot, BotChannel, send_metrics
 from servio_vision.alerts.config import AlertConfig
 from servio_vision.alerts.core import AlertCore, AlertsOpened, TableUpdated
 from servio_vision.alerts.feedback import FeedbackDesk
-from servio_vision.alerts.models import Alert, TableObservation, iso
+from servio_vision.alerts.models import Alert, TableObservation
 from servio_vision.alerts.notify import Notifier
 from servio_vision.alerts.outputs import (
     DatabaseOutput,
@@ -37,11 +37,11 @@ from servio_vision.alerts.outputs import (
     ObservationReceived,
     Subscriber,
     TelegramOutput,
-    log_lines,
 )
 from servio_vision.alerts.state import TableState
 from servio_vision.db import Database
 from servio_vision.restaurant import Restaurant
+from servio_vision.timestamps import iso
 
 logger = logging.getLogger(__name__)
 
@@ -49,9 +49,12 @@ logger = logging.getLogger(__name__)
 RESUME_MAX_AGE_S = 600.0
 # El estado se guarda cada tanto y no en cada lectura (una vuelta por mesa, con la
 # base remota son idas y vueltas del loop). Se guarda al instante si se abre o cierra
-# un aviso, si aparece un plato o si cambia algo que usan las reglas: así un corte
-# brusco solo pierde lecturas iguales a la anterior. `close()` guarda lo último.
+# un aviso o si aparece un plato. Si cambia algo que usan las reglas (el estado de un
+# plato, si hay gente), a lo sumo una vez por `SAVE_RULES_EVERY_S`: un corte brusco
+# pierde como mucho ese último segundo de cambios, y una sala llena no escribe en cada
+# lectura. Si no, cada `SAVE_STATE_EVERY_S`. `close()` guarda lo último.
 SAVE_STATE_EVERY_S = 5.0
+SAVE_RULES_EVERY_S = 1.0
 
 
 class AlertProcessor:
@@ -95,12 +98,7 @@ class AlertProcessor:
                     )
                 self.bot = Bot(notifier, self.feedback, commands)
                 self.bot.start()
-        # El canal va primero y aparte: le pone el `message_id` a los avisos, y el
-        # núcleo y las demás salidas (log, base) los tienen que ver ya con él.
         self.telegram = TelegramOutput(notifier, self.feedback)
-        self._outputs: list[Subscriber] = [self.log_output]
-        if self.db_output is not None:
-            self._outputs.append(self.db_output)
         # Marca dónde empieza la corrida (el log se agrega) y con qué umbrales: replay.py
         # corta el archivo acá y reproduce con la misma config.
         self.log.write(
@@ -111,7 +109,9 @@ class AlertProcessor:
             }
         )
         self._state_dirty = False  # hay estado sin guardar
-        self._saved_at = float("-inf")  # time.monotonic() del último intento
+        self._rules_dirty = False  # cambió algo de las reglas desde el último guardado
+        self._clock = time.monotonic  # los tests lo adelantan
+        self._saved_at = float("-inf")  # `_clock()` del último intento
         if resume and db is not None:
             self._resume(db, resume_max_age_s)
 
@@ -129,31 +129,44 @@ class AlertProcessor:
         La observación va al log antes de aplicarla (queda aunque el núcleo la
         rechace) y cada aviso apenas se manda o edita.
         """
-        written = log_lines(self._dispatch(ObservationReceived(obs)))
+        written = self._dispatch(ObservationReceived(obs))
         events = self.core.apply(obs)  # ValueError si el ts va hacia atrás
         for event in events:
-            written += log_lines(self._dispatch(event))
+            written += self._dispatch(event)
         if self.db_output is not None:
             self._state_dirty = True
             update = events[0]
             assert isinstance(update, TableUpdated)
-            alerts_changed = len(events) > 1
-            due = time.monotonic() - self._saved_at >= SAVE_STATE_EVERY_S
-            if alerts_changed or update.rules_changed or self.db_output.save_now or due:
+            self._rules_dirty = self._rules_dirty or update.rules_changed
+            since = self._clock() - self._saved_at
+            if (
+                len(events) > 1  # se abrió, recordó o cerró un aviso
+                or self.db_output.save_now
+                or (self._rules_dirty and since >= SAVE_RULES_EVERY_S)
+                or since >= SAVE_STATE_EVERY_S
+            ):
                 self._flush_state()
         return written
 
-    def _dispatch(self, event: Any) -> Any:
-        """Un evento al canal y después a las demás salidas; devuelve el evento como
-        lo vieron (con el `message_id`). Si una falla se loguea y siguen las otras:
-        el núcleo ya cambió su estado y un evento que no llega a nadie no se repite
-        (un aviso cerrado quedaría sin editar)."""
+    def _dispatch(self, event: Any) -> list[dict[str, Any]]:
+        """Un evento a las salidas, en orden: el canal, que le pone el `message_id`
+        a los avisos (el núcleo, el log y la base lo tienen que ver ya con él), el log
+        y la base. Devuelve las líneas que llegaron al log.
+
+        Si una salida falla se loguea y siguen las otras: el núcleo ya cambió su
+        estado y un evento que no llega a nadie no se repite (un aviso cerrado
+        quedaría sin editar)."""
         event = self._deliver(self.telegram, event)
         if isinstance(event, AlertsOpened):
             self.core.attach(event.alerts)  # ya con su message_id
-        for output in self._outputs:
-            event = self._deliver(output, event)
-        return event
+        written: list[dict[str, Any]] = []
+        try:
+            written = self.log_output.write(event)
+        except Exception:
+            logger.exception("No se pudo escribir %s en el log", type(event).__name__)
+        if self.db_output is not None:
+            self._deliver(self.db_output, event)
+        return written
 
     @staticmethod
     def _deliver(output: Subscriber, event: Any) -> Any:
@@ -239,6 +252,7 @@ class AlertProcessor:
 
     def _flush_state(self) -> None:
         assert self.db_output is not None  # hay base
-        self._saved_at = time.monotonic()  # también si falla: no insistir cada lectura
+        self._saved_at = self._clock()  # también si falla: no insistir cada lectura
         self.db_output.save_now = False
+        self._rules_dirty = False
         self.db_output.write("el estado", self._save_state)

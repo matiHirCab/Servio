@@ -178,17 +178,18 @@ class TelegramNotifier:
             deadline_s=self._deadline_s,
         )
 
-    def get_updates(self, offset: int | None, timeout: int = 20) -> list[dict]:
-        """Toques de botones y mensajes nuevos (long polling); [] si falla."""
+    def get_updates(self, offset: int | None, timeout: int = 20) -> list[dict] | None:
+        """Toques de botones y mensajes nuevos (long polling); None si falla (no es
+        lo mismo que "no hay nada": el bot lo usa para saber desde dónde seguir)."""
         payload: dict[str, Any] = {
             "timeout": timeout,
             "allowed_updates": ["callback_query", "message"],
         }
         if offset is not None:
             payload["offset"] = offset
-        # sin reintentos acá: el bucle de feedback.py ya repite el long polling
+        # sin reintentos acá: el bucle del bot (bot.py) ya repite el long polling
         result = self._call("getUpdates", payload, timeout=timeout + 10, attempts=1)
-        return result if isinstance(result, list) else []
+        return result if isinstance(result, list) else None
 
     def is_group(self, chat_id: object) -> bool:
         return str(chat_id) == str(self._chat_id)

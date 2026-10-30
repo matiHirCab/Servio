@@ -93,6 +93,9 @@ class AlertCore:
         self.restaurant = restaurant
         self.tables: dict[str, TableState] = {}
         self.open_alerts: dict[str, Alert] = {}
+        # mesa → lo que usaron las reglas en la última lectura (`_rules_view`): se
+        # compara con la nueva sin recalcular la anterior
+        self._views: dict[str, tuple] = {}
 
     def apply(self, obs: TableObservation) -> list[Event]:
         """Aplica una observación; `ValueError` si su ts va hacia atrás."""
@@ -103,9 +106,10 @@ class AlertCore:
             self.restaurant.see_plates(
                 obs.table_id, [p.track_id for p in table.active_plates()]
             )
-        events: list[Event] = [
-            TableUpdated(obs, table, _rules_view(prev) != _rules_view(table))
-        ]
+        view = _rules_view(table)
+        changed = self._views.get(obs.table_id) != view
+        self._views[obs.table_id] = view
+        events: list[Event] = [TableUpdated(obs, table, changed)]
 
         result = evaluate(table, obs.ts, self.config, self.open_alerts.values())
         grouped: list[Alert] = []

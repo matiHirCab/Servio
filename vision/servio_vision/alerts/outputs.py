@@ -32,11 +32,12 @@ from servio_vision.alerts.core import (
     TableUpdated,
 )
 from servio_vision.alerts.feedback import FeedbackDesk, Question
-from servio_vision.alerts.models import Alert, TableObservation, iso
+from servio_vision.alerts.models import Alert, TableObservation
 from servio_vision.alerts.notify import Notifier
 from servio_vision.alerts.state import TableState
 from servio_vision.db import Database
 from servio_vision.restaurant import Restaurant
+from servio_vision.timestamps import iso
 
 logger = logging.getLogger(__name__)
 
@@ -131,17 +132,13 @@ class TelegramOutput:
             self.resolved_ids.add(alert.id)
             if message_id not in message_ids:
                 message_ids.append(message_id)
-        edited = {
+        # clave opcional: un aviso sin mensaje busca None y no encuentra nada
+        edited: dict[int | None, str | None] = {
             message_id: self._edit_or_log(message_id, event)
             for message_id in message_ids
         }
         # Sin mensaje (Telegram falló al abrir) no hubo nada que editar: text None.
-        texts = {
-            a.id: edited.get(a.telegram_message_id)
-            if a.telegram_message_id is not None
-            else None
-            for a in event.alerts
-        }
+        texts = {a.id: edited.get(a.telegram_message_id) for a in event.alerts}
         return replace(event, texts=texts)
 
     def _edit_or_log(self, message_id: int, event: AlertsResolved) -> str | None:
@@ -215,9 +212,16 @@ class EventLogOutput:
         self.log = log
 
     def handle(self, event: AnyEvent) -> AnyEvent:
+        self.write(event)
+        return event
+
+    def write(self, event: AnyEvent) -> list[dict[str, Any]]:
+        """Escribe las líneas del evento; devuelve las que llegaron al archivo."""
+        written = []
         for line in log_lines(event):
             self.log.write(line)
-        return event
+            written.append(line)
+        return written
 
 
 def log_lines(event: AnyEvent) -> list[dict[str, Any]]:
@@ -274,9 +278,11 @@ class DatabaseOutput:
         self._absent: dict[str, int] = {}
         # pasó algo que no puede esperar al próximo guardado del estado
         self.save_now = False
-        # (escritura, tipo de error) → cuándo se logueó, y cuántos fallos se callaron
+        # (escritura, tipo de error) → cuándo se logueó, y cuántos fallos se callaron.
+        # Con lock: también escribe el hilo del bot (las respuestas de los mozos).
         self._logged: dict[tuple[str, str], float] = {}
         self._muted: dict[tuple[str, str], int] = {}
+        self._log_lock = threading.Lock()
 
     def handle(self, event: AnyEvent) -> AnyEvent:
         if isinstance(event, TableUpdated):
@@ -320,12 +326,13 @@ class DatabaseOutput:
             # por escritura y por tipo de error: una causa nueva no se calla
             key = (what, type(error).__name__)
             now = time.monotonic()
-            last = self._logged.get(key)
-            if last is not None and now - last < DB_LOG_EVERY_S:
-                self._muted[key] = self._muted.get(key, 0) + 1
-                return
-            self._logged[key] = now
-            muted = self._muted.pop(key, 0)
+            with self._log_lock:
+                last = self._logged.get(key)
+                if last is not None and now - last < DB_LOG_EVERY_S:
+                    self._muted[key] = self._muted.get(key, 0) + 1
+                    return
+                self._logged[key] = now
+                muted = self._muted.pop(key, 0)
             more = f" (y {muted} fallos más desde el último aviso)" if muted else ""
             logger.exception("No se pudo guardar %s en la base%s", what, more)
 

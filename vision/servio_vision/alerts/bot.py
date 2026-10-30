@@ -24,6 +24,10 @@ from servio_vision.restaurant import Restaurant
 
 logger = logging.getLogger(__name__)
 
+# Al arrancar sin red: espera entre intentos de saber desde dónde escuchar.
+RETRY_START_S = 1.0
+RETRY_START_MAX_S = 30.0
+
 
 @runtime_checkable
 class BotChannel(Protocol):
@@ -31,7 +35,9 @@ class BotChannel(Protocol):
     del grupo (lo implementa `TelegramNotifier`; la consola no se escucha). Lo que
     hace falta para contestar un botón lo usa `FeedbackDesk`."""
 
-    def get_updates(self, offset: int | None, timeout: int = 20) -> list[dict]: ...
+    def get_updates(
+        self, offset: int | None, timeout: int = 20
+    ) -> list[dict] | None: ...  # None si falló
 
     def is_group(self, chat_id: object) -> bool: ...
 
@@ -60,13 +66,26 @@ class Bot:
     def stop(self) -> None:
         self._stop.set()
 
+    def _start_offset(self) -> int | None:
+        """Desde dónde escuchar: después de lo que quedó pendiente de corridas
+        anteriores. Si el canal no contesta, se insiste: sin saberlo, la primera
+        lectura traería todo lo viejo (cada `/metricas` de ayer se repetiría)."""
+        wait = RETRY_START_S
+        while not self._stop.is_set():
+            pending = self.channel.get_updates(offset=-1, timeout=0)
+            if pending is not None:
+                return pending[-1]["update_id"] + 1 if pending else None
+            self._stop.wait(wait)
+            wait = min(wait * 2, RETRY_START_MAX_S)
+        return None
+
     def _listen(self) -> None:
-        # Arranca después de lo que quedó pendiente de corridas anteriores.
-        pending = self.channel.get_updates(offset=-1, timeout=0)
-        offset = pending[-1]["update_id"] + 1 if pending else None
+        offset = self._start_offset()
+        if self._stop.is_set():
+            return
         logger.info("Escuchando respuestas de los mozos en Telegram")
         while not self._stop.is_set():
-            updates = self.channel.get_updates(offset)
+            updates = self.channel.get_updates(offset) or []  # None: falló, sigue
             for update in updates:
                 offset = update["update_id"] + 1
                 try:

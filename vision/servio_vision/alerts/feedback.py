@@ -23,8 +23,8 @@ from datetime import UTC, datetime
 from typing import Any
 
 from servio_vision.alerts import messages
-from servio_vision.alerts.models import iso
 from servio_vision.restaurant import OTHER_ANSWER
+from servio_vision.timestamps import iso
 
 logger = logging.getLogger(__name__)
 

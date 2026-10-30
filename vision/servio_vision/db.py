@@ -58,6 +58,7 @@ from sqlalchemy import (
 )
 
 from servio_vision import DEFAULT_LOCAL, VISION_DIR
+from servio_vision.timestamps import iso
 
 logger = logging.getLogger(__name__)
 
@@ -401,7 +402,7 @@ class Database:
                     mesa_id=table_id,
                     plato_id=dish_id,
                     track_id=track_id,
-                    servido_at=_iso(at),
+                    servido_at=iso(at),
                     origen="camara",
                 )
             )
@@ -425,7 +426,7 @@ class Database:
         """
         if not readings and not gone:
             return
-        ts = _iso(at)
+        ts = iso(at)
         ps = platos_servidos.c
         with self._lock, self._engine.begin() as conn:
             for served_id, state, fill_ratio, changed in readings:
@@ -465,7 +466,7 @@ class Database:
             "mesa_id": table_id,
             "mozo_id": self._waiter_of(table_id),
             "plato_servido_id": served_id,
-            "abierto_at": _iso(at),
+            "abierto_at": iso(at),
             "resuelto_at": None,
             "origen": "camara",
             "motivo_cierre": None,
@@ -485,7 +486,7 @@ class Database:
         self._write(
             avisos.update()
             .where(avisos.c.local_id == self.local_id, avisos.c.id == alert_id)
-            .values(resuelto_at=_iso(at), motivo_cierre=reason)
+            .values(resuelto_at=iso(at), motivo_cierre=reason)
         )
 
     def feedback(self, event: dict) -> None:
@@ -508,7 +509,7 @@ class Database:
         """Guarda la foto del estado de esta casa (pisa la anterior). `kind`: la de los
         avisos (`"alertas"`) o la del pipeline (`"pipeline"`): cada una en su tabla."""
         table = STATE_TABLES[kind]
-        row = {"local_id": self.local_id, "guardado_at": _iso(at), "estado": state}
+        row = {"local_id": self.local_id, "guardado_at": iso(at), "estado": state}
         with self._lock, self._engine.begin() as conn:
             conn.execute(
                 self._upsert(table)
@@ -592,7 +593,7 @@ def _history_rows(
                     "mesa_id": r["mesa"],
                     "plato_id": dish_ids.get(r["plato"]),
                     "track_id": None,
-                    "servido_at": _iso(at),
+                    "servido_at": iso(at),
                     "origen": "historial",
                 }
             )
@@ -609,8 +610,8 @@ def _history_rows(
                     "mesa_id": r["mesa"],
                     "mozo_id": waiter,
                     "served_key": served_key,
-                    "abierto_at": _iso(at),
-                    "resuelto_at": _iso(at + timedelta(minutes=5)),
+                    "abierto_at": iso(at),
+                    "resuelto_at": iso(at + timedelta(minutes=5)),
                     "origen": "historial",
                     "motivo_cierre": None,
                 }
@@ -624,7 +625,7 @@ def _history_rows(
                     "texto": r["respuesta"],
                     "escrita": 0,
                     "segundos": r["segundos_respuesta"],
-                    "respondido_at": _iso(
+                    "respondido_at": iso(
                         at + timedelta(seconds=r["segundos_respuesta"])
                     ),
                 }
@@ -638,8 +639,8 @@ def _history_rows(
                     "mesa_id": r["mesa"],
                     "mozo_id": waiter,
                     "served_key": None,
-                    "abierto_at": _iso(at),
-                    "resuelto_at": _iso(
+                    "abierto_at": iso(at),
+                    "resuelto_at": iso(
                         at + timedelta(minutes=r["minutos_hasta_atender"])
                     ),
                     "origen": "historial",
@@ -663,7 +664,3 @@ def _bind(sql: str, params: Mapping[str, Any] | None):
             "params: un dict con nombres (`WHERE id = :mesa`), no posicionales"
         )
     return sa.text(sql), dict(params)
-
-
-def _iso(at: datetime) -> str:
-    return at.isoformat().replace("+00:00", "Z")

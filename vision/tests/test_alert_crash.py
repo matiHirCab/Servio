@@ -4,15 +4,22 @@ Se corta el proceso sin `close()` (como un corte de luz: no se guarda lo último
 se relanza con `resume=True` sobre la misma base y se sigue con el resto del
 fixture. Los avisos, sus mensajes y sus ediciones tienen que ser los mismos que en
 una corrida sin corte, corte donde se corte.
+
+En producción un cambio de reglas se guarda a lo sumo una vez por segundo
+(`SAVE_RULES_EVERY_S`): un corte puede perder ese último segundo, y eso se acepta.
+Acá ese tope va en 0 y el guardado periódico se apaga: lo que se prueba es que los
+guardados por evento (avisos, platos nuevos, cambios de reglas) alcanzan.
 """
 
 import itertools
 import json
+import math
 from pathlib import Path
 
 import pytest
 
 from servio_vision import alerts
+from servio_vision.alerts import processor
 from servio_vision.alerts.processor import AlertProcessor
 from servio_vision.db import Database
 from servio_vision.restaurant import Restaurant
@@ -24,6 +31,12 @@ ALERT_EVENTS = {"alert_opened", "alert_reminder", "alert_resolved"}
 @pytest.fixture(autouse=True)
 def no_global_processor(monkeypatch):
     monkeypatch.setattr(alerts, "_processor", None)
+
+
+@pytest.fixture(autouse=True)
+def only_event_saves(monkeypatch):
+    monkeypatch.setattr(processor, "SAVE_RULES_EVERY_S", 0.0)
+    monkeypatch.setattr(processor, "SAVE_STATE_EVERY_S", math.inf)
 
 
 class Telegram:
