@@ -19,7 +19,7 @@
 
 | Carpeta | Dueño |
 |---|---|
-| `vision/servio_vision/classifiers/` (salvo `fake.py`), `tracking.py`, `prompt.py`, `tools/{build_eval_set,eval}.py`, `tools/train_yolo.ipynb` | Tomás |
+| `vision/servio_vision/classifiers/` (salvo `fake.py`), `vision/servio_vision/llm/`, `tracking.py`, `prompt.py`, `tools/{build_eval_set,eval}.py`, `tools/train_yolo.ipynb` | Tomás |
 | `vision/servio_vision/schemas.py`, `classifier.py` | Tomás (contrato con Jessica: cambios con su revisión) |
 | `vision/servio_vision/alerts/`, `tools/replay.py`, `fixtures/` | Matías |
 | `vision/main.py`, `servio_vision/{settings,cli,app,pipeline,capture,privacy,recording,zones,smoothing,tables}.py`, `classifiers/fake.py`, `tools/draw_zones.py`, `tools/{vista_demo,resumen}.py`, `config/` | Jessica |

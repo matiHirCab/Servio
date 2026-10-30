@@ -25,7 +25,7 @@ No hay backend web ni dashboard. El estado vive en memoria; se guarda un log en 
 |---|---|---|---|
 | Configuración y armado | `servio_vision/{settings,cli,app}.py`, `vision/main.py`, `vision/config/servio.example.toml` | Un `Settings` por casa (flags > toml > `.env`), y el armado del pipeline a partir de él | Jessica |
 | Pipeline | `servio_vision/{pipeline,capture,privacy,zones,smoothing,recording}.py` | Lee la fuente, difumina caras, recorta cada mesa, clasifica, suaviza, graba si se pidió | Jessica |
-| Clasificador | `servio_vision/classifiers/` | YOLO encuentra los platos; Claude estima cuánta comida queda | Tomás |
+| Clasificador | `servio_vision/classifiers/` y `servio_vision/llm/` (el modelo, un archivo por proveedor) | YOLO encuentra los platos; Claude estima cuánta comida queda | Tomás |
 | Reglas y avisos | `servio_vision/alerts/` | Estado de cada mesa, reglas, envío a Telegram, log | Matías |
 
 Dueños por carpeta en [09-convenciones.md](09-convenciones.md).

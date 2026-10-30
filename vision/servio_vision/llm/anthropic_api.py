@@ -7,13 +7,13 @@ from servio_vision.llm.base import (
     ANTHROPIC_FORMAT,
     ClaudeCallError,
     PermanentCallError,
-    PlatesRequest,
     Provider,
+    ProviderRequest,
     api_error,
 )
 
 
-def call(request: PlatesRequest, model: str, timeout_s: float) -> tuple[dict, dict]:
+def call(request: ProviderRequest, model: str, timeout_s: float) -> tuple[dict, dict]:
     """API de Anthropic con salida estructurada (`output_config.format`)."""
     try:
         import anthropic

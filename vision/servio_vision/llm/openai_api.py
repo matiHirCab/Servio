@@ -12,8 +12,8 @@ from servio_vision.llm.base import (
     OPENAI_FORMAT,
     ClaudeCallError,
     PermanentCallError,
-    PlatesRequest,
     Provider,
+    ProviderRequest,
     api_error,
 )
 
@@ -116,7 +116,7 @@ def _answers_to_report(
             {
                 "index": i,
                 "fill_ratio": _fill_ratio(fill, f"fill_{i}"),
-                # el rango lo valida _parse (pydantic)
+                # el rango lo valida parsing.parse_plates (pydantic)
                 "confidence": _number(
                     _get(fill, "confidence"),
                     f"fill_{i}.confidence",
@@ -130,7 +130,7 @@ def _answers_to_report(
     return {"plates": plates, "people_present": yes("people_present")}
 
 
-def call(request: PlatesRequest, model: str, timeout_s: float) -> tuple[dict, dict]:
+def call(request: ProviderRequest, model: str, timeout_s: float) -> tuple[dict, dict]:
     """Decisions API de OpenAI (`POST /v1/decisions`) con `OPENAI_API_KEY`.
 
     El prompt va primero como texto (la API no tiene system prompt) y sin el pedido

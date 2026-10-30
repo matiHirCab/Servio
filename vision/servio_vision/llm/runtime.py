@@ -23,7 +23,8 @@ from servio_vision.llm.base import (
     EstimateRequest,
     Format,
     PermanentCallError,
-    PlatesRequest,
+    ProviderRequest,
+    UnknownProviderError,
 )
 from servio_vision.llm.parsing import (
     PlatesReport,
@@ -72,6 +73,9 @@ def reset_breakers() -> None:
 
 
 # Cuánto se llamó hoy y el tope (`CLAUDE_MAX_CALLS_PER_DAY`). Ver classifiers/usage.py.
+# El contador y los cortacircuitos son del proceso, no de cada `ProviderEstimator`: dos
+# estimadores comparten el conteo del día (el tope es uno solo por local) y el
+# cortacircuito de su proveedor. Los tests los limpian con `reset_state()`.
 _meter = UsageMeter()
 
 
@@ -119,27 +123,30 @@ def reset_state() -> None:
 
 
 def _resolve(
-    provider: str | None, model: str | None, timeout_s: float | None
-) -> tuple[settings.Settings, str, str, float]:
-    """Proveedor, modelo y timeout: lo que no vino por parámetro (app.py lo pasa todo)
-    sale de la configuración."""
-    cfg = settings.current()  # barato: la configuración activa o la del entorno
+    provider: str | None,
+    model: str | None,
+    timeout_s: float | None,
+    cfg: settings.Settings | None = None,
+) -> tuple[str, str, float]:
+    """Proveedor, modelo y timeout: lo que no vino por parámetro sale de `cfg` (o, sin
+    ella, de la configuración activa)."""
+    cfg = cfg or settings.current()  # barato: la activa o la del entorno
     provider = provider or cfg.claude_provider
     if provider not in registry.PROVIDERS:
-        raise ValueError(
+        raise UnknownProviderError(
             f"CLAUDE_PROVIDER desconocido: {provider!r}. "
             f"Opciones: {sorted(registry.PROVIDERS)}"
         )
     model = model or cfg.model_for(provider)
     timeout_s = cfg.timeout_for(provider) if timeout_s is None else timeout_s
-    return cfg, provider, model, timeout_s
+    return provider, model, timeout_s
 
 
 _Parsed = TypeVar("_Parsed")
 
 
 def _call_model(
-    request: PlatesRequest,
+    request: ProviderRequest,
     *,
     provider: str,
     model: str,
@@ -228,9 +235,10 @@ class ProviderEstimator:
         provider: str | None = None,
         model: str | None = None,
         timeout_s: float | None = None,
+        cfg: settings.Settings | None = None,
     ) -> None:
-        self._cfg, self.provider, self.model, self.timeout_s = _resolve(
-            provider, model, timeout_s
+        self.provider, self.model, self.timeout_s = _resolve(
+            provider, model, timeout_s, cfg
         )
 
     @property
@@ -252,7 +260,7 @@ class ProviderEstimator:
         references = request.references or [None] * len(jpegs)
         content = build_content(jpegs, request.table_id, references, self._format)
         return self._call(
-            PlatesRequest(content, [r is not None for r in references]),
+            ProviderRequest(content, [r is not None for r in references]),
             request.table_id,
             lambda data: parse_plates(data, len(jpegs)),
         )
@@ -268,7 +276,7 @@ class ProviderEstimator:
             fmt.text(prompt.table_whole_caption(table_id)),
             fmt.image(base64.standard_b64encode(table_jpeg).decode()),
         ]
-        request = PlatesRequest(
+        request = ProviderRequest(
             content,
             [],
             system=prompt.table_system_prompt(),
@@ -277,14 +285,14 @@ class ProviderEstimator:
         return self._call(request, table_id, parse_table)
 
     def _call(
-        self, request: PlatesRequest, table_id: str, parse: Callable[[dict], _Parsed]
+        self, request: ProviderRequest, table_id: str, parse: Callable[[dict], _Parsed]
     ) -> _Parsed | None:
         return _call_model(
             request,
             provider=self.provider,
             model=self.model,
             timeout_s=self.timeout_s,
-            cap=self._cfg.claude_max_calls_per_day,
+            cap=settings.current().claude_max_calls_per_day,  # el de ahora, no el de crearlo
             table_id=table_id,
             parse=parse,
         )
@@ -294,6 +302,8 @@ def make_estimator(
     provider: str | None = None,
     model: str | None = None,
     timeout_s: float | None = None,
+    cfg: settings.Settings | None = None,
 ) -> ProviderEstimator:
-    """El estimador de platos del proveedor elegido (por defecto, el de la configuración)."""
-    return ProviderEstimator(provider, model, timeout_s)
+    """El estimador de platos del proveedor elegido (por defecto, el de `cfg` o, sin
+    ella, el de la configuración activa)."""
+    return ProviderEstimator(provider, model, timeout_s, cfg)

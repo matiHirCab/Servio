@@ -20,7 +20,7 @@ from servio_vision.llm import (
 from servio_vision.llm.base import ClaudeCallError
 
 JPEG = b"\xff\xd8fake"
-REQUEST = base.PlatesRequest(runtime.build_content([JPEG], "T1"), [False])
+REQUEST = base.ProviderRequest(runtime.build_content([JPEG], "T1"), [False])
 
 
 def estimate_plates(plates, table_id, *, references=None, **kwargs):
@@ -740,3 +740,15 @@ def test_a_new_provider_is_one_registry_entry(monkeypatch):
     report = estimate_plates([JPEG] * 2, "T1", provider="otro", model="m", timeout_s=3)
     assert [p.index for p in report.plates] == [1, 2]
     assert seen == [("m", 3)]
+
+
+def test_main_reports_a_bad_provider_and_a_missing_image(monkeypatch, capsys, tmp_path):
+    from servio_vision.llm import __main__ as smoke
+
+    monkeypatch.delitem(registry.PROVIDERS, "cli")  # el de la configuración por defecto
+    jpeg = tmp_path / "plato.jpg"
+    jpeg.write_bytes(JPEG)
+    assert smoke.main([str(jpeg)]) == 2
+    assert "CLAUDE_PROVIDER desconocido" in capsys.readouterr().out
+    monkeypatch.undo()
+    assert smoke.main([str(tmp_path / "no-existe.jpg")]) == 2

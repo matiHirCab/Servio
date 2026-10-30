@@ -45,8 +45,10 @@ class ClaudeClassifier:
         model: str | None = None,
         timeout_s: float | None = None,
         person_detector: people.PersonDetector | None = None,
+        cfg: settings.Settings | None = None,
     ) -> None:
-        if not settings.current().claude_allow_table_images:
+        # la puerta de privacidad se mira en la misma configuración que el resto
+        if not (cfg or settings.current()).claude_allow_table_images:
             raise ClassifierUnavailable(
                 "El clasificador claude manda la imagen de la mesa entera al modelo, y "
                 "por privacidad (C-3, docs/legal-uruguay.md) hoy al modelo solo van "
@@ -60,7 +62,10 @@ class ClaudeClassifier:
                 "pixelar a los comensales. pip install -r requirements-yolo.txt"
             )
         self.people: people.PersonDetector = detector
-        self.estimator = llm.make_estimator(provider, model, timeout_s)
+        try:
+            self.estimator = llm.make_estimator(provider, model, timeout_s, cfg)
+        except llm.UnknownProviderError as e:
+            raise ClassifierUnavailable(str(e)) from e
         self._next_id: dict[str, int] = {}  # por mesa; el número solo sube
 
     def classify(

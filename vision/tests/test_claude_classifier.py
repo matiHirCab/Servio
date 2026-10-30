@@ -197,3 +197,21 @@ def test_the_openai_provider_cannot_read_a_whole_table():
     encuentre los platos de una mesa entera."""
     c = ClaudeClassifier(provider="openai", person_detector=FakePeople())
     assert c.classify(table_jpeg(), "T1", []) is None
+
+
+def test_unknown_provider_is_classifier_unavailable():
+    """Un proveedor que no existe es un `ClassifierUnavailable` (que el arranque
+    sabe mostrar), no un `ValueError` suelto."""
+    with pytest.raises(ClassifierUnavailable, match="CLAUDE_PROVIDER desconocido"):
+        ClaudeClassifier(provider="bedrock", person_detector=FakePeople())
+
+
+def test_the_privacy_gate_reads_the_given_config(monkeypatch):
+    """Con `cfg`, la puerta de la mesa entera se mira ahí y no en la configuración
+    activa: un `cfg` con el flag apagado no manda la mesa aunque el entorno lo permita."""
+    from servio_vision.settings import Settings
+
+    monkeypatch.setenv("CLAUDE_ALLOW_TABLE_IMAGES", "true")  # la activa lo permite
+    off = Settings.load(claude_allow_table_images=False)
+    with pytest.raises(ClassifierUnavailable, match="CLAUDE_ALLOW_TABLE_IMAGES"):
+        ClaudeClassifier(person_detector=FakePeople(), cfg=off)
