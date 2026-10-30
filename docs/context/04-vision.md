@@ -6,7 +6,7 @@
 
 - **YOLO** (`yolov8n` entrenado con el dataset de Roboflow): encuentra cada plato rápido, en la laptop con CPU, y da su caja. Con la caja se mantiene el mismo id para el mismo plato entre lecturas y se recorta el plato a buena resolución aunque haya muchas mesas en el plano. Solo distingue `food` / `finished_food`, así que no alcanza para los estados intermedios.
 - **Claude** (Haiku por `claude -p` con la suscripción del equipo, o la API de Anthropic si hay key): mira el recorte de cada plato y estima `fill_ratio` (cuánta comida queda), que da los 4 estados sin entrenar nada.
-- **Plan B:** si Claude no responde, el `hybrid` usa la clase de YOLO (`food` → `lleno`, `finished_food` → `vacio`). Si YOLO no está entrenado a tiempo, se usa `claude` con el recorte de la mesa entera.
+- **Plan B:** si Claude no responde, el `hybrid` usa la clase de YOLO (`food` → `lleno`, `finished_food` → `vacio`). Si YOLO no está entrenado a tiempo, existe `claude` con el recorte de la mesa entera, pero **manda la mesa al modelo** (lo que C-3 evita), así que es opt-in (`CLAUDE_ALLOW_TABLE_IMAGES=true`, con el detector de personas para pixelar); el prompt es `vision/prompts/claude_table.txt`. Sin pesos entrenados, `hybrid` ya anda con YOLOE.
 
 ## Clasificador `hybrid` (el de la demo)
 

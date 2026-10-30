@@ -32,10 +32,15 @@ def api_error(prefix: str, error: Exception) -> ClaudeCallError:
 @dataclass(frozen=True)
 class PlatesRequest:
     """Lo que se manda por una mesa: el contenido ya armado y, por plato, si lleva
-    referencia (la Decisions API pregunta same_plate solo para esos)."""
+    referencia (la Decisions API pregunta same_plate solo para esos).
+
+    `system` y `schema`: otro prompt y otro esquema de respuesta. Sin ellos van los de
+    los recortes de plato; el clasificador `claude` (la mesa entera) pasa los suyos."""
 
     content: list
     has_reference: list[bool]
+    system: str | None = None
+    schema: dict | None = None
 
 
 @dataclass(frozen=True)
