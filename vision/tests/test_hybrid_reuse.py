@@ -109,7 +109,48 @@ def test_an_unchanged_table_reuses_the_answer_and_refreshes_every_few(claude):
         items = report.items
         fills.append(report.items[0].fill_ratio)
     assert len(claude.calls) == calls_after_warm_up + 1  # solo la de refresco
-    assert fills == [0.9] * (hybrid.MAX_REUSES + 1)
+    assert fills == [0.9] * (hybrid.MAX_REUSES + 1)  # la misma lectura todo el rato
+
+
+def test_a_reused_reading_is_not_new_evidence(claude):
+    """Reutilizar la respuesta ahorra la llamada, pero no cuenta como una lectura
+    más: el plato conserva su último estado y va `visible=False` (el suavizado no
+    lo cuenta)."""
+    clf = make()
+    items = warm_up(clf, table())
+    report = read(clf, table(), items)  # se reutiliza
+    (item,) = report.items
+    assert item.visible is False
+    assert (item.state, item.fill_ratio) == ("lleno", 0.9)
+
+
+def test_a_single_answer_cannot_flip_the_smoothed_state(claude):
+    """Una respuesta (quizá equivocada) reutilizada tres veces eran cuatro lecturas
+    iguales: bastaban para que el suavizado aceptara un salto lleno → vacío."""
+    from servio_vision.smoothing import TableSmoother
+
+    smoother = TableSmoother(None, readings=2, hard_readings=3, min_confidence=0.8)
+    clf = make()
+    previous = []
+    for _ in range(hybrid.REFERENCE_READINGS):
+        previous = smoother.update(read(clf, table(), previous).items)
+    assert previous[0].state == "lleno"
+
+    claude.answer = answer(0.02)  # el modelo ve el plato vacío de golpe
+    changed = table(mark=(30, 30, 80, 90))
+    calls = len(claude.calls)
+    for _ in range(1 + hybrid.MAX_REUSES):  # una real y tres reutilizadas
+        previous = smoother.update(read(clf, changed, previous).items)
+    assert len(claude.calls) == calls + 1
+    assert previous[0].state == "lleno"  # una sola lectura: sin confirmar
+
+    # un salto necesita tres lecturas de verdad: llegan con los refrescos
+    for _ in range(3 * (1 + hybrid.MAX_REUSES)):
+        previous = smoother.update(read(clf, changed, previous).items)
+        if previous[0].state == "vacio":
+            break
+    assert previous[0].state == "vacio"
+    assert len(claude.calls) == calls + 3  # tres respuestas del modelo, no cuatro
 
 
 def test_small_noise_is_still_unchanged(claude):

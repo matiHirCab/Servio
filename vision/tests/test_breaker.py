@@ -49,6 +49,34 @@ def test_after_the_cooldown_one_probe_goes_through():
     assert not breaker.allow()  # las demás esperan a su resultado
 
 
+def test_failures_of_calls_already_in_flight_do_not_extend_the_pause():
+    """Con varias mesas en paralelo, cuando el cortacircuito se abre quedan llamadas
+    que ya habían pasado. Que fallen después no es una prueba fallida."""
+    clock = Clock()
+    breaker = make(clock)
+    for _ in range(3):
+        breaker.record_failure()  # se abre: 60 s
+    for _ in range(5):
+        breaker.record_failure()  # las que venían en vuelo
+    clock.now = 61
+    assert breaker.allow()  # la pausa sigue siendo de 60 s, desde que se abrió
+    breaker.record_failure()  # ahora sí, la prueba falló: el doble
+    clock.now = 61 + 119
+    assert not breaker.allow()
+
+
+def test_a_permanent_failure_in_flight_lengthens_the_pause():
+    clock = Clock()
+    breaker = make(clock)
+    for _ in range(3):
+        breaker.record_failure()
+    breaker.record_failure(permanent=True)  # la clave inválida se supo recién ahora
+    clock.now = 599
+    assert not breaker.allow()
+    clock.now = 601
+    assert breaker.allow()
+
+
 def test_a_cancelled_probe_lets_the_next_caller_probe():
     """Si la llamada de prueba no llega a hacerse (tope diario), no queda trabado."""
     clock = Clock()

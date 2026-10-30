@@ -1,8 +1,14 @@
 """Claude por plato (TOM-3): estima cuánta comida queda en cada plato de una mesa.
 
-Recibe el recorte de la mesa y los recortes de cada plato (JPEG) y devuelve, por
-plato, `fill_ratio`, `confidence`, `visible` y `same_plate`, más `people_present`.
-Cada plato puede llevar su referencia (el recorte recién servido) antes del actual.
+Dos caminos, con distinta privacidad (C-3, docs/legal-uruguay.md):
+
+- `estimate_plates` (el normal, `hybrid`): recibe los recortes de cada plato (JPEG) y
+  devuelve, por plato, `fill_ratio`, `confidence`, `visible` y `same_plate`, más
+  `people_present`. **Al modelo van solo recortes de plato, nunca la mesa.** Cada plato
+  puede llevar su referencia (el recorte recién servido) antes del actual.
+- `estimate_table` (solo el clasificador `claude`): **manda la imagen de la mesa
+  entera** y el modelo ubica cada plato. Es opt-in (`CLAUDE_ALLOW_TABLE_IMAGES`) y quien
+  lo llama tiene que haber pixelado a las personas antes; ver `classifiers/claude.py`.
 
 Proveedor según `CLAUDE_PROVIDER`:
 - `cli` (por defecto): el Claude Code instalado y logueado (`claude -p`), con la
