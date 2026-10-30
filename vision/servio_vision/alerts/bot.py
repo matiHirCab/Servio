@@ -12,6 +12,7 @@ servidor ni webhook. Con `--no-telegram` (ConsoleNotifier) no hay nada que escuc
 
 import logging
 import threading
+import time
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any, Protocol, runtime_checkable
@@ -23,10 +24,6 @@ from servio_vision.db import Database
 from servio_vision.restaurant import Restaurant
 
 logger = logging.getLogger(__name__)
-
-# Al arrancar sin red: espera entre intentos de saber desde dónde escuchar.
-RETRY_START_S = 1.0
-RETRY_START_MAX_S = 30.0
 
 
 @runtime_checkable
@@ -58,47 +55,63 @@ class Bot:
         self.commands = commands or {}
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
+        # tomado mientras se maneja un update: `stop` espera solo a eso, no a la
+        # consulta larga al canal (que no se puede cortar)
+        self._busy = threading.Lock()
+        self._started_at = time.time()
 
     def start(self) -> None:
+        self._started_at = time.time()
         self._thread = threading.Thread(target=self._listen, name="bot", daemon=True)
         self._thread.start()
 
     def stop(self, wait_s: float = 0.0) -> None:
-        """Deja de escuchar y espera hasta `wait_s` a que el hilo termine lo que está
-        haciendo (una respuesta, un `/metricas`). Una consulta larga al canal no se
-        puede cortar, pero lo que traiga ya no se maneja."""
+        """Deja de escuchar. Si el hilo está manejando algo (una respuesta, un
+        `/metricas`), espera hasta `wait_s` a que termine; lo que traiga después la
+        consulta en curso ya no se maneja."""
         self._stop.set()
-        if wait_s and self._thread is not None:
-            self._thread.join(timeout=wait_s)
+        if wait_s and self._busy.acquire(timeout=wait_s):
+            self._busy.release()
 
     def _start_offset(self) -> int | None:
         """Desde dónde escuchar: después de lo que quedó pendiente de corridas
-        anteriores. Si el canal no contesta, se insiste: sin saberlo, la primera
-        lectura traería todo lo viejo (cada `/metricas` de ayer se repetiría)."""
-        wait = RETRY_START_S
-        while not self._stop.is_set():
-            pending = self.channel.get_updates(offset=-1, timeout=0)
-            if pending is not None:
-                return pending[-1]["update_id"] + 1 if pending else None
-            self._stop.wait(wait)
-            wait = min(wait * 2, RETRY_START_MAX_S)
-        return None
+        anteriores. Sin respuesta del canal no se sabe; se lee desde lo más viejo y
+        `_is_old` saltea los mensajes de antes del arranque (cada `/metricas` de ayer
+        mandaría la imagen otra vez). Los toques de botón sí se manejan: uno de un
+        aviso viejo contesta que ya no está activo, y uno de un aviso de esta corrida
+        (llegó mientras no había red) se registra."""
+        pending = self.channel.get_updates(offset=-1, timeout=0)
+        if pending is None:
+            logger.warning("Telegram no contesta: salteo los mensajes viejos")
+            return None
+        return pending[-1]["update_id"] + 1 if pending else None
+
+    def _is_old(self, update: dict) -> bool:
+        """Un mensaje (texto o comando) de antes de arrancar el bot."""
+        message = update.get("message")
+        # `date` viene en segundos enteros: uno del mismo segundo del arranque es nuevo
+        return message is not None and message.get("date", time.time()) < int(
+            self._started_at
+        )
 
     def _listen(self) -> None:
         offset = self._start_offset()
-        if self._stop.is_set():
-            return
         logger.info("Escuchando respuestas de los mozos en Telegram")
         while not self._stop.is_set():
             updates = self.channel.get_updates(offset) or []  # None: falló, sigue
             for update in updates:
-                if self._stop.is_set():
-                    return  # ya se cerró: el log y la base no están
-                offset = update["update_id"] + 1
-                try:
-                    self.handle(update)
-                except Exception:
-                    logger.exception("No se pudo procesar una respuesta de Telegram")
+                with self._busy:
+                    if self._stop.is_set():
+                        return  # ya se cerró: el log y la base no están
+                    offset = update["update_id"] + 1
+                    if self._is_old(update):
+                        continue
+                    try:
+                        self.handle(update)
+                    except Exception:
+                        logger.exception(
+                            "No se pudo procesar una respuesta de Telegram"
+                        )
             if not updates:
                 self._stop.wait(0.5)
 

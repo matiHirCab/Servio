@@ -1,8 +1,8 @@
 """El bot del grupo (`alerts/bot.py`): desde dónde escucha y cómo reparte."""
 
 import threading
+import time
 
-from servio_vision.alerts import bot
 from servio_vision.alerts.bot import Bot
 
 
@@ -26,11 +26,23 @@ class Channel:
         return chat_id == -1
 
 
-def metrics_update(update_id: int) -> dict:
-    return {
-        "update_id": update_id,
-        "message": {"chat": {"id": -1}, "text": "/metricas"},
-    }
+def metrics_update(update_id: int, date: float | None = None) -> dict:
+    message: dict = {"chat": {"id": -1}, "text": "/metricas"}
+    if date is not None:
+        message["date"] = int(date)
+    return {"update_id": update_id, "message": message}
+
+
+def tap(update_id: int) -> dict:
+    return {"update_id": update_id, "callback_query": {"id": "cb", "data": "fb:x:0"}}
+
+
+class Desk:
+    def __init__(self) -> None:
+        self.handled: list[dict] = []
+
+    def handle(self, update: dict) -> None:
+        self.handled.append(update)
 
 
 def run(channel: Channel) -> list[str]:
@@ -42,14 +54,29 @@ def run(channel: Channel) -> list[str]:
     return ran
 
 
-def test_old_updates_are_skipped_even_if_the_first_call_fails(monkeypatch):
-    """Sin red al arrancar no se sabe desde dónde seguir: se insiste, en vez de
-    leer todo lo viejo (cada `/metricas` de ayer mandaría la imagen otra vez)."""
-    monkeypatch.setattr(bot, "RETRY_START_S", 0.01)
-    channel = Channel([None, None, [metrics_update(7)]])
-    assert run(channel) == []  # el /metricas viejo no corre
-    assert channel.offsets[:3] == [-1, -1, -1]
-    assert channel.offsets[3] == 8  # sigue después del último pendiente
+def test_pending_updates_are_skipped_when_the_channel_answers():
+    channel = Channel([[metrics_update(7)], []])
+    assert run(channel) == []  # el /metricas pendiente no corre
+    assert channel.offsets[:2] == [-1, 8]  # sigue después del último pendiente
+
+
+def test_without_network_at_start_old_messages_are_skipped_but_taps_are_not():
+    """Sin red al arrancar no se sabe desde dónde seguir: se lee todo, se saltean
+    los mensajes de antes del arranque (cada `/metricas` de ayer mandaría la imagen
+    otra vez) y se manejan los toques, que pueden ser de avisos de esta corrida."""
+    yesterday = time.time() - 86400
+    channel = Channel(
+        [None, [metrics_update(1, yesterday), tap(2), metrics_update(3, time.time())]]
+    )
+    desk = Desk()
+    ran: list[str] = []
+    b = Bot(channel, desk, {"metricas": lambda: ran.append("metricas")})  # type: ignore[arg-type]
+    b.start()
+    assert channel.done.wait(5)
+    b.stop()
+    assert ran == ["metricas"]  # solo el de ahora
+    assert [u["update_id"] for u in desk.handled] == [2]
+    assert channel.offsets[:2] == [-1, None]
 
 
 def test_new_updates_are_handled_after_the_pending_ones():
@@ -76,8 +103,49 @@ def test_updates_that_arrive_after_stop_are_not_handled():
     b = Bot(Slow([]), commands={"metricas": lambda: ran.append("metricas")})
     b.start()
     assert polling.wait(5)
-    b.stop()
+    b.stop(wait_s=5)  # no está manejando nada: vuelve enseguida
     release.set()
-    b.stop(wait_s=5)  # espera a que el hilo termine
-    assert b._thread is not None and not b._thread.is_alive()
+    assert b._thread is not None
+    b._thread.join(5)
+    assert not b._thread.is_alive()
     assert ran == []
+
+
+def test_stop_waits_for_an_update_being_handled():
+    """`close()` no cierra el log ni la base con una respuesta a medio guardar."""
+    handling = threading.Event()
+    finish = threading.Event()
+    done: list[str] = []
+
+    def slow_metrics() -> None:
+        handling.set()
+        finish.wait(5)
+        done.append("metricas")
+
+    channel = Channel([[], [metrics_update(4)]])
+    b = Bot(channel, commands={"metricas": slow_metrics})
+    b.start()
+    assert handling.wait(5)
+    threading.Timer(0.2, finish.set).start()
+    b.stop(wait_s=5)
+    assert done == ["metricas"]  # stop esperó a que terminara
+
+
+def test_stop_does_not_wait_for_the_long_poll():
+    """Si el bot solo está esperando al canal, `stop` vuelve sin esperar."""
+    polling = threading.Event()
+
+    class Waiting(Channel):
+        def get_updates(self, offset, timeout=20):
+            if offset == -1:
+                return []
+            polling.set()
+            threading.Event().wait(1)
+            return []
+
+    b = Bot(Waiting([]))
+    b.start()
+    assert polling.wait(5)
+    started = time.monotonic()
+    b.stop(wait_s=5)
+    assert time.monotonic() - started < 0.5

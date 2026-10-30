@@ -99,7 +99,6 @@ class AlertProcessor:
                         send_metrics, db, restaurant, notifier
                     )
                 self.bot = Bot(notifier, self.feedback, commands)
-                self.bot.start()
         self.telegram = TelegramOutput(notifier, self.feedback)
         # Marca dónde empieza la corrida (el log se agrega) y con qué umbrales: replay.py
         # corta el archivo acá y reproduce con la misma config.
@@ -112,10 +111,14 @@ class AlertProcessor:
         )
         self._state_dirty = False  # hay estado sin guardar
         self._rules_dirty = False  # cambió algo de las reglas desde el último guardado
+        self._save_failed = False  # el último guardado falló
         self._clock = time.monotonic  # los tests lo adelantan
         self._saved_at = float("-inf")  # `_clock()` del último intento
         if resume and db is not None:
             self._resume(db, resume_max_age_s)
+        # al final: si algo de arriba falla, no queda un hilo huérfano leyendo Telegram
+        if self.bot is not None:
+            self.bot.start()
 
     @property
     def tables(self) -> dict[str, TableState]:
@@ -267,5 +270,10 @@ class AlertProcessor:
         assert self.db_output is not None  # hay base
         self._saved_at = self._clock()  # también si falla: no insistir cada lectura
         self.db_output.save_now = False
-        # si falla, el cambio de reglas sigue pendiente: se reintenta en 1 s, no en 5
-        self._rules_dirty = not self.db_output.write("el estado", self._save_state)
+        # Si falla, un cambio de reglas que estaba esperando se reintenta una vez en
+        # 1 s (un parpadeo de la base); si vuelve a fallar, la base está caída y se
+        # sigue con el guardado de cada 5 s, sin una espera de conexión por segundo.
+        rules_waiting = self._rules_dirty
+        saved = self.db_output.write("el estado", self._save_state)
+        self._rules_dirty = rules_waiting and not saved and not self._save_failed
+        self._save_failed = not saved

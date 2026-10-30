@@ -168,6 +168,41 @@ def test_a_rules_change_is_saved_at_most_once_per_second(tmp_path):
     p.close()
 
 
+def test_with_the_db_down_a_reading_does_not_force_a_save_every_time(tmp_path):
+    """Un plato que no se pudo insertar no fuerza un guardado en cada lectura (con
+    la base caída cada intento es otra espera de conexión): sin cambios de
+    reglas, se reintenta con el guardado de cada `SAVE_STATE_EVERY_S`."""
+    from servio_vision.alerts.processor import SAVE_STATE_EVERY_S
+
+    class CountingBrokenDb(BrokenDb):
+        def __init__(self) -> None:
+            self.save_attempts = 0
+
+        def save_state(self, state, at) -> None:
+            self.save_attempts += 1
+            raise RuntimeError("base caída")
+
+    db = CountingBrokenDb()
+    p = make(tmp_path, Restaurant.load())
+    p.db = p.db_output.db = db  # type: ignore[assignment,union-attr]
+    now = [100.0]
+    p._clock = lambda: now[0]
+    plate = ("T1-p9", "comiendo", "izquierda")
+    p.process(obs(0, plate))  # plato nuevo: intenta guardar y falla
+    now[0] += 0.1
+    p.process(obs(5, plate))  # deja de ser reciente: cambio de reglas, < 1 s
+    for s in range(10, 30, 5):  # lecturas iguales, cada una 1 s después
+        now[0] += 1
+        p.process(obs(s, plate))
+    # el primero y un reintento al segundo (por si fue un parpadeo); con el segundo
+    # fallo la base está caída: no uno por lectura
+    assert db.save_attempts == 2
+    now[0] += SAVE_STATE_EVERY_S
+    p.process(obs(40, plate))
+    assert db.save_attempts == 3  # el periódico
+    p.close()
+
+
 def test_a_failed_save_of_a_rules_change_is_retried_after_a_second(tmp_path):
     """La base parpadea justo al guardar un cambio de reglas: sigue pendiente y se
     reintenta pasado `SAVE_RULES_EVERY_S`, no recién en el guardado de cada 5 s."""

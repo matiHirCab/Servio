@@ -146,25 +146,29 @@ class TelegramOutput:
 
     def _edit_or_log(self, message_id: int, event: AlertsResolved) -> str | None:
         """`_edit`, pero si falla se loguea y siguen los demás mensajes de la
-        lectura (si no, uno roto dejaba los otros sin "ya resuelto"). Si el mensaje
-        ya no se conoce, sus avisos no quedan marcados para siempre."""
+        lectura (si no, uno roto dejaba los otros sin "ya resuelto")."""
+        if message_id not in self.by_message:
+            # no debería pasar: sin el mensaje no hay qué editar, y sus avisos no
+            # quedan marcados para siempre
+            logger.warning("No conozco el mensaje %s: no lo edito", message_id)
+            for alert in event.alerts:
+                if alert.telegram_message_id == message_id:
+                    self.resolved_ids.discard(alert.id)
+                    self.close_notes.pop(alert.id, None)
+            return None
         try:
             return self._edit(message_id)
         except Exception:
             logger.exception("No se pudo editar el mensaje %s", message_id)
-            if message_id not in self.by_message:
-                for alert in event.alerts:
-                    if alert.telegram_message_id == message_id:
-                        self.resolved_ids.discard(alert.id)
-                        self.close_notes.pop(alert.id, None)
             return None
 
     def _edit(self, message_id: int) -> str:
-        """Reescribe un mensaje con sus avisos cerrados marcados; devuelve el texto."""
+        """Reescribe un mensaje con sus avisos cerrados marcados; devuelve el texto.
+        Lo que sabe del mensaje se olvida recién después de editarlo."""
         alerts = self.by_message[message_id]
         done = all(a.id in self.resolved_ids for a in alerts)
         resolved_ids = set(self.resolved_ids)
-        notes = [self.close_notes.pop(a.id) for a in alerts if a.id in self.close_notes]
+        notes = [self.close_notes[a.id] for a in alerts if a.id in self.close_notes]
 
         def build(answers: str) -> str:
             # las respuestas del mozo quedan en el mensaje (antes del "ya resuelto")
@@ -176,15 +180,23 @@ class TelegramOutput:
                 return messages.resolved_text(text)
             return messages.partial_text(alerts, resolved_ids) + answers
 
-        if done:
-            del self.by_message[message_id]
-            self.resolved_ids -= {a.id for a in alerts}
-        if self.desk is not None:
-            # con el lock de las respuestas: una que llega a la vez no lo pisa
-            return self.desk.rewrite(message_id, build, resolved=done)
-        text = build("")
-        self.notifier.edit(message_id, text)  # si falla, ya se logueó
-        return text
+        try:
+            if self.desk is not None:
+                # con el lock de las respuestas: una que llega a la vez no lo pisa
+                return self.desk.rewrite(message_id, build, resolved=done)
+            text = build("")
+            self.notifier.edit(message_id, text)  # si falla, ya se logueó
+            return text
+        finally:
+            # Después del intento, haya andado o no: nadie reintenta una edición, y
+            # un mensaje cerrado que quedara acá crecería la foto para siempre. Las
+            # notas esperan al cierre del mensaje entero: con otro aviso abierto
+            # todavía no se muestran.
+            if done:
+                for a in alerts:
+                    self.close_notes.pop(a.id, None)
+                del self.by_message[message_id]
+                self.resolved_ids -= {a.id for a in alerts}
 
 
 # --- log ---
@@ -351,9 +363,6 @@ class DatabaseOutput:
         for plate in active:
             if plate.track_id in self.served_rows:
                 continue
-            # el id de la fila tiene que llegar al estado guardado ya: si no, tras
-            # un reinicio el plato se insertaría de nuevo
-            self.save_now = True
             dish = self.restaurant.dish(obs.table_id, plate.track_id)
             inherited_from = plate.inherited_from
             same = self.served_rows.get(inherited_from or "")
@@ -362,10 +371,15 @@ class DatabaseOutput:
                 last = self.plate_states.pop(inherited_from, None)
                 if last is not None:
                     self.plate_states[plate.track_id] = last
-                continue
-            self.served_rows[plate.track_id] = self.db.served(
-                obs.table_id, dish.dish_id if dish else None, plate.track_id, ts
-            )
+            else:
+                self.served_rows[plate.track_id] = self.db.served(
+                    obs.table_id, dish.dish_id if dish else None, plate.track_id, ts
+                )
+            # El id de la fila tiene que llegar al estado guardado ya: si no, tras
+            # un reinicio el plato se insertaría de nuevo. Recién con la fila: con la
+            # base caída `served` lanza, y forzar un guardado en cada lectura solo
+            # sumaría otra espera de conexión.
+            self.save_now = True
         readings = []
         states: dict[str, str] = {}
         for item in obs.items:
