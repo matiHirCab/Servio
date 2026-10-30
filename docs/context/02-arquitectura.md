@@ -32,9 +32,9 @@ Dueños por carpeta en [09-convenciones.md](09-convenciones.md).
 
 ## Por qué así
 
-- **Un solo proceso:** el mozo no responde, así que no hace falta servidor ni webhook. Menos piezas que se rompen en la demo.
-- **YOLO + Claude juntos:** YOLO (entrenado con el dataset de Roboflow) encuentra cada plato rápido y en la laptop, y da su posición, lo que permite mantener el mismo id para el mismo plato. Claude mira el recorte de cada plato y estima cuánta comida queda, cosa que YOLO no sabe hacer bien (solo distingue lleno/vacío). Si Claude no responde (sin internet), el clasificador usa lo que dice YOLO.
-- **Interfaz única `Classifier`:** el pipeline no sabe qué modelo usa. Hay tres implementaciones: `fake` (sin modelo, para desarrollar), `yolo` (solo YOLO, plan B sin internet) y `hybrid` (YOLO + Claude, la de la demo).
+- **Un solo proceso:** no hace falta un servidor ni un webhook: las respuestas de los mozos (botones y `/metricas`) se escuchan con *long polling* desde un hilo del mismo programa. Menos piezas que se rompen.
+- **YOLO + Claude juntos:** YOLO (entrenado con el dataset de Roboflow) encuentra cada plato rápido y en la laptop, y da su posición, lo que permite mantener el mismo id para el mismo plato. Claude mira el recorte de cada plato y estima cuánta comida queda, cosa que YOLO no sabe hacer bien (solo distingue lleno/vacío). Si Claude no responde (sin internet, una clave inválida o el tope diario de llamadas), el clasificador usa lo que dice YOLO. El modelo es intercambiable: `CLAUDE_PROVIDER` elige `cli` (la suscripción), `anthropic` (la API) u `openai` (la Decisions API); cada proveedor vive en `classifiers/providers/`.
+- **Interfaz única `Classifier`:** el pipeline no sabe qué modelo usa. Hay cuatro implementaciones: `fake` (sin modelo, para desarrollar), `yolo` (solo YOLO, plan B sin internet), `hybrid` (YOLO + el modelo, la de la demo) y `claude` (la mesa entera al modelo, opt-in por privacidad).
 - **Las reglas viven aparte de la visión:** se ajustan umbrales sin tocar el modelo, y se prueban con fixtures sin video ni Claude.
 
 ## Flujo de datos

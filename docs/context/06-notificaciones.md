@@ -1,6 +1,6 @@
-# 06 — Notificaciones (Telegram, solo envío)
+# 06 — Notificaciones (Telegram)
 
-Dueño: Matías (`vision/servio_vision/alerts/notify.py`). El mozo no responde: no hay botones, comandos ni webhook.
+Dueño: Matías (`vision/servio_vision/alerts/notify.py` y `feedback.py`). Los avisos se mandan con `sendMessage` y se editan al cerrarse. El mozo responde con **botones** (las respuestas típicas del plato y «✏️ Otra respuesta») y el grupo tiene el comando `/metricas`; no hay webhook: `feedback.py` escucha con *long polling* (`getUpdates`) en un hilo aparte. Ver «Plazo y cola» abajo para lo que pasa cuando Telegram no contesta.
 
 ## Setup
 
