@@ -223,6 +223,7 @@ class HybridClassifier:
             # a Claude, lee el hueco como "plato vacío" y queda un fantasma.
             and self.last_fill.get((table_id, pid), 1.0) >= LOST_EMPTY_FILL
         ]
+        self._forget_gone(table_id, plates, previous_items)
         everything = plates + lost
         # personas solo si hay algo que mandar: en una mesa vacía no se gasta YOLO
         persons = (
@@ -238,6 +239,30 @@ class HybridClassifier:
             references=[self.references.get((table_id, p.id)) for p in everything],
             people_present=None if persons is None else bool(persons),
         )
+
+    def _forget_gone(
+        self, table_id: str, plates: list[FoundPlate], previous_items: list[Item]
+    ) -> None:
+        """Borra lo que se guardó de los platos que ya no están. Los ids solo suben,
+        así que un plato retirado no vuelve a usarse: sin esto, un servicio de días con
+        cientos de platos junta sus lecturas y, sobre todo, su recorte de referencia
+        (un JPEG por plato). Sigue vivo el que YOLO ve, el que `IdCounter` todavía
+        recuerda como perdido y el que está en la lectura anterior."""
+        alive = (
+            {p.id for p in plates}
+            | {pid for pid, _ in self.ids.missing(table_id)}
+            | {i.id for i in previous_items}
+        )
+        for memory in (
+            self.hidden,
+            self.last_fill,
+            self.lost_readings,
+            self.references,
+            self.readings,
+        ):
+            gone = [k for k in list(memory) if k[0] == table_id and k[1] not in alive]
+            for key in gone:
+                memory.pop(key, None)
 
     def ask(self, prepared: Prepared) -> claude_plates.PlatesReport | None:
         """La llamada a Claude: solo los recortes de plato, nunca la mesa (C-3). No
