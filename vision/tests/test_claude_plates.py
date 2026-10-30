@@ -10,6 +10,7 @@ import pytest
 from servio_vision import prompt
 from servio_vision.classifiers import claude_plates
 from servio_vision.classifiers.claude_plates import ClaudeCallError, estimate_plates
+from servio_vision.classifiers.providers import cli
 
 JPEG = b"\xff\xd8fake"
 REQUEST = claude_plates.PlatesRequest(
@@ -159,21 +160,190 @@ def test_cli_reads_structured_output(monkeypatch):
         assert content[1:] == REQUEST.content
         return subprocess.CompletedProcess(args, 0, stdout=stdout, stderr="")
 
-    monkeypatch.setattr(claude_plates, "_find_cli", lambda: "claude")
-    monkeypatch.setattr(claude_plates.subprocess, "run", fake_run)
-    data, usage = claude_plates._call_cli(REQUEST, "haiku", 10)
+    monkeypatch.setattr(cli, "_find_cli", lambda: "claude")
+    monkeypatch.setattr(cli.subprocess, "run", fake_run)
+    data, usage = cli.call(REQUEST, "haiku", 10)
     assert data == _answer(1)
     assert usage["cost_usd"] == 0.001
+
+
+class _Clock:
+    def __init__(self) -> None:
+        self.now = 1000.0
+
+    def __call__(self) -> float:
+        return self.now
+
+
+@pytest.fixture
+def clock(monkeypatch):
+    c = _Clock()
+    monkeypatch.setattr(claude_plates, "_clock", c)
+    claude_plates.reset_breakers()  # los arma con este reloj
+    return c
+
+
+def test_a_permanent_error_is_not_retried(backend):
+    calls, answers = backend
+    answers.append(claude_plates.PermanentCallError("clave inválida"))
+    assert estimate_plates([JPEG], "T1") is None
+    assert len(calls) == 1  # sin segundo intento: no se arregla esperando
+
+
+def test_a_broken_prompt_file_is_permanent_and_logged_as_an_error(backend, caplog):
+    calls, answers = backend
+    answers.append(prompt.PromptError("falta el archivo de prompt"))
+    with caplog.at_level("ERROR"):
+        assert estimate_plates([JPEG], "T1") is None
+    assert len(calls) == 1
+    assert "prompt" in caplog.text
+
+
+def test_the_breaker_opens_after_three_failed_estimates(backend, clock):
+    calls, answers = backend
+    answers.extend([ClaudeCallError("API caída")] * 6)  # 3 lecturas × 2 intentos
+    for _ in range(3):
+        assert estimate_plates([JPEG], "T1") is None
+    assert len(calls) == 6
+    assert estimate_plates([JPEG], "T2") is None
+    assert len(calls) == 6  # abierto: ni lo intenta
+
+
+def test_the_breaker_lets_a_probe_through_after_the_cooldown(backend, clock):
+    calls, answers = backend
+    answers.extend([ClaudeCallError("API caída")] * 6)
+    for _ in range(3):
+        estimate_plates([JPEG], "T1")
+    clock.now += 61
+    answers.append(_answer(1))
+    assert estimate_plates([JPEG], "T1") is not None  # la prueba anda
+    answers.append(_answer(1))
+    assert estimate_plates([JPEG], "T1") is not None  # y vuelve a la normalidad
+    assert len(calls) == 8
+
+
+def test_a_permanent_error_opens_the_breaker_at_once(backend, clock):
+    calls, answers = backend
+    answers.append(claude_plates.PermanentCallError("clave inválida"))
+    estimate_plates([JPEG], "T1")
+    assert estimate_plates([JPEG], "T2") is None
+    assert len(calls) == 1
+
+
+def test_one_provider_down_does_not_block_another(backend, clock, monkeypatch):
+    _calls, answers = backend
+    other_calls = []
+
+    def other(request, model, timeout_s):
+        other_calls.append(model)
+        return _answer(1), {}
+
+    monkeypatch.setitem(claude_plates._BACKENDS, "anthropic", other)
+    answers.extend([ClaudeCallError("API caída")] * 6)
+    for _ in range(3):
+        estimate_plates([JPEG], "T1")  # cli abierto
+    assert estimate_plates([JPEG], "T1", provider="anthropic") is not None
+    assert other_calls
+
+
+def test_daily_cap_degrades_to_none_without_calling(backend, monkeypatch, caplog):
+    calls, answers = backend
+    monkeypatch.setenv("CLAUDE_MAX_CALLS_PER_DAY", "2")
+    answers.extend([_answer(1)] * 3)
+    with caplog.at_level("ERROR"):
+        assert estimate_plates([JPEG], "T1") is not None
+        assert estimate_plates([JPEG], "T1") is not None
+        assert estimate_plates([JPEG], "T1") is None  # tope: sigue con YOLO
+        assert estimate_plates([JPEG], "T2") is None
+    assert len(calls) == 2
+    assert caplog.text.count("tope") == 1  # se avisa una sola vez por día
+
+
+def test_daily_cap_resets_the_next_day(backend, monkeypatch):
+    from datetime import date
+
+    calls, answers = backend
+    monkeypatch.setenv("CLAUDE_MAX_CALLS_PER_DAY", "1")
+    day = {"d": date(2026, 10, 29)}
+    monkeypatch.setattr(claude_plates._meter, "_today", lambda: day["d"])
+    answers.extend([_answer(1)] * 2)
+    assert estimate_plates([JPEG], "T1") is not None
+    assert estimate_plates([JPEG], "T1") is None
+    day["d"] = date(2026, 10, 30)
+    assert estimate_plates([JPEG], "T1") is not None
+    assert len(calls) == 2
+
+
+def test_every_attempt_counts_against_the_cap(backend, monkeypatch):
+    """Un reintento también se factura: con tope 1 no hay segundo intento."""
+    calls, answers = backend
+    monkeypatch.setenv("CLAUDE_MAX_CALLS_PER_DAY", "1")
+    answers.append(ClaudeCallError("API caída"))
+    assert estimate_plates([JPEG], "T1") is None
+    assert len(calls) == 1
+
+
+def test_usage_is_summed_and_summarised_at_info(backend, caplog):
+    _calls, answers = backend
+    answers.extend([_answer(1)] * 3)
+    claude_plates._meter._report_every = 2
+    with caplog.at_level("INFO"):
+        for _ in range(3):
+            estimate_plates([JPEG], "T1")
+    assert claude_plates._meter.input_tokens == 30  # 10 por llamada
+    assert "hoy 2 llamadas" in caplog.text
+
+
+def test_cli_env_drops_the_secrets_and_keeps_what_the_cli_needs():
+    """`claude -p` va con la suscripción: una ANTHROPIC_API_KEY en el entorno la
+    cambiaría a facturación por API, y el token de Telegram o la base no tienen por
+    qué llegarle a un proceso hijo."""
+    env = cli._cli_env(
+        {
+            "PATH": "/bin",
+            "USERPROFILE": "C:/Users/x",  # donde el CLI guarda su login
+            "ANTHROPIC_API_KEY": "sk-ant",
+            "ANTHROPIC_AUTH_TOKEN": "tok",
+            "OPENAI_API_KEY": "sk-oai",
+            "TELEGRAM_BOT_TOKEN": "1:x",
+            "DATABASE_URL": "postgresql://u:p@h/db",
+        }
+    )
+    assert env["PATH"] == "/bin" and env["USERPROFILE"] == "C:/Users/x"
+    assert env["DISABLE_AUTOUPDATER"] == "1"
+    assert not {"ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "OPENAI_API_KEY"} & set(
+        env
+    )
+    assert not {"TELEGRAM_BOT_TOKEN", "DATABASE_URL"} & set(env)
+
+
+def test_cli_subprocess_runs_with_the_scrubbed_env(monkeypatch):
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant")
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "1:x")
+    seen = {}
+
+    def fake_run(args, **kwargs):
+        seen.update(kwargs["env"])
+        result = {"type": "result", "structured_output": _answer(1)}
+        return subprocess.CompletedProcess(
+            args, 0, stdout=json.dumps(result) + "\n", stderr=""
+        )
+
+    monkeypatch.setattr(cli, "_find_cli", lambda: "claude")
+    monkeypatch.setattr(cli.subprocess, "run", fake_run)
+    cli.call(REQUEST, "haiku", 10)
+    assert "ANTHROPIC_API_KEY" not in seen and "TELEGRAM_BOT_TOKEN" not in seen
+    assert seen["DISABLE_AUTOUPDATER"] == "1"
 
 
 def test_cli_timeout_is_a_call_error(monkeypatch):
     def fake_run(args, **kwargs):
         raise subprocess.TimeoutExpired(args, 10)
 
-    monkeypatch.setattr(claude_plates, "_find_cli", lambda: "claude")
-    monkeypatch.setattr(claude_plates.subprocess, "run", fake_run)
+    monkeypatch.setattr(cli, "_find_cli", lambda: "claude")
+    monkeypatch.setattr(cli.subprocess, "run", fake_run)
     with pytest.raises(ClaudeCallError):
-        claude_plates._call_cli(REQUEST, "haiku", 10)
+        cli.call(REQUEST, "haiku", 10)
 
 
 @pytest.mark.parametrize(
@@ -185,12 +355,12 @@ def test_cli_timeout_is_a_call_error(monkeypatch):
     ],
 )
 def test_json_from_text(text):
-    assert claude_plates.json_from_text(text) == {"plates": [], "people_present": True}
+    assert cli.json_from_text(text) == {"plates": [], "people_present": True}
 
 
 def test_json_from_text_without_json_shows_the_answer():
     with pytest.raises(ClaudeCallError, match="no puedo ver"):
-        claude_plates.json_from_text("no puedo ver las imágenes")
+        cli.json_from_text("no puedo ver las imágenes")
 
 
 def test_cli_on_windows_cmd_skips_schema_and_parses_text(monkeypatch):
@@ -210,9 +380,9 @@ def test_cli_on_windows_cmd_skips_schema_and_parses_text(monkeypatch):
             args, 0, stdout=json.dumps(result), stderr=""
         )
 
-    monkeypatch.setattr(claude_plates, "_find_cli", lambda: r"C:\npm\claude.cmd")
-    monkeypatch.setattr(claude_plates.subprocess, "run", fake_run)
-    data, _ = claude_plates._call_cli(REQUEST, "haiku", 10)
+    monkeypatch.setattr(cli, "_find_cli", lambda: r"C:\npm\claude.cmd")
+    monkeypatch.setattr(cli.subprocess, "run", fake_run)
+    data, _ = cli.call(REQUEST, "haiku", 10)
     assert data == _answer(1)
 
 
@@ -226,9 +396,9 @@ def test_cli_uses_the_answer_even_if_claude_exits_with_error(monkeypatch):
             args, 1, stdout=json.dumps(result), stderr=""
         )
 
-    monkeypatch.setattr(claude_plates, "_find_cli", lambda: "claude")
-    monkeypatch.setattr(claude_plates.subprocess, "run", fake_run)
-    data, _ = claude_plates._call_cli(REQUEST, "haiku", 10)
+    monkeypatch.setattr(cli, "_find_cli", lambda: "claude")
+    monkeypatch.setattr(cli.subprocess, "run", fake_run)
+    data, _ = cli.call(REQUEST, "haiku", 10)
     assert data == _answer(1)
 
 
@@ -236,10 +406,10 @@ def test_cli_error_without_json_is_a_call_error(monkeypatch):
     def fake_run(args, **kwargs):
         return subprocess.CompletedProcess(args, 1, stdout="", stderr="se cortó")
 
-    monkeypatch.setattr(claude_plates, "_find_cli", lambda: "claude")
-    monkeypatch.setattr(claude_plates.subprocess, "run", fake_run)
+    monkeypatch.setattr(cli, "_find_cli", lambda: "claude")
+    monkeypatch.setattr(cli.subprocess, "run", fake_run)
     with pytest.raises(ClaudeCallError, match="se cortó"):
-        claude_plates._call_cli(REQUEST, "haiku", 10)
+        cli.call(REQUEST, "haiku", 10)
 
 
 class _FakeOpenAI:
