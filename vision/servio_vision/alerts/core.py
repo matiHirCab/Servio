@@ -155,6 +155,12 @@ class AlertCore:
             )
         return events
 
+    def forget(self, alerts: tuple[Alert, ...]) -> None:
+        """Avisos recién abiertos que el canal no pudo mandar (lanzó): se sacan,
+        así la próxima lectura los abre y los manda de nuevo."""
+        for alert in alerts:
+            self.open_alerts.pop(alert.id, None)
+
     def attach(self, alerts: tuple[Alert, ...]) -> None:
         """Los avisos abiertos, ya con el `message_id` que les dio el canal."""
         for alert in alerts:
@@ -205,22 +211,19 @@ def _close_reason(alert: Alert, table: TableState) -> str | None:
 
 
 def _rules_view(table: TableState) -> tuple:
-    """Lo de la mesa que usan las reglas: todo menos `last_seen` y `last_ts`, que
-    cambian en cada lectura. Las lecturas sin gente cuentan hasta el tope que mira
-    el motor: pasado eso, una más no cambia ningún aviso."""
+    """Lo de la mesa que usan las reglas: cada plato con todos sus campos menos
+    `last_seen` (cambia en cada lectura y nadie lo mira), y de la mesa si hay gente.
+
+    `last_ts` sí lo usan (un plato que apareció en la lectura anterior puede
+    heredar los tiempos de uno retirado, `state._inherit_from_removed`), pero cambia
+    en cada lectura: en su lugar va qué platos aparecieron en esta. La lectura
+    siguiente los deja de contar, cambia la vista y se guarda: el `last_ts` guardado
+    nunca deja «reciente» a un plato que ya no lo es. Las lecturas sin gente cuentan
+    hasta el tope que mira el motor: pasado eso, una más no cambia ningún aviso."""
     plates = frozenset(
-        (
-            p.track_id,
-            p.state,
-            p.position,
-            p.first_seen,
-            p.state_since,
-            p.id_since,
-            p.id_position,
-            p.provisional,
-            p.inherited_from,
-        )
+        tuple(v for k, v in vars(p).items() if k != "last_seen")
         for p in table.plates.values()
     )
+    new = frozenset(t for t, p in table.plates.items() if p.id_since == table.last_ts)
     absent = min(table.people_absent_readings, ABSENT_READINGS_TO_CLOSE)
-    return plates, table.people_present, absent
+    return plates, new, table.people_present, absent

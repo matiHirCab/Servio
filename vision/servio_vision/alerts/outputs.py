@@ -1,9 +1,10 @@
 """Suscriptores de los eventos del núcleo (A-4): canal, log y base.
 
 Cada uno recibe los eventos de `core.py` (y `ObservationReceived`, la lectura tal
-como llegó) con `handle(event)` y devuelve el evento, quizá completado: el canal le
-pone el `message_id` a los avisos abiertos y el texto final a los cerrados, y los
-que vienen después (log, base) ya los ven. `processor.py` los llama en ese orden.
+como llegó). `processor.py` los llama en orden fijo: el canal (`handle(event)`, que
+devuelve el evento completado: el `message_id` en los avisos abiertos y el texto
+final en los cerrados), el log (`write(event)`, que devuelve las líneas escritas) y
+la base (`handle(event)`); así log y base ya ven lo que puso el canal.
 
 - `TelegramOutput`: agrupa en un mensaje, manda, recuerda y edita al cerrar (vía
   `Notifier`, cualquier canal). Al cerrar edita el mensaje en el que se abrió el
@@ -63,6 +64,8 @@ AnyEvent = Event | ObservationReceived
 
 
 class Subscriber(Protocol):
+    """El canal y la base: reciben un evento y lo devuelven, quizá completado."""
+
     def handle(self, event: AnyEvent) -> AnyEvent: ...
 
 
@@ -76,7 +79,7 @@ class TelegramOutput:
         self.notifier = notifier
         self.desk = desk  # con él, el de plato lleno lleva botones
         # message_id → avisos de ese mensaje (en orden) y cuáles ya se cerraron.
-        self.messages: dict[int, list[Alert]] = {}
+        self.by_message: dict[int, list[Alert]] = {}
         self.resolved_ids: set[str] = set()
         # aviso de mesa terminada cerrado porque retiraron los platos → la línea
         # que reemplaza al "ya resuelto" (quién y cuánto tardó)
@@ -114,7 +117,7 @@ class TelegramOutput:
             for a in event.alerts
         )
         if message_id is not None:
-            self.messages[message_id] = list(alerts)
+            self.by_message[message_id] = list(alerts)
         return replace(event, alerts=alerts)
 
     def _resolved(self, event: AlertsResolved) -> AlertsResolved:
@@ -149,7 +152,7 @@ class TelegramOutput:
             return self._edit(message_id)
         except Exception:
             logger.exception("No se pudo editar el mensaje %s", message_id)
-            if message_id not in self.messages:
+            if message_id not in self.by_message:
                 for alert in event.alerts:
                     if alert.telegram_message_id == message_id:
                         self.resolved_ids.discard(alert.id)
@@ -158,7 +161,7 @@ class TelegramOutput:
 
     def _edit(self, message_id: int) -> str:
         """Reescribe un mensaje con sus avisos cerrados marcados; devuelve el texto."""
-        alerts = self.messages[message_id]
+        alerts = self.by_message[message_id]
         done = all(a.id in self.resolved_ids for a in alerts)
         resolved_ids = set(self.resolved_ids)
         notes = [self.close_notes.pop(a.id) for a in alerts if a.id in self.close_notes]
@@ -174,7 +177,7 @@ class TelegramOutput:
             return messages.partial_text(alerts, resolved_ids) + answers
 
         if done:
-            del self.messages[message_id]
+            del self.by_message[message_id]
             self.resolved_ids -= {a.id for a in alerts}
         if self.desk is not None:
             # con el lock de las respuestas: una que llega a la vez no lo pisa
@@ -210,10 +213,6 @@ class EventLogOutput:
 
     def __init__(self, log: EventLog) -> None:
         self.log = log
-
-    def handle(self, event: AnyEvent) -> AnyEvent:
-        self.write(event)
-        return event
 
     def write(self, event: AnyEvent) -> list[dict[str, Any]]:
         """Escribe las líneas del evento; devuelve las que llegaron al archivo."""
@@ -317,11 +316,13 @@ class DatabaseOutput:
         """Respuesta de un mozo (`alert_feedback`); llega desde el hilo del bot."""
         self.write("la respuesta", self.db.feedback, event)
 
-    def write(self, what: str, write: Callable[..., Any], *args: Any) -> None:
-        """Una escritura a la base. Con la base caída falla en cada lectura: el
-        traceback sale una vez por `DB_LOG_EVERY_S` y los demás se cuentan."""
+    def write(self, what: str, write: Callable[..., Any], *args: Any) -> bool:
+        """Una escritura a la base; False si falló. Con la base caída falla en cada
+        lectura: el traceback sale una vez por `DB_LOG_EVERY_S` y los demás se
+        cuentan."""
         try:
             write(*args)
+            return True
         except Exception as error:
             # por escritura y por tipo de error: una causa nueva no se calla
             key = (what, type(error).__name__)
@@ -330,11 +331,12 @@ class DatabaseOutput:
                 last = self._logged.get(key)
                 if last is not None and now - last < DB_LOG_EVERY_S:
                     self._muted[key] = self._muted.get(key, 0) + 1
-                    return
+                    return False
                 self._logged[key] = now
                 muted = self._muted.pop(key, 0)
             more = f" (y {muted} fallos más desde el último aviso)" if muted else ""
             logger.exception("No se pudo guardar %s en la base%s", what, more)
+            return False
 
     def _record_plates(
         self, obs: TableObservation, table: TableState, ts: datetime

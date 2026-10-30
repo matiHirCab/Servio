@@ -55,6 +55,8 @@ RESUME_MAX_AGE_S = 600.0
 # lectura. Si no, cada `SAVE_STATE_EVERY_S`. `close()` guarda lo último.
 SAVE_STATE_EVERY_S = 5.0
 SAVE_RULES_EVERY_S = 1.0
+# Al cerrar, cuánto se espera a que el hilo del bot termine lo que está haciendo.
+BOT_STOP_WAIT_S = 2.0
 
 
 class AlertProcessor:
@@ -155,9 +157,15 @@ class AlertProcessor:
 
         Si una salida falla se loguea y siguen las otras: el núcleo ya cambió su
         estado y un evento que no llega a nadie no se repite (un aviso cerrado
-        quedaría sin editar)."""
-        event = self._deliver(self.telegram, event)
+        quedaría sin editar). Salvo un aviso que el canal no pudo ni intentar mandar
+        (lanzó): el núcleo lo olvida y se abre de nuevo en la próxima lectura. Si
+        Telegram contesta que no (`send` devuelve None), el aviso queda abierto sin
+        mensaje, como siempre."""
+        event, sent = self._deliver(self.telegram, event)
         if isinstance(event, AlertsOpened):
+            if not sent:
+                self.core.forget(event.alerts)
+                return []
             self.core.attach(event.alerts)  # ya con su message_id
         written: list[dict[str, Any]] = []
         try:
@@ -169,20 +177,22 @@ class AlertProcessor:
         return written
 
     @staticmethod
-    def _deliver(output: Subscriber, event: Any) -> Any:
+    def _deliver(output: Subscriber, event: Any) -> tuple[Any, bool]:
+        """El evento como lo deja la salida, y si anduvo."""
         try:
-            return output.handle(event)
+            return output.handle(event), True
         except Exception:
             logger.exception(
                 "%s falló con %s", type(output).__name__, type(event).__name__
             )
-            return event
+            return event, False
 
     def close(self) -> None:
         if self.db_output is not None and self._state_dirty:
             self._flush_state()
         if self.bot is not None:
-            self.bot.stop()
+            # antes de cerrar lo que usa: una respuesta o un /metricas en curso
+            self.bot.stop(wait_s=BOT_STOP_WAIT_S)
         # el de Telegram tiene un hilo con la cola de lo que no llegó (notify.py)
         close_notifier = getattr(self.notifier, "close", None)
         if close_notifier is not None:
@@ -194,8 +204,11 @@ class AlertProcessor:
     # --- respuestas y comandos (bot.py) ---
 
     def _on_feedback(self, event: dict[str, Any]) -> None:
-        """Respuesta de un mozo: al log y a la base."""
-        self.log.write(event)
+        """Respuesta de un mozo: al log y a la base (si una falla, la otra igual)."""
+        try:
+            self.log.write(event)
+        except Exception:
+            logger.exception("No se pudo escribir la respuesta en el log")
         if self.db_output is not None:
             self.db_output.feedback(event)
 
@@ -221,7 +234,7 @@ class AlertProcessor:
             return
         self.core.tables = snapshot.tables
         self.core.open_alerts = snapshot.open_alerts
-        self.telegram.messages = snapshot.messages
+        self.telegram.by_message = snapshot.messages
         self.telegram.resolved_ids = snapshot.resolved_ids
         self.telegram.close_notes = snapshot.close_notes
         if self.db_output is not None:
@@ -240,7 +253,7 @@ class AlertProcessor:
         snapshot = persist.Snapshot(
             tables=self.core.tables,
             open_alerts=self.core.open_alerts,
-            messages=self.telegram.messages,
+            messages=self.telegram.by_message,
             resolved_ids=self.telegram.resolved_ids,
             close_notes=self.telegram.close_notes,
             served_rows=self.db_output.served_rows,
@@ -254,5 +267,5 @@ class AlertProcessor:
         assert self.db_output is not None  # hay base
         self._saved_at = self._clock()  # también si falla: no insistir cada lectura
         self.db_output.save_now = False
-        self._rules_dirty = False
-        self.db_output.write("el estado", self._save_state)
+        # si falla, el cambio de reglas sigue pendiente: se reintenta en 1 s, no en 5
+        self._rules_dirty = not self.db_output.write("el estado", self._save_state)

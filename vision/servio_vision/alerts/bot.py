@@ -63,8 +63,13 @@ class Bot:
         self._thread = threading.Thread(target=self._listen, name="bot", daemon=True)
         self._thread.start()
 
-    def stop(self) -> None:
+    def stop(self, wait_s: float = 0.0) -> None:
+        """Deja de escuchar y espera hasta `wait_s` a que el hilo termine lo que está
+        haciendo (una respuesta, un `/metricas`). Una consulta larga al canal no se
+        puede cortar, pero lo que traiga ya no se maneja."""
         self._stop.set()
+        if wait_s and self._thread is not None:
+            self._thread.join(timeout=wait_s)
 
     def _start_offset(self) -> int | None:
         """Desde dónde escuchar: después de lo que quedó pendiente de corridas
@@ -87,6 +92,8 @@ class Bot:
         while not self._stop.is_set():
             updates = self.channel.get_updates(offset) or []  # None: falló, sigue
             for update in updates:
+                if self._stop.is_set():
+                    return  # ya se cerró: el log y la base no están
                 offset = update["update_id"] + 1
                 try:
                     self.handle(update)

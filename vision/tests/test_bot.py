@@ -56,3 +56,28 @@ def test_new_updates_are_handled_after_the_pending_ones():
     channel = Channel([[], [metrics_update(3)]])
     assert run(channel) == ["metricas"]
     assert channel.offsets[:2] == [-1, None]  # sin pendientes: desde lo próximo
+
+
+def test_updates_that_arrive_after_stop_are_not_handled():
+    """La consulta larga no se puede cortar: lo que traiga después de `stop()` ya
+    no se maneja (el log y la base de la corrida están cerrados)."""
+    polling = threading.Event()
+    release = threading.Event()
+
+    class Slow(Channel):
+        def get_updates(self, offset, timeout=20):
+            if offset == -1:
+                return []
+            polling.set()
+            release.wait(5)  # la consulta larga, en curso al cerrar
+            return [metrics_update(9)]
+
+    ran: list[str] = []
+    b = Bot(Slow([]), commands={"metricas": lambda: ran.append("metricas")})
+    b.start()
+    assert polling.wait(5)
+    b.stop()
+    release.set()
+    b.stop(wait_s=5)  # espera a que el hilo termine
+    assert b._thread is not None and not b._thread.is_alive()
+    assert ran == []

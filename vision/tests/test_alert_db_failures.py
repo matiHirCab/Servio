@@ -168,6 +168,54 @@ def test_a_rules_change_is_saved_at_most_once_per_second(tmp_path):
     p.close()
 
 
+def test_a_failed_save_of_a_rules_change_is_retried_after_a_second(tmp_path):
+    """La base parpadea justo al guardar un cambio de reglas: sigue pendiente y se
+    reintenta pasado `SAVE_RULES_EVERY_S`, no recién en el guardado de cada 5 s."""
+    from servio_vision.alerts.processor import SAVE_RULES_EVERY_S
+
+    class FlakyDb(RecordingDb):
+        def __init__(self) -> None:
+            super().__init__()
+            self.fail_saves = 0
+
+        def save_state(self, state, at) -> None:
+            if self.fail_saves:
+                self.fail_saves -= 1
+                raise RuntimeError("base caída")
+            super().save_state(state, at)
+
+    db = FlakyDb()
+    p = recording(tmp_path, db)
+    now = [100.0]
+    p._clock = lambda: now[0]
+    plate = ("T1-p9", "lleno", "izquierda")
+    p.process(obs(0, plate))
+    assert db.saves == 1
+    db.fail_saves = 1
+    now[0] += SAVE_RULES_EVERY_S
+    p.process(obs(5, ("T1-p9", "comiendo", "izquierda")))  # el guardado falla
+    assert db.saves == 1
+    now[0] += SAVE_RULES_EVERY_S
+    p.process(obs(10, ("T1-p9", "comiendo", "izquierda")))  # nada nuevo: reintenta
+    assert db.saves == 2
+    p.close()
+
+
+def test_a_waiters_answer_reaches_the_db_even_if_the_log_fails(tmp_path):
+    db = RecordingDb()
+    answers = []
+    db.feedback = answers.append  # type: ignore[method-assign]
+    p = recording(tmp_path, db)
+
+    def broken(event):
+        raise OSError("disco lleno")
+
+    p.log.write = broken  # type: ignore[method-assign]
+    p._on_feedback({"event": "alert_feedback", "answer": "No le gustó"})
+    assert answers == [{"event": "alert_feedback", "answer": "No le gustó"}]
+    p.close()
+
+
 def test_state_is_saved_right_away_when_an_alert_opens(tmp_path):
     db = RecordingDb()
     p = recording(tmp_path, db)

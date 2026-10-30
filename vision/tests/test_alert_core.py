@@ -97,5 +97,19 @@ def test_rules_changed_ignores_a_reading_equal_to_the_last():
     core = AlertCore(PROD)
     vacio = ("T1-p1", "vacio", "centro")
     assert core.apply(obs(0, vacio))[0].rules_changed  # plato nuevo
-    assert not core.apply(obs(30, vacio))[0].rules_changed
-    assert core.apply(obs(60, ("T1-p1", "lleno", "centro")))[0].rules_changed
+    assert core.apply(obs(30, vacio))[0].rules_changed  # deja de ser reciente
+    assert not core.apply(obs(60, vacio))[0].rules_changed
+    assert core.apply(obs(90, ("T1-p1", "lleno", "centro")))[0].rules_changed
+
+
+def test_the_reading_after_a_plate_appears_counts_as_a_change():
+    """Un plato que apareció en la lectura anterior puede heredar los tiempos de
+    uno retirado. Esa ventana depende de `last_ts`: la lectura siguiente cambia la
+    vista (se guarda), así tras un corte el plato no queda «reciente» de más."""
+    core = AlertCore(PROD)
+    old, new = ("T1-p1", "comiendo", "izquierda"), ("T1-p2", "lleno", "centro")
+    core.apply(obs(0, old))
+    core.apply(obs(30, old))
+    assert core.apply(obs(60, old, new))[0].rules_changed  # aparece p2
+    assert core.apply(obs(90, old, new))[0].rules_changed  # p2 ya no es reciente
+    assert not core.apply(obs(120, old, new))[0].rules_changed
