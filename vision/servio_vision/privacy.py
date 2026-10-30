@@ -91,7 +91,9 @@ class YuNetDetector:
                 str(model), "", (320, 320), SCORE_THRESHOLD, NMS_THRESHOLD, 5000
             )
         except cv2.error as e:
-            raise PrivacyError(f"No se pudo cargar el detector de caras {model}: {e}")
+            raise PrivacyError(
+                f"No se pudo cargar el detector de caras {model}: {e}"
+            ) from e
         self.detect_width = detect_width
         self._size: tuple[int, int] | None = None
 
