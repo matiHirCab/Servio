@@ -131,6 +131,7 @@ def call(request: PlatesRequest, model: str, timeout_s: float) -> tuple[dict, di
         raise ClaudeCallError(
             f"claude -p falló (código {out.returncode}): {str(detail)[:500]}"
         )
+    assert result is not None  # sin `result` tampoco había `data`
     usage = result.get("usage") or {}
     return data, {
         "input_tokens": usage.get("input_tokens"),

@@ -153,6 +153,7 @@ def log_report(
     if not found and tables:
         log.info("Encuadre OK: %d mesa(s)", len(zones.tables) if zones else 0)
     if not found and light:
+        assert m is not None  # con `light`, `m` se midió arriba
         log.info("Luz OK: brillo %.0f, nitidez %.0f", m.brightness, m.sharpness)
     return found
 
@@ -160,15 +161,21 @@ def log_report(
 def main(argv: list[str] | None = None) -> int:
     from servio_vision.app import load_tables, setup_logging
     from servio_vision.capture import open_source
-    from servio_vision.cli import add_record_flag, build_parser, load_settings
+    from servio_vision.cli import (
+        add_record_flag,
+        build_parser,
+        load_settings,
+        require_source,
+    )
     from servio_vision.settings import explain
 
     parser = add_record_flag(build_parser("Chequeo de encuadre de la cámara (B-4)."))
     args = parser.parse_args(argv)  # los mismos flags y toml que main.py
     setup_logging(args.verbose)
     settings = load_settings(args)
-    if settings is None:
+    if settings is None or not require_source(settings):  # sin fuente, un mensaje
         return 2
+    assert settings.source is not None  # lo garantiza `require_source`
     try:
         zones, tracker = load_tables(settings)  # ultralytics o zones.json, antes
         first = next(open_source(settings.source, face_model=settings.face_model), None)

@@ -108,7 +108,7 @@ Telegram: `sendMessage` al grupo `TELEGRAM_GROUP_CHAT_ID` al abrir o recordar; `
 Ejemplos concretos de este contrato para probar sin video ni modelo:
 
 - `fixtures/observations/*.jsonl`: una observación de mesa por línea (formato de arriba). Escenarios mínimos: mesa que pasa de lleno a vacío y se retira, plato lleno 12 min con gente y después sin gente, id que cambia en la misma posición.
-- `fixtures/expected/*.alerts.json`: avisos que tienen que salir para cada escenario, con el segundo en que salen. Una lista de eventos en orden, con los nombres del log: `{ "at_seconds": 130, "event": "alert_opened" | "alert_reminder" | "alert_resolved", "type": "mesa_por_terminar", "table_id": "T1" }`, con `at_seconds` contado desde la primera línea del `.jsonl` (umbrales de producción).
+- `fixtures/expected/*.alerts.json`: avisos que tienen que salir para cada escenario, con el segundo en que salen. Una lista de eventos en orden, con los nombres del log: `{ "at_seconds": 130, "event": "alert_opened" | "alert_reminder" | "alert_resolved", "type": "mesa_terminada" | "plato_vacio" | "plato_lleno_mucho", "table_id": "T1" }`, con `at_seconds` contado desde la primera línea del `.jsonl` (umbrales de producción).
 
 Los modelos de la observación de mesa (`TableObservation`, `ObservedPlate`) y del aviso (`Alert`) están en `vision/servio_vision/alerts/models.py`. Rechazan campos desconocidos y un `state` que no coincide con su `fill_ratio`.
 

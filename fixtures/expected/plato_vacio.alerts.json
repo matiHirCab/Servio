@@ -1,0 +1,5 @@
+[
+  {"at_seconds": 240, "event": "alert_opened", "type": "plato_vacio", "table_id": "T3"},
+  {"at_seconds": 420, "event": "alert_reminder", "type": "plato_vacio", "table_id": "T3"},
+  {"at_seconds": 450, "event": "alert_resolved", "type": "plato_vacio", "table_id": "T3"}
+]

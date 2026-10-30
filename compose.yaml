@@ -9,10 +9,13 @@ services:
   servio:
     build: .
     image: servio
-    # main.py termina si la cámara no vuelve en 60 s: Docker lo levanta de nuevo.
-    # Ojo: un error de configuración (zones.json o umbrales inválidos) también reinicia,
-    # con hasta 1 minuto entre intentos: mirá `docker compose logs`. Al reiniciar se
-    # pierden los avisos abiertos.
+    # Una cámara que se corta (o que no abre al arrancar) se reintenta sin tope y con
+    # espera creciente: el programa no termina por eso. Lo que sí lo termina es un error
+    # de configuración (zones.json o umbrales inválidos, una clave que falta): Docker lo
+    # levanta de nuevo, con hasta 1 minuto entre intentos; mirá `docker compose logs`.
+    # Al reiniciar, con una cámara en vivo, los avisos abiertos y los ids de los platos
+    # se recuperan si pasaron menos de 10 min (tablas estado_servicio y estado_pipeline
+    # de out/servio.db); si no, se arranca de cero.
     restart: unless-stopped
     environment:
       # Las rutas del .env son relativas a la raíz del repo; adentro se corre desde vision/.
@@ -21,9 +24,12 @@ services:
       CLAUDE_PROVIDER: ${SERVIO_CLAUDE_PROVIDER:-anthropic}
       # En el servidor van los umbrales reales aunque el .env diga DEMO_MODE=true.
       DEMO_MODE: ${SERVIO_DEMO_MODE:-false}
+    # La fuente (SERVIO_SOURCE, con la clave de la cámara: rtsp://usuario:clave@ip/stream)
+    # NO va acá: el programa la lee del .env montado abajo. En `command` la clave
+    # aparecería en `docker ps --no-trunc`, en `docker compose config` y en cualquier
+    # captura que alguien pegue para pedir ayuda. Sin SERVIO_SOURCE en el .env, el
+    # programa lo dice en el log y termina.
     command:
-      - --source
-      - ${SERVIO_SOURCE:?Definí SERVIO_SOURCE en .env (ej. rtsp://usuario:clave@192.168.0.50/stream)}
       - --classifier
       - ${SERVIO_CLASSIFIER:-hybrid}
     volumes:

@@ -4,7 +4,7 @@ Guía para agentes de IA (Claude Code, Kiro, etc.) y para el equipo. Leé este a
 
 ## Qué es Servio (en una línea)
 
-Una cámara en alto mira el salón; YOLO encuentra los platos de cada mesa, Claude estima cuánta comida queda en cada uno, y cuando una mesa terminó, tiene platos vacíos o un plato sigue lleno mucho rato, le llega un aviso al mozo por Telegram.
+Una cámara en alto mira el salón; YOLO encuentra los platos de cada mesa, un modelo (Claude por defecto, o OpenAI; `CLAUDE_PROVIDER`) estima cuánta comida queda en cada uno, y cuando una mesa terminó, tiene platos vacíos o un plato sigue lleno mucho rato, le llega un aviso al mozo por Telegram.
 
 Contexto: MVP de hackathon, 24 horas, equipo de 3 personas (Tomás, Matías, Jessica). Todo es un programa en Python dentro de `vision/`: no hay backend web ni dashboard. Lo que pasa (platos servidos, avisos, respuestas de los mozos) queda en una base SQLite (`vision/out/servio.db`) de la que salen las métricas (`tools/metricas.py`).
 

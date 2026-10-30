@@ -12,11 +12,11 @@ Viven en `vision/servio_vision/alerts/` (Matías). Se evalúan cada vez que lleg
 
 ## Plato y mozo en los avisos, y respuestas del mozo
 
-Con los datos del restaurante (`fixtures/restaurante/`, simulados para la demo; en producción, la comanda), los avisos empiezan con el emoji, el mozo y la mesa ("🍽️ Juan · Mesa 3: terminó.") y el de `plato_lleno_mucho` nombra el plato: "❓ Mesa 3 · Juan: Risotto de hongos sigue lleno hace 12 min. ¿Está todo bien? Pasá a preguntar y contanos qué pasó." Ese aviso trae botones con las respuestas típicas del plato y "✏️ Otra respuesta"; la respuesta se agrega al mensaje y queda en el log (`alert_feedback`, ver `03`). Un "plato" que no corresponde a nada del pedido de la mesa no cuenta para los avisos.
+Con los datos del restaurante (`fixtures/restaurante/`, simulados para la demo; en producción, la comanda), los avisos empiezan con el emoji, el mozo y la mesa ("🍽️ Juan · Mesa 3: terminó.") y el de `plato_lleno_mucho` nombra el plato: "❓ Juan · Mesa 3: Risotto de hongos sigue lleno hace 12 min. ¿Está todo bien? Pasá a preguntar y contanos qué pasó." Ese aviso trae botones con las respuestas típicas del plato y "✏️ Otra respuesta"; la respuesta se agrega al mensaje y queda en el log (`alert_feedback`, ver `03`). Un "plato" que no corresponde a nada del pedido de la mesa no cuenta para los avisos.
 
 ## Recordatorio y cierre
 
-El mozo no responde, así que el antispam es por tiempo:
+Los botones del mozo solo cuentan qué pasó (no cierran ni silencian el aviso), así que el antispam es por tiempo:
 
 - **Un aviso abierto por `(mesa, tipo)`.** Mientras esté abierto no se manda otro igual.
 - **Recordatorio:** si la condición sigue después de R minutos, se manda un recordatorio ("Mesa 3: los platos vacíos siguen sin retirar hace 4 min"). Producción R = 3 min, demo 2 × `interval`. Máximo 2 recordatorios.

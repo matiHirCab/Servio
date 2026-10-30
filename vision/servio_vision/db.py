@@ -176,6 +176,8 @@ class Row(tuple):
     """Una fila: tupla (como `sqlite3.Row`, `tuple(row)` da los valores) que también
     se indexa por nombre de columna (`row["mozo"]`)."""
 
+    _keys: tuple[str, ...] = ()
+
     def __new__(cls, values: Sequence[Any], keys: Sequence[str]) -> Self:
         row = super().__new__(cls, values)
         row._keys = tuple(keys)
@@ -313,10 +315,12 @@ class Database:
     def _upsert(self, table: Table):
         """`INSERT ... ON CONFLICT` del motor que sea (antes `INSERT OR REPLACE`)."""
         if self.dialect == "postgresql":
-            from sqlalchemy.dialects.postgresql import insert
-        else:
-            from sqlalchemy.dialects.sqlite import insert
-        return insert(table)
+            from sqlalchemy.dialects.postgresql import insert as pg_insert
+
+            return pg_insert(table)
+        from sqlalchemy.dialects.sqlite import insert as sqlite_insert
+
+        return sqlite_insert(table)
 
     # --- carta, mesas y mozos (de la comanda) ---
 
@@ -401,11 +405,13 @@ class Database:
                     origen="camara",
                 )
             )
-            return result.inserted_primary_key[0]
+            primary_key = result.inserted_primary_key
+            assert primary_key is not None  # es un INSERT de una fila con id propio
+            return primary_key[0]
 
     def plate_readings(
         self,
-        readings: list[tuple[int, str, float | None, bool]],
+        readings: Sequence[tuple[int, str, float | None, bool]],
         gone: list[int],
         at: datetime,
     ) -> None:

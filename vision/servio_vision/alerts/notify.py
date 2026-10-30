@@ -84,6 +84,10 @@ class Notifier(Protocol):
         """Reescribe un mensaje ya mandado (y le saca los botones); False si falló."""
         ...
 
+    def send_photo(self, path: Path, caption: str = "") -> int | None:
+        """Manda una imagen al grupo (las métricas de `/metricas`)."""
+        ...
+
 
 class TelegramNotifier:
     """Manda y edita mensajes en el grupo de mozos."""
