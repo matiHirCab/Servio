@@ -10,15 +10,26 @@ con `build_pipeline`. Nada de esto lee el entorno: todo viene en `Settings`.
 
 import logging
 import sys
+import time
 import warnings
 
-from servio_vision import alerts, framing, prompt
+from servio_vision import alerts, framing, privacy, prompt
 from servio_vision.alerts.config import load_config
-from servio_vision.capture import open_source
+from servio_vision.alerts.notify import TelegramNotifier
+from servio_vision.capture import (
+    CAMERA_RETRY_MAX_S,
+    CAMERA_RETRY_S,
+    CameraUnavailable,
+    is_live_source,
+    open_source,
+    retry_waits,
+)
 from servio_vision.classifier import get_classifier
 from servio_vision.cli import require_source
 from servio_vision.dish_match import DishMatcher
+from servio_vision.health import STALL_S, HealthMonitor
 from servio_vision.pipeline import Pipeline
+from servio_vision.privacy import Anonymizer
 from servio_vision.recording import FrameRecorder
 from servio_vision.restaurant import DEFAULT_DIR as RESTAURANT_DIR
 from servio_vision.restaurant import Restaurant
@@ -179,6 +190,8 @@ def build_pipeline(settings: Settings) -> Pipeline | None:
         env=telegram_env,
         database_url=settings.database_url,
         local_id=settings.local_id,
+        # una cámara en vivo sigue donde quedó tras un reinicio; un video, no
+        resume=bool(settings.source) and is_live_source(settings.source),
     )
     return Pipeline(
         classifier,
@@ -196,6 +209,31 @@ def build_pipeline(settings: Settings) -> Pipeline | None:
     )
 
 
+def build_health_monitor(settings: Settings) -> HealthMonitor | None:
+    """El latido (`health.py`) de una cámara en vivo; un video o una foto no lo
+    necesitan. Avisa al chat de `TELEGRAM_ADMIN_CHAT_ID`, nunca al grupo de mozos;
+    sin ese chat el aviso queda solo en el log."""
+    if not settings.source or not is_live_source(settings.source):
+        return None
+    token, chat = settings.telegram_bot_token, settings.telegram_admin_chat_id
+    if settings.telegram and token and chat:
+        admin = TelegramNotifier(token, chat)
+
+        def send(text: str) -> bool:
+            return admin.send(text) is not None
+    else:
+        logger.warning(
+            "Sin TELEGRAM_ADMIN_CHAT_ID: si dejan de llegar lecturas, el aviso de "
+            "salud solo queda en el log"
+        )
+
+        def send(text: str) -> bool:
+            return True  # el monitor ya lo logueó; no hay a quién más avisar
+
+    # con una cadencia lenta, 5 min sin lectura es lo normal
+    return HealthMonitor(send, stall_s=max(STALL_S, 4 * settings.interval))
+
+
 def run(settings: Settings, limit: int | None = None) -> int:
     """El loop: abre la fuente, graba si se pidió y procesa cada lectura."""
     if not require_source(settings):
@@ -204,17 +242,25 @@ def run(settings: Settings, limit: int | None = None) -> int:
     if pipeline is None:
         return 2
     readings = 0
+    monitor = build_health_monitor(settings)
     try:
         # La carpeta de grabación primero: si no se puede crear, la cámara todavía
         # no se abrió. Después la fuente, que sale de open_source con las caras
         # difuminadas (C-3): nada de lo que sigue, tampoco la grabación, ve una cara.
         recorder = FrameRecorder(settings.record) if settings.record else None
-        frames = open_source(
-            settings.source,
-            settings.interval,
-            settings.speed,
-            face_model=settings.face_model,
+        # El detector de caras de una cámara se arma una sola vez y antes del latido:
+        # cargarlo (o bajarlo) en cada reintento, o contarlo como tiempo sin lecturas,
+        # no tiene sentido. Con un archivo lo arma `open_source` después de ver que
+        # existe, así un error de tipeo no termina en «no se pudo bajar el modelo».
+        anonymize = (
+            privacy.default_anonymizer(face_model=settings.face_model)
+            if is_live_source(settings.source)
+            else None
         )
+        if monitor is not None:
+            # antes de abrir la cámara: si no abre, también hay que enterarse
+            monitor.start()
+        frames = _open_frames(settings, anonymize)
         logger.info("Privacidad: caras difuminadas en la captura")
         for frame, ts in frames:
             if recorder is not None:
@@ -230,6 +276,9 @@ def run(settings: Settings, limit: int | None = None) -> int:
                     frame, None if found_none else pipeline.zones, logger, light=False
                 )
             readings += 1
+            # Un latido es una lectura que llegó a los avisos (ver `frame_ok`).
+            if monitor is not None and pipeline.frame_ok:
+                monitor.beat()
             if limit is not None and readings >= limit:
                 break
     except OSError as e:
@@ -240,9 +289,31 @@ def run(settings: Settings, limit: int | None = None) -> int:
     except KeyboardInterrupt:
         logger.info("Cortado a mano")
     finally:
+        if monitor is not None:
+            monitor.stop()
         pipeline.close()
     logger.info("%d lecturas", readings)
     return 0 if readings else 1
+
+
+def _open_frames(settings: Settings, anonymize: Anonymizer | None):
+    """La fuente de frames. Una cámara que no abre se reintenta con esperas que
+    crecen, sin rendirse: tras un corte de luz el router o el celular pueden
+    arrancar después que la PC. Cualquier otro error de apertura sale tal cual."""
+    waits = retry_waits(CAMERA_RETRY_S, CAMERA_RETRY_MAX_S)
+    while True:
+        try:
+            return open_source(
+                settings.source,
+                settings.interval,
+                settings.speed,
+                anonymize=anonymize,
+                face_model=settings.face_model,
+            )
+        except CameraUnavailable as error:
+            wait = next(waits)
+            logger.warning("%s: reintento en %g s", error, wait)
+            time.sleep(wait)
 
 
 def _record(recorder: FrameRecorder, frame, ts) -> FrameRecorder | None:
