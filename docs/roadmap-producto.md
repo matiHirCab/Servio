@@ -6,7 +6,6 @@ Qué hacer después de la hackathon para que Servio quede prolijo, bien armado y
 
 - **No hay restaurante todavía.** Se prueba en nuestras casas, con una cámara (celular con DroidCam o cámara IP) mirando una mesa desde arriba, como en la hackathon. Por eso el plan se apoya en un **banco de pruebas en casa** (fase B) que reemplaza los datos que daría un restaurante.
 - **El código creció rápido.** Son ~7.200 líneas que funcionan y tienen buenos tests, pero hay partes que hacen demasiado:
-  - `classifiers/claude_plates.py` (541 líneas) mezcla tres proveedores: `claude -p`, la API de Anthropic y OpenAI.
   - `alerts/processor.py` junta estado, reglas, log, base, textos de Telegram, botones y comandos.
   - `main.py` tiene a la vez el `Pipeline`, el armado de las piezas y los flags.
   - La configuración está repartida entre flags, `.env` y `os.getenv` sueltos en 7 archivos.
@@ -45,7 +44,7 @@ Mover `Pipeline` a `servio_vision/pipeline.py` y el armado de las piezas (`build
 **Hecho cuando:** `main.py` tiene menos de 100 líneas y `test_main.py` pasa sin cambios de comportamiento.
 
 ### A-3 · Un proveedor de modelo por archivo
-**Tomás · A · 2 d · depende de: A-1**
+**Tomás · A · 2 d · hecho** (no dependía de A-1: los proveedores siguen leyendo `settings.current()`; con A-1 se les pasa `Settings`)
 Partir `claude_plates.py` en un paquete `servio_vision/llm/` con una interfaz `PlateEstimator` (`estimate(request) -> PlatesReport`) y un archivo por proveedor (`claude_cli.py`, `anthropic_api.py`, `openai_api.py`). El parseo y la validación quedan en un módulo común. `hybrid.py` recibe un `PlateEstimator` y no sabe cuál es.
 
 **Hecho cuando:** sumar un proveedor nuevo es un archivo nuevo más una línea en el registro, y `test_claude_plates.py` y `test_hybrid.py` pasan.

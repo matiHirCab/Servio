@@ -125,7 +125,7 @@ python tools/resumen.py --image out/resumen.png
 No hay créditos de AWS, así que Claude va por el Claude Code logueado (`claude -p`, suscripción del equipo). Probar con un recorte de mesa y los de sus platos:
 
 ```bash
-python -m servio_vision.classifiers.claude_plates mesa.jpg plato1.jpg plato2.jpg
+python -m servio_vision.llm plato1.jpg plato2.jpg
 ```
 
 - `CLAUDE_PROVIDER=cli` (por defecto), `anthropic` (necesita `ANTHROPIC_API_KEY` y `pip install anthropic`) u `openai` (Decisions API de OpenAI, modelo `gpt-6-luna` o el de `OPENAI_MODEL`, timeout de 14 s o el de `OPENAI_TIMEOUT_S`; necesita `OPENAI_API_KEY` y `pip install "openai>=3.26.0"`). Con `openai` no hay JSON libre: se hacen preguntas tipadas por plato (`prompt.decision_questions`) y se arma el mismo `PlatesReport`.

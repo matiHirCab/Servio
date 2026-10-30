@@ -14,7 +14,7 @@ import time
 import warnings
 from typing import Any
 
-from servio_vision import alerts, framing, privacy, prompt
+from servio_vision import alerts, framing, llm, privacy, prompt
 from servio_vision.alerts.config import load_config
 from servio_vision.alerts.notify import TelegramNotifier
 from servio_vision.capture import (
@@ -76,9 +76,11 @@ def classifier_kwargs(settings: Settings) -> dict:
         if settings.classifier == "hybrid":
             provider = settings.claude_provider
             kwargs.update(
-                provider=provider,
-                model=settings.model_for(provider),
-                timeout_s=settings.timeout_for(provider),
+                estimator=llm.make_estimator(
+                    provider,
+                    settings.model_for(provider),
+                    settings.timeout_for(provider),
+                ),
                 reuse_unchanged=settings.claude_reuse_unchanged,
             )
         return kwargs

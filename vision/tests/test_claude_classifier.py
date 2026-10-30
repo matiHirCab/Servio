@@ -1,6 +1,7 @@
 """Clasificador `claude`: solo el modelo, con la mesa entera, y solo si se permite."""
 
 import base64
+import dataclasses
 import io
 
 import numpy as np
@@ -9,9 +10,9 @@ from PIL import Image
 
 from servio_vision import people
 from servio_vision.classifier import ClassifierUnavailable, get_classifier
-from servio_vision.classifiers import claude_plates
 from servio_vision.classifiers.claude import ClaudeClassifier
-from servio_vision.classifiers.providers.base import ClaudeCallError
+from servio_vision.llm import registry, runtime
+from servio_vision.llm.base import ClaudeCallError
 
 NOISE = np.random.default_rng(0).integers(0, 255, (96, 128, 3), dtype=np.uint8)
 
@@ -61,8 +62,12 @@ def backend(monkeypatch):
             raise answer
         return answer, {"input_tokens": 10, "output_tokens": 5}
 
-    monkeypatch.setitem(claude_plates._BACKENDS, "cli", fake)
-    monkeypatch.setattr(claude_plates, "RETRY_WAIT_S", 0)
+    monkeypatch.setitem(
+        registry.PROVIDERS,
+        "cli",
+        dataclasses.replace(registry.PROVIDERS["cli"], call=fake),
+    )
+    monkeypatch.setattr(runtime, "RETRY_WAIT_S", 0)
     return requests, answers
 
 

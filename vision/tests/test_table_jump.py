@@ -12,12 +12,12 @@ from datetime import UTC, datetime, timedelta
 import numpy as np
 import pytest
 
-from servio_vision.classifiers import claude_plates
-from servio_vision.classifiers.claude_plates import PlateEstimate, PlatesReport
 from servio_vision.classifiers.hybrid import HybridClassifier
 from servio_vision.detector import Detection
+from servio_vision.llm import PlateEstimate, PlatesReport
 from servio_vision.pipeline import Pipeline
 from servio_vision.zones import TableZone, Zones
+from tests.model_fakes import patch_estimator
 
 FRAME = np.zeros((400, 600, 3), np.uint8)
 # platos quietos, en píxeles del frame: (x0, y0, x1, y1)
@@ -71,7 +71,7 @@ def claude(monkeypatch):
             ]
         )
 
-    monkeypatch.setattr(claude_plates, "estimate_plates", estimate)
+    patch_estimator(monkeypatch, estimate)
 
 
 def in_frame(bbox, rect):

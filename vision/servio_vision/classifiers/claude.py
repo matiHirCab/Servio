@@ -18,13 +18,11 @@ platos en una imagen entera.
 
 import io
 import logging
-from typing import Any
 
 from PIL import Image
 
-from servio_vision import people, settings
+from servio_vision import llm, people, settings
 from servio_vision.classifier import ClassifierUnavailable
-from servio_vision.classifiers import claude_plates
 from servio_vision.schemas import Item, TableReport
 
 logger = logging.getLogger(__name__)
@@ -62,11 +60,7 @@ class ClaudeClassifier:
                 "pixelar a los comensales. pip install -r requirements-yolo.txt"
             )
         self.people: people.PersonDetector = detector
-        self.claude_kwargs: dict[str, Any] = {
-            "provider": provider,
-            "model": model,
-            "timeout_s": timeout_s,
-        }
+        self.estimator = llm.make_estimator(provider, model, timeout_s)
         self._next_id: dict[str, int] = {}  # por mesa; el número solo sube
 
     def classify(
@@ -76,9 +70,7 @@ class ClaudeClassifier:
         persons = self.people.detect(img)
         # lo que de las personas entre en la mesa sale pixelado, no la mesa cruda
         safe = people.anonymize_crop(img, (0.0, 0.0), persons)
-        estimate = claude_plates.estimate_table(
-            _encode(safe), table_id, **self.claude_kwargs
-        )
+        estimate = self.estimator.estimate_table(_encode(safe), table_id)
         if estimate is None:
             return None
         by_position = {i.position: i.id for i in previous_items}
