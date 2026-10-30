@@ -9,15 +9,19 @@ reutiliza, sin flags ni variables de entorno adentro. Ver docs/context/04-vision
 - Una mesa cuya lectura falla (`None` o error) no manda observación esa vez.
 """
 
+import json
 import logging
+import time
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime
+from datetime import UTC, datetime
 
 import numpy as np
 
 from servio_vision.alerts.models import TableObservation
+from servio_vision.alerts.processor import RESUME_MAX_AGE_S
 from servio_vision.classifier import Classifier
+from servio_vision.db import Database
 from servio_vision.dish_match import DishMatcher
 from servio_vision.restaurant import Restaurant, plate_order
 from servio_vision.schemas import Item, TableReport
@@ -28,6 +32,9 @@ from servio_vision.zones import Zones, crop_table, remap_bbox, table_rect, to_jp
 logger = logging.getLogger("servio")
 
 MAX_TABLE_WORKERS = 8  # mesas que se clasifican a la vez
+STATE_VERSION = 1  # de la foto que guarda `export_state`
+SAVE_STATE_EVERY_S = 5.0  # cada cuánto se guarda lo que recuerda el pipeline
+LOG_SAVE_ERROR_EVERY_S = 60.0  # una base caída falla en cada guardado
 
 ObservationHandler = Callable[[TableObservation], object]
 
@@ -45,10 +52,13 @@ class Pipeline:
         restaurant: Restaurant | None = None,
         dish_matcher: DishMatcher | None = None,
         smoother_factory: Callable[[], TableSmoother] | None = None,
+        state_db: Database | None = None,
     ) -> None:
         """`zones` fijas (de un archivo) o `tables`, que detecta las mesas en cada
         lectura. `smoother_factory`: cómo armar el suavizado de cada mesa (app.py le
-        pasa los umbrales de la configuración); sin él, `TableSmoother` por defecto."""
+        pasa los umbrales de la configuración); sin él, `TableSmoother` por defecto.
+        `state_db`: dónde guarda lo que recuerda, para seguir tras un reinicio
+        (`resume`); sin base no guarda nada."""
         if (zones is None) == (tables is None):
             raise ValueError("Pipeline necesita zones o tables, no las dos")
         self.classifier = classifier
@@ -68,8 +78,94 @@ class Pipeline:
         # aceptaron los avisos y si falló la detección de mesas.
         self.delivered = 0
         self.detection_failed = False
+        self.state_db = state_db
+        self._saved_at = float("-inf")  # time.monotonic() del último guardado
+        self._save_error_logged_at = float("-inf")
         self._add_tables(self.zones)
         self._pool = ThreadPoolExecutor(max_workers=MAX_TABLE_WORKERS)
+
+    # --- seguir después de un reinicio ---
+
+    def export_state(self) -> dict:
+        """Lo que recuerda el pipeline, como JSON: los platos de la lectura anterior,
+        el suavizado de cada mesa, la numeración de las mesas detectadas, los platos
+        del pedido y lo del clasificador (ids). Con los ids de antes, lo que `alerts`
+        recuperó de su propia foto (`alerts/persist.py`) sigue siendo de los mismos
+        platos. Las referencias (JPEG) y el conteo de lecturas no se guardan."""
+        classifier_export = getattr(self.classifier, "export_state", None)
+        return {
+            "version": STATE_VERSION,
+            "previous": {
+                table: [i.model_dump(mode="json") for i in items]
+                for table, items in self.previous.items()
+            },
+            "smoothers": {t: s.export_state() for t, s in self.smoothers.items()},
+            "tables": self.tables.export_state() if self.tables is not None else None,
+            "restaurant": (
+                self.restaurant.export_state() if self.restaurant is not None else None
+            ),
+            "classifier": classifier_export() if classifier_export else None,
+        }
+
+    def _restore_state(self, data: dict) -> None:
+        if data.get("version") != STATE_VERSION:
+            raise ValueError(f"versión {data.get('version')} de la foto")
+        if self.tables is not None and data["tables"] is not None:
+            self.tables.restore_state(data["tables"])
+        if self.restaurant is not None and data["restaurant"] is not None:
+            self.restaurant.restore_state(data["restaurant"])
+        restore_classifier = getattr(self.classifier, "restore_state", None)
+        if restore_classifier is not None and data["classifier"] is not None:
+            restore_classifier(data["classifier"])
+        for table, saved in data["smoothers"].items():
+            smoother = self.smoothers.setdefault(table, self._new_smoother())
+            smoother.restore_state(saved)
+        for table, items in data["previous"].items():
+            self.previous[table] = [Item.model_validate(i) for i in items]
+
+    def resume(self, max_age_s: float = RESUME_MAX_AGE_S) -> bool:
+        """Sigue con lo que dejó la corrida anterior en la base, si es de hace menos
+        de `max_age_s`. Solo para una cámara en vivo: un video empieza siempre de
+        cero. `False` (y arranca de cero, como antes) sin base, sin foto, con una foto
+        vieja o ilegible; nunca lanza."""
+        if self.state_db is None:
+            return False
+        try:
+            saved = self.state_db.load_state(kind="pipeline")
+            if saved is None:
+                return False
+            text, saved_at = saved
+            age = (datetime.now(UTC) - saved_at).total_seconds()
+            if age > max_age_s:
+                logger.info(
+                    "Lo guardado del pipeline es de hace %d s: arranco de cero", age
+                )
+                return False
+            self._restore_state(json.loads(text))
+        except Exception:
+            logger.exception(
+                "No se pudo recuperar el pipeline guardado: arranco de cero"
+            )
+            return False
+        logger.info("Sigo con los ids y el suavizado de hace %d s", age)
+        return True
+
+    def save_state(self) -> None:
+        """Guarda lo que recuerda el pipeline (para `resume`)."""
+        if self.state_db is None:
+            return
+        self._saved_at = time.monotonic()  # también si falla: no insistir cada lectura
+        try:
+            self.state_db.save_state(
+                json.dumps(self.export_state()), datetime.now(UTC), kind="pipeline"
+            )
+        except Exception:
+            # la base es auxiliar: se sigue sin ella. Con la base caída falla en cada
+            # guardado: el traceback sale una vez por minuto.
+            now = time.monotonic()
+            if now - self._save_error_logged_at >= LOG_SAVE_ERROR_EVERY_S:
+                self._save_error_logged_at = now
+                logger.exception("No se pudo guardar el estado del pipeline")
 
     @property
     def frame_ok(self) -> bool:
@@ -206,9 +302,15 @@ class Pipeline:
                     "%s %s: alerts falló con esta observación", ts, table_id
                 )
             observations.append(observation)
+        if (
+            self.state_db is not None
+            and time.monotonic() - self._saved_at >= SAVE_STATE_EVERY_S
+        ):
+            self.save_state()
         return observations
 
     def close(self) -> None:
+        self.save_state()  # lo último, para que el próximo arranque siga de ahí
         self._pool.shutdown(wait=False, cancel_futures=True)
 
     def _classify(self, jpeg: bytes, table_id: str) -> TableReport | None:

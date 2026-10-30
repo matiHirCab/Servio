@@ -89,6 +89,18 @@ class TableTracker:
         self.tables: list[_Table] = []
         self._next = 1
 
+    def export_state(self) -> dict:
+        """Las mesas con su id y su caja, como JSON: tras un reinicio, la mesa que
+        estaba tapada o la que apareció antes no corre los números (T1, T2…)."""
+        return {
+            "next": self._next,
+            "tables": [{"id": t.table_id, "box": list(t.box)} for t in self.tables],
+        }
+
+    def restore_state(self, data: dict) -> None:
+        self._next = int(data["next"])
+        self.tables = [_Table(t["id"], tuple(t["box"])) for t in data["tables"]]
+
     def update(self, frame: np.ndarray) -> Zones:
         height, width = frame.shape[:2]
         detections = self.detector.detect(frame)

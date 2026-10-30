@@ -397,6 +397,10 @@ class AlertProcessor:
             self._flush_state()
         if self.feedback is not None:
             self.feedback.stop()
+        # el de Telegram tiene un hilo con la cola de lo que no llegó (notify.py)
+        close_notifier = getattr(self.notifier, "close", None)
+        if close_notifier is not None:
+            close_notifier()
         self.log.close()
         if self.db is not None:
             self.db.close()

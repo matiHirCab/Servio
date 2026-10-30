@@ -34,7 +34,10 @@ def retrying(handler) -> tuple[TelegramNotifier, list[httpx.Request], list[float
         return handler(request)
 
     client = httpx.Client(transport=httpx.MockTransport(record))
-    tg = TelegramNotifier(TOKEN, CHAT_ID, client=client, sleep=sleeps.append)
+    # sin hilo de fondo: un envío que falla se queda en la cola y no suma pedidos
+    tg = TelegramNotifier(
+        TOKEN, CHAT_ID, client=client, sleep=sleeps.append, background=False
+    )
     return tg, requests, sleeps
 
 
@@ -152,7 +155,15 @@ def test_a_client_error_is_not_retried():
 
 def test_retry_after_is_capped_so_the_loop_is_not_stuck():
     answers = iter([too_many_requests(3600), ok({"message_id": 1})])
-    tg, _, sleeps = retrying(lambda r: next(answers))
+    sleeps: list[float] = []
+    tg = TelegramNotifier(
+        TOKEN,
+        CHAT_ID,
+        client=httpx.Client(transport=httpx.MockTransport(lambda r: next(answers))),
+        sleep=sleeps.append,
+        deadline_s=60,  # con el plazo normal (8 s) una pausa de 10 s no entra: va a la cola
+        background=False,
+    )
     assert tg.send("hola") == 1
     assert sleeps and sleeps[0] <= 10
 
