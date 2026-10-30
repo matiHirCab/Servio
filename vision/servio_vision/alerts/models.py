@@ -67,6 +67,12 @@ Timestamp = Annotated[
 ]
 
 
+def iso(ts: datetime) -> str:
+    """Un ts como lo escribe el log: el mismo formato que pydantic usa para los
+    demás ts (UTC con "Z")."""
+    return ts.isoformat().replace("+00:00", "Z")
+
+
 class _Model(BaseModel):
     # Sin conversiones implícitas ("0.8" -> 0.8) y sin campos desconocidos (atrapa typos
     # como "fillRatio", que si no se perderían en silencio).

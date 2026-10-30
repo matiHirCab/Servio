@@ -23,6 +23,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 from servio_vision.alerts import messages
+from servio_vision.alerts.models import iso
 from servio_vision.restaurant import OTHER_ANSWER
 
 logger = logging.getLogger(__name__)
@@ -204,7 +205,7 @@ class FeedbackDesk:
         self.log_event(
             {
                 "event": "alert_feedback",
-                "ts": now.isoformat().replace("+00:00", "Z"),
+                "ts": iso(now),
                 "alert_id": question.alert_id,
                 "table_id": question.table_id,
                 "type": question.alert_type,

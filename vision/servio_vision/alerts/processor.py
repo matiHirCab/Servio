@@ -15,8 +15,10 @@ recupera al arrancar si es reciente.
 """
 
 import dataclasses
+import functools
 import logging
 import time
+from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -26,7 +28,7 @@ from servio_vision.alerts.bot import Bot, BotChannel, send_metrics
 from servio_vision.alerts.config import AlertConfig
 from servio_vision.alerts.core import AlertCore, AlertsOpened, TableUpdated
 from servio_vision.alerts.feedback import FeedbackDesk
-from servio_vision.alerts.models import Alert, TableObservation
+from servio_vision.alerts.models import Alert, TableObservation, iso
 from servio_vision.alerts.notify import Notifier
 from servio_vision.alerts.outputs import (
     DatabaseOutput,
@@ -35,7 +37,7 @@ from servio_vision.alerts.outputs import (
     ObservationReceived,
     Subscriber,
     TelegramOutput,
-    iso,
+    log_lines,
 )
 from servio_vision.alerts.state import TableState
 from servio_vision.db import Database
@@ -86,7 +88,11 @@ class AlertProcessor:
             self.feedback = FeedbackDesk(notifier, self._on_feedback)
             # la consola no se escucha: sin canal que escuchar no hay bot
             if isinstance(notifier, BotChannel):
-                commands = {"metricas": self._send_metrics} if db is not None else {}
+                commands: dict[str, Callable[[], None]] = {}
+                if db is not None:
+                    commands["metricas"] = functools.partial(
+                        send_metrics, db, restaurant, notifier
+                    )
                 self.bot = Bot(notifier, self.feedback, commands)
                 self.bot.start()
         # El canal va primero y aparte: le pone el `message_id` a los avisos, y el
@@ -123,11 +129,10 @@ class AlertProcessor:
         La observación va al log antes de aplicarla (queda aunque el núcleo la
         rechace) y cada aviso apenas se manda o edita.
         """
-        self.log_output.written = []
-        self._dispatch(ObservationReceived(obs))
+        written = log_lines(self._dispatch(ObservationReceived(obs)))
         events = self.core.apply(obs)  # ValueError si el ts va hacia atrás
         for event in events:
-            self._dispatch(event)
+            written += log_lines(self._dispatch(event))
         if self.db_output is not None:
             self._state_dirty = True
             update = events[0]
@@ -136,17 +141,19 @@ class AlertProcessor:
             due = time.monotonic() - self._saved_at >= SAVE_STATE_EVERY_S
             if alerts_changed or update.rules_changed or self.db_output.save_now or due:
                 self._flush_state()
-        return self.log_output.written
+        return written
 
-    def _dispatch(self, event: Any) -> None:
-        """Un evento al canal y después a las demás salidas. Si una falla se loguea
-        y siguen las otras: el núcleo ya cambió su estado y un evento que no llega
-        a nadie no se repite (un aviso cerrado quedaría sin editar)."""
+    def _dispatch(self, event: Any) -> Any:
+        """Un evento al canal y después a las demás salidas; devuelve el evento como
+        lo vieron (con el `message_id`). Si una falla se loguea y siguen las otras:
+        el núcleo ya cambió su estado y un evento que no llega a nadie no se repite
+        (un aviso cerrado quedaría sin editar)."""
         event = self._deliver(self.telegram, event)
         if isinstance(event, AlertsOpened):
             self.core.attach(event.alerts)  # ya con su message_id
         for output in self._outputs:
             event = self._deliver(output, event)
+        return event
 
     @staticmethod
     def _deliver(output: Subscriber, event: Any) -> Any:
@@ -178,10 +185,6 @@ class AlertProcessor:
         self.log.write(event)
         if self.db_output is not None:
             self.db_output.feedback(event)
-
-    def _send_metrics(self) -> None:
-        if self.db is not None and self.restaurant is not None:
-            send_metrics(self.db, self.restaurant, self.notifier)
 
     # --- estado que sobrevive a un reinicio (A-5) ---
 

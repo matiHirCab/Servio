@@ -32,7 +32,7 @@ from servio_vision.alerts.core import (
     TableUpdated,
 )
 from servio_vision.alerts.feedback import FeedbackDesk, Question
-from servio_vision.alerts.models import Alert, TableObservation
+from servio_vision.alerts.models import Alert, TableObservation, iso
 from servio_vision.alerts.notify import Notifier
 from servio_vision.alerts.state import TableState
 from servio_vision.db import Database
@@ -131,7 +131,10 @@ class TelegramOutput:
             self.resolved_ids.add(alert.id)
             if message_id not in message_ids:
                 message_ids.append(message_id)
-        edited = {message_id: self._edit(message_id) for message_id in message_ids}
+        edited = {
+            message_id: self._edit_or_log(message_id, event)
+            for message_id in message_ids
+        }
         # Sin mensaje (Telegram falló al abrir) no hubo nada que editar: text None.
         texts = {
             a.id: edited.get(a.telegram_message_id)
@@ -140,6 +143,21 @@ class TelegramOutput:
             for a in event.alerts
         }
         return replace(event, texts=texts)
+
+    def _edit_or_log(self, message_id: int, event: AlertsResolved) -> str | None:
+        """`_edit`, pero si falla se loguea y siguen los demás mensajes de la
+        lectura (si no, uno roto dejaba los otros sin "ya resuelto"). Si el mensaje
+        ya no se conoce, sus avisos no quedan marcados para siempre."""
+        try:
+            return self._edit(message_id)
+        except Exception:
+            logger.exception("No se pudo editar el mensaje %s", message_id)
+            if message_id not in self.messages:
+                for alert in event.alerts:
+                    if alert.telegram_message_id == message_id:
+                        self.resolved_ids.discard(alert.id)
+                        self.close_notes.pop(alert.id, None)
+            return None
 
     def _edit(self, message_id: int) -> str:
         """Reescribe un mensaje con sus avisos cerrados marcados; devuelve el texto."""
@@ -195,30 +213,36 @@ class EventLogOutput:
 
     def __init__(self, log: EventLog) -> None:
         self.log = log
-        self.written: list[dict[str, Any]] = []  # lo escrito (la fachada lo vacía)
-
-    def write(self, line: dict[str, Any]) -> None:
-        self.log.write(line)
-        self.written.append(line)
 
     def handle(self, event: AnyEvent) -> AnyEvent:
-        if isinstance(event, ObservationReceived):
-            self.write({"event": "observation", **event.obs.model_dump(mode="json")})
-        elif isinstance(event, AlertsOpened):
-            for alert in event.alerts:
-                self.write(alert_event("alert_opened", event.ts, alert, event.text))
-        elif isinstance(event, AlertsReminded):
-            for alert in event.alerts:
-                self.write(alert_event("alert_reminder", event.ts, alert, event.text))
-        elif isinstance(event, AlertsResolved):
-            for alert in event.alerts:
-                line = alert_event(
-                    "alert_resolved", event.ts, alert, event.texts.get(alert.id)
-                )
-                if event.reasons.get(alert.id):
-                    line["close_reason"] = event.reasons[alert.id]
-                self.write(line)
+        for line in log_lines(event):
+            self.log.write(line)
         return event
+
+
+def log_lines(event: AnyEvent) -> list[dict[str, Any]]:
+    """Las líneas del log de un evento (formato en 03-contratos.md, «Log»)."""
+    if isinstance(event, ObservationReceived):
+        return [{"event": "observation", **event.obs.model_dump(mode="json")}]
+    if isinstance(event, AlertsOpened):
+        return [
+            alert_event("alert_opened", event.ts, a, event.text) for a in event.alerts
+        ]
+    if isinstance(event, AlertsReminded):
+        return [
+            alert_event("alert_reminder", event.ts, a, event.text) for a in event.alerts
+        ]
+    if isinstance(event, AlertsResolved):
+        lines = []
+        for alert in event.alerts:
+            line = alert_event(
+                "alert_resolved", event.ts, alert, event.texts.get(alert.id)
+            )
+            if event.reasons.get(alert.id):
+                line["close_reason"] = event.reasons[alert.id]
+            lines.append(line)
+        return lines
+    return []
 
 
 def alert_event(name: str, ts: datetime, alert: Alert, text: str | None) -> dict:
@@ -228,11 +252,6 @@ def alert_event(name: str, ts: datetime, alert: Alert, text: str | None) -> dict
         **alert.model_dump(mode="json"),
         "text": text,
     }
-
-
-def iso(ts: datetime) -> str:
-    # Mismo formato que pydantic usa para los demás ts del log (UTC con "Z").
-    return ts.isoformat().replace("+00:00", "Z")
 
 
 # --- base ---
@@ -289,11 +308,8 @@ class DatabaseOutput:
         return event
 
     def feedback(self, event: dict[str, Any]) -> None:
-        """Respuesta de un mozo (`alert_feedback`)."""
-        try:
-            self.db.feedback(event)
-        except Exception:
-            logger.exception("No se pudo guardar la respuesta en la base")
+        """Respuesta de un mozo (`alert_feedback`); llega desde el hilo del bot."""
+        self.write("la respuesta", self.db.feedback, event)
 
     def write(self, what: str, write: Callable[..., Any], *args: Any) -> None:
         """Una escritura a la base. Con la base caída falla en cada lectura: el

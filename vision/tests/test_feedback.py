@@ -1,5 +1,6 @@
 """Datos del restaurante y respuestas de los mozos (Telegram falso)."""
 
+import threading
 from datetime import UTC, datetime
 
 from servio_vision.alerts.feedback import FeedbackDesk, Question
@@ -7,7 +8,9 @@ from servio_vision.restaurant import Restaurant
 
 
 class FakeTelegram:
-    """Registra lo que se manda; `get_updates` existe pero no se usa (no se escucha)."""
+    """Registra lo que se manda. Sin `get_updates`: no es un canal que se escuche,
+    así un `AlertProcessor` con él no arranca el hilo del bot (los tests llaman a
+    `bot.handle` a mano, con `Listening`)."""
 
     def __init__(self):
         self.sent, self.edits, self.prompts, self.answers, self.deleted = (
@@ -39,7 +42,12 @@ class FakeTelegram:
     def is_group(self, chat_id):
         return chat_id == -1
 
+
+class Listening(FakeTelegram):
+    """Un canal que se escucha (arma el bot), pero que nunca trae nada."""
+
     def get_updates(self, offset, timeout=20):
+        threading.Event().wait(0.05)  # el hilo del bot no gira en vacío
         return []
 
 
@@ -253,7 +261,7 @@ def test_metrics_command_sends_the_image(tmp_path):
 
     sent = []
 
-    class Photos(FakeTelegram):
+    class Photos(Listening):
         def send_photo(self, path, caption=""):
             sent.append((path, caption))
             return 1
