@@ -26,7 +26,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from PIL import Image
 
-from servio_vision.classifiers.claude_plates import estimate_plates
+from servio_vision.llm import EstimateRequest, make_estimator
 from servio_vision.schemas import state_from_fill_ratio
 
 STATES = ["lleno", "comiendo", "por_terminar", "vacio"]
@@ -95,13 +95,17 @@ def main() -> None:
     if a.max:
         labels = labels[: a.max]
 
+    estimator = make_estimator()
     results, latencies = [], []
     for start in range(0, len(labels), a.por_llamada):
         batch = labels[start : start + a.por_llamada]
         imgs = [Image.open(folder / r["archivo"]) for r in batch]
         t0 = time.monotonic()
-        report = estimate_plates(
-            [jpeg(i, CROP_SIDE) for i in imgs], f"EVAL{start // a.por_llamada + 1}"
+        report = estimator.estimate(
+            EstimateRequest(
+                [jpeg(i, CROP_SIDE) for i in imgs],
+                f"EVAL{start // a.por_llamada + 1}",
+            )
         )
         latencies.append(time.monotonic() - t0)
         for r, est in zip(batch, report.plates if report else [None] * len(batch)):

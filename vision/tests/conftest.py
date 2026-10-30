@@ -19,13 +19,11 @@ REAL_TELEGRAM = os.getenv("SERVIO_TEST_TELEGRAM", "").strip().lower() in {
 def fresh_model_breakers():
     """El cortacircuito del modelo es del proceso: un test que lo abre no puede
     dejar a los siguientes sin llamadas."""
-    from servio_vision.classifiers import claude_plates
+    from servio_vision import llm
 
-    claude_plates.reset_breakers()
-    claude_plates.reset_meter()
+    llm.reset_state()
     yield
-    claude_plates.reset_breakers()
-    claude_plates.reset_meter()
+    llm.reset_state()
 
 
 @pytest.fixture(autouse=True)

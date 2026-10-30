@@ -272,7 +272,10 @@ def test_bad_values_are_explained_in_one_line(tmp_path, caplog):
 def test_estimate_plates_falls_back_for_empty_values(monkeypatch):
     """Un modelo vacío (`model=""`, como un flag sin valor) toma el configurado, como
     hacía la cadena `os.environ.get(...) or DEFAULT`."""
-    from servio_vision.classifiers import claude_plates
+    import dataclasses
+
+    from servio_vision import llm
+    from servio_vision.llm import EstimateRequest, registry, runtime
 
     calls = []
 
@@ -280,11 +283,17 @@ def test_estimate_plates_falls_back_for_empty_values(monkeypatch):
         calls.append((model, timeout_s))
         return {"plates": [], "people_present": True}, {}
 
-    monkeypatch.setitem(claude_plates._BACKENDS, "cli", fake)
-    monkeypatch.setattr(claude_plates, "RETRY_WAIT_S", 0)
+    monkeypatch.setitem(
+        registry.PROVIDERS,
+        "cli",
+        dataclasses.replace(registry.PROVIDERS["cli"], call=fake),
+    )
+    monkeypatch.setattr(runtime, "RETRY_WAIT_S", 0)
     monkeypatch.delenv("CLAUDE_MODEL", raising=False)
     monkeypatch.delenv("CLAUDE_TIMEOUT_S", raising=False)
-    claude_plates.estimate_plates([b"jpeg"], "T1", provider="cli", model="")
+    llm.make_estimator(provider="cli", model="").estimate(
+        EstimateRequest([b"jpeg"], "T1")
+    )
     assert calls[0] == ("haiku", 15.0)
 
 

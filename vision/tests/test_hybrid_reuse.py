@@ -7,10 +7,11 @@ import numpy as np
 import pytest
 from PIL import Image
 
-from servio_vision.classifiers import claude_plates, hybrid
-from servio_vision.classifiers.claude_plates import PlateEstimate, PlatesReport
+from servio_vision.classifiers import hybrid
 from servio_vision.classifiers.hybrid import HybridClassifier
 from servio_vision.detector import Detection
+from servio_vision.llm import PlateEstimate, PlatesReport
+from tests.model_fakes import patch_estimator
 
 # clase `food`: si el modelo falla, YOLO da el estado (con `plate` no hay lectura)
 PLATE = Detection((20, 20, 100, 100), 0.9, "food")
@@ -65,7 +66,7 @@ def claude(monkeypatch):
         fake.calls.append(table_id)
         return fake.answer
 
-    monkeypatch.setattr(claude_plates, "estimate_plates", estimate)
+    patch_estimator(monkeypatch, estimate)
     return fake
 
 

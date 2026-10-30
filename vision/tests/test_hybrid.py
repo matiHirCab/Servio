@@ -1,17 +1,19 @@
 """Tests de los clasificadores `yolo` e `hybrid` con detector y Claude falsos (TOM-5)."""
 
+import dataclasses
 import io
 from types import SimpleNamespace
 
 import pytest
 from PIL import Image
 
-from servio_vision.classifiers import claude_plates, hybrid
-from servio_vision.classifiers.claude_plates import PlateEstimate, PlatesReport
+from servio_vision.classifiers import hybrid
 from servio_vision.classifiers.hybrid import HybridClassifier
 from servio_vision.classifiers.yolo import YoloClassifier
 from servio_vision.detector import Detection
+from servio_vision.llm import PlateEstimate, PlatesReport, registry
 from servio_vision.tracking import MAX_MISSING
+from tests.model_fakes import patch_estimator
 
 
 def _jpeg(w=400, h=200):
@@ -44,7 +46,7 @@ def claude(monkeypatch):
         fake.references.append(kwargs.get("references"))
         return fake.answer
 
-    monkeypatch.setattr(claude_plates, "estimate_plates", estimate)
+    patch_estimator(monkeypatch, estimate)
     return fake
 
 
@@ -138,11 +140,9 @@ def test_crop_has_margin():
 
 def test_only_plate_crops_reach_the_provider(monkeypatch):
     """C-3 (docs/legal-uruguay.md): al proveedor van los recortes de plato y nunca la
-    imagen de la mesa. Se mira en la frontera, con el `estimate_plates` de verdad: lo
+    imagen de la mesa. Se mira en la frontera, con el estimador de verdad (`llm.make_estimator`): lo
     que llega al proveedor, de punta a punta de una lectura de `hybrid`."""
     import base64
-
-    from servio_vision.classifiers import claude_plates
 
     sent = []
 
@@ -154,7 +154,11 @@ def test_only_plate_crops_reach_the_provider(monkeypatch):
         ]
         return {"plates": plates, "people_present": False}, {}
 
-    monkeypatch.setitem(claude_plates._BACKENDS, "cli", provider)
+    monkeypatch.setitem(
+        registry.PROVIDERS,
+        "cli",
+        dataclasses.replace(registry.PROVIDERS["cli"], call=provider),
+    )
     table = _jpeg(400, 200)
     HybridClassifier(detector=FakeDetector(PLATES)).classify(table, "T1", [])
 
@@ -478,3 +482,25 @@ def test_hybrid_empty_plate_that_yolo_stops_seeing_is_gone(claude):
     second = clf.classify(_jpeg(), "T1", first.items)
     assert len(claude.calls[1]) == 1  # solo el plato que se ve
     assert [i.id for i in second.items] == ["p1"]
+
+
+def test_hybrid_takes_any_plate_estimator():
+    """`hybrid` recibe un `PlateEstimator` y no sabe cuál es: con uno propio no hace
+    falta parchear nada."""
+    asked = []
+
+    class Estimator:
+        def estimate(self, request):
+            asked.append(request)
+            return PlatesReport(
+                plates=[
+                    PlateEstimate(index=i, fill_ratio=0.5, confidence=0.9)
+                    for i in range(1, len(request.plate_jpegs) + 1)
+                ],
+                people_present=False,
+            )
+
+    clf = HybridClassifier(detector=FakeDetector(PLATES), estimator=Estimator())
+    report = clf.classify(_jpeg(), "T1", [])
+    assert [i.state for i in report.items] == ["comiendo", "comiendo"]
+    assert asked[0].table_id == "T1" and len(asked[0].plate_jpegs) == 2

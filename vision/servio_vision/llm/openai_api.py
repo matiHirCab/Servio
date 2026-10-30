@@ -8,11 +8,12 @@ import logging
 import math
 
 from servio_vision import prompt, settings
-from servio_vision.classifiers.providers.base import (
+from servio_vision.llm.base import (
     OPENAI_FORMAT,
     ClaudeCallError,
     PermanentCallError,
     PlatesRequest,
+    Provider,
     api_error,
 )
 
@@ -173,3 +174,6 @@ def call(request: PlatesRequest, model: str, timeout_s: float) -> tuple[dict, di
     return _answers_to_report(answers, questions, request.has_reference), {
         "input_tokens": getattr(usage, "input_tokens", None),
     }
+
+
+PROVIDER = Provider("openai", OPENAI_FORMAT, call)

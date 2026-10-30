@@ -4,11 +4,11 @@ from types import SimpleNamespace
 
 import pytest
 
-from servio_vision.classifiers import claude_plates
-from servio_vision.classifiers.claude_plates import PlateEstimate, PlatesReport
 from servio_vision.classifiers.hybrid import HybridClassifier
 from servio_vision.detector import Detection
+from servio_vision.llm import PlateEstimate, PlatesReport
 from servio_vision.tracking import MAX_MISSING
+from tests.model_fakes import patch_estimator
 from tests.test_hybrid_reuse import FakeDetector, FakePeople, table
 
 A = Detection((20, 20, 100, 100), 0.9, "food")
@@ -39,7 +39,7 @@ def claude(monkeypatch):
             people_present=False,
         )
 
-    monkeypatch.setattr(claude_plates, "estimate_plates", estimate)
+    patch_estimator(monkeypatch, estimate)
     return fake
 
 

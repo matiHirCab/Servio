@@ -10,7 +10,7 @@ estima cuánta comida queda en cada uno.
    recorte (una mano, un brazo) va pixelado: las personas las encuentra en la máquina
    `people.py` (C-3). **La imagen de la mesa no se manda**: al modelo van solo los
    recortes, y `people_present` sale del detector local (si no hay, del modelo).
-4. Una llamada a Claude por mesa (`claude_plates.estimate_plates`) con los platos;
+4. Una llamada al modelo por mesa (`PlateEstimator.estimate`, sin saber cuál es) con los platos;
    cada plato que ya tiene referencia (su recorte recién servido) la lleva al lado.
 5. Si Claude falla, usa el estado de la clase de YOLO con confianza más baja; si el
    detector no da estado (YOLOE sin entrenar), la lectura se descarta (`None`).
@@ -29,8 +29,7 @@ from typing import Any
 import numpy as np
 from PIL import Image
 
-from servio_vision import people, settings
-from servio_vision.classifiers import claude_plates
+from servio_vision import llm, people, settings
 from servio_vision.classifiers.yolo import (
     FoundPlate,
     decode,
@@ -38,6 +37,12 @@ from servio_vision.classifiers.yolo import (
     items_from_labels,
 )
 from servio_vision.detector import PlateDetector
+from servio_vision.llm import (
+    EstimateRequest,
+    PlateEstimate,
+    PlateEstimator,
+    PlatesReport,
+)
 from servio_vision.schemas import EMPTY_MAX, FULL_MIN, Item, TableReport
 from servio_vision.tracking import IdCounter, bbox_iou, position_label
 
@@ -89,7 +94,7 @@ def _thumb(jpeg: bytes) -> np.ndarray:
     )
 
 
-class ReusedReport(claude_plates.PlatesReport):
+class ReusedReport(PlatesReport):
     """La respuesta de una lectura anterior, reutilizada porque la mesa no cambió.
     No es evidencia nueva: `finish` no la cuenta como una lectura más (ver
     `HybridClassifier._carry_over`), si no una sola respuesta, quizá equivocada,
@@ -103,7 +108,7 @@ class _Asked:
     ids: tuple[str, ...]
     thumbs: list[np.ndarray]
     people_present: bool | None
-    report: claude_plates.PlatesReport
+    report: PlatesReport
     reused: int = 0  # lecturas seguidas que se reutilizó esta respuesta
 
 
@@ -179,15 +184,16 @@ class HybridClassifier:
     def __init__(
         self,
         detector: PlateDetector | None = None,
-        provider: str | None = None,
-        model: str | None = None,
-        timeout_s: float | None = None,
+        estimator: PlateEstimator | None = None,
         person_detector: people.PersonDetector | None = None,
         reuse_unchanged: bool | None = None,
         **detector_kwargs,
     ):
-        """`reuse_unchanged`: no volver a preguntar por una mesa que no cambió (ver
-        `MAX_REUSES`); sin valor, el de la configuración (`CLAUDE_REUSE_UNCHANGED`)."""
+        """`estimator`: quién lee los platos; sin valor, el proveedor de la configuración
+        (`CLAUDE_PROVIDER`). `reuse_unchanged`: no volver a preguntar por una mesa que no
+        cambió (ver `MAX_REUSES`); sin valor, el de la configuración
+        (`CLAUDE_REUSE_UNCHANGED`)."""
+        self.estimator: PlateEstimator = estimator or llm.make_estimator()
         self.detector = detector or PlateDetector(**detector_kwargs)
         self.reuse_unchanged = (
             settings.current().claude_reuse_unchanged
@@ -206,11 +212,6 @@ class HybridClassifier:
         self.lost_readings: dict[tuple[str, str], int] = {}  # seguidas sin YOLO
         self.references: dict[tuple[str, str], bytes] = {}  # ver REFERENCE_READINGS
         self.readings: dict[tuple[str, str], int] = {}  # lecturas visibles por plato
-        self.claude_kwargs: dict[str, Any] = {
-            "provider": provider,
-            "model": model,
-            "timeout_s": timeout_s,
-        }
 
     def export_state(self) -> dict:
         """Lo chico que hace falta para seguir tras un reinicio, como JSON: los ids,
@@ -301,11 +302,11 @@ class HybridClassifier:
             for key in gone:
                 memory.pop(key, None)
 
-    def ask(self, prepared: Prepared) -> claude_plates.PlatesReport | None:
+    def ask(self, prepared: Prepared) -> PlatesReport | None:
         """La llamada a Claude: solo los recortes de plato, nunca la mesa (C-3). No
         toca el estado del clasificador."""
         if not prepared.plates:
-            return claude_plates.PlatesReport(plates=[], people_present=True)
+            return PlatesReport(plates=[], people_present=True)
         if self.reuse_unchanged:
             reused = self._reusable(prepared)
             if reused is not None:
@@ -313,17 +314,16 @@ class HybridClassifier:
                     "Mesa %s sin cambios: se reutiliza la lectura", prepared.table_id
                 )
                 return reused
-        report = claude_plates.estimate_plates(
-            prepared.plate_jpegs,
-            prepared.table_id,
-            references=prepared.references,
-            **self.claude_kwargs,
+        report = self.estimator.estimate(
+            EstimateRequest(
+                prepared.plate_jpegs, prepared.table_id, prepared.references
+            )
         )
         if self.reuse_unchanged:
             self._remember(prepared, report)
         return report
 
-    def _reusable(self, prepared: Prepared) -> claude_plates.PlatesReport | None:
+    def _reusable(self, prepared: Prepared) -> PlatesReport | None:
         """La última respuesta del modelo para esta mesa, si nada cambió; `None` si hay
         que volver a preguntar. Conservador: ante cualquier duda, se pregunta."""
         with self._asked_lock:
@@ -353,9 +353,7 @@ class HybridClassifier:
             plates=asked.report.plates, people_present=asked.report.people_present
         )
 
-    def _remember(
-        self, prepared: Prepared, report: claude_plates.PlatesReport | None
-    ) -> None:
+    def _remember(self, prepared: Prepared, report: PlatesReport | None) -> None:
         """Guarda lo que se preguntó; sin respuesta no queda nada que reutilizar."""
         with self._asked_lock:
             if report is None:
@@ -371,7 +369,7 @@ class HybridClassifier:
     def finish(
         self,
         prepared: Prepared,
-        report: claude_plates.PlatesReport | None,
+        report: PlatesReport | None,
         previous_items: list[Item],
     ) -> TableReport | None:
         table_id = prepared.table_id
@@ -476,9 +474,7 @@ class HybridClassifier:
             people_present=self.people_present.get(prepared.table_id, True),
         )
 
-    def _update_reference(
-        self, key, est: claude_plates.PlateEstimate, crop: bytes, sent: bool
-    ):
+    def _update_reference(self, key, est: PlateEstimate, crop: bytes, sent: bool):
         # `same_plate` solo dice algo si esta lectura llevó la referencia: con lecturas
         # en paralelo, la referencia puede haberse guardado después de preparar esta
         if sent and not est.same_plate and self.references.pop(key, None) is not None:

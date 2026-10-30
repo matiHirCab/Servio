@@ -1,12 +1,34 @@
-"""Lo que comparten los proveedores: errores, el pedido y el formato de bloques.
+"""Lo que comparten el paquete `llm` y sus proveedores: la interfaz `PlateEstimator`,
+los errores, el pedido y el formato de bloques.
 
-Cada proveedor (`cli.py`, `anthropic_api.py`, `openai_api.py`) expone
-`call(request, model, timeout_s) -> (datos, uso)` y lanza `ClaudeCallError` si falla.
-Sumar uno es un archivo nuevo más una línea en el registro de `claude_plates.py`.
+Cada proveedor (`claude_cli.py`, `anthropic_api.py`, `openai_api.py`) expone un
+`PROVIDER = Provider(nombre, formato, call)`, con `call(request, model, timeout_s) ->
+(datos, uso)` que lanza `ClaudeCallError` si falla. Sumar uno es un archivo nuevo más
+una línea en `registry.py`.
 """
 
 from collections.abc import Callable
 from dataclasses import dataclass
+from typing import Protocol
+
+from servio_vision.llm.parsing import PlatesReport
+
+
+@dataclass(frozen=True)
+class EstimateRequest:
+    """Lo que se le pregunta a un `PlateEstimator` por una mesa: los recortes de cada
+    plato (JPEG) y, por plato, su recorte recién servido o `None`."""
+
+    plate_jpegs: list[bytes]
+    table_id: str
+    references: list[bytes | None] | None = None
+
+
+class PlateEstimator(Protocol):
+    """Estima cuánta comida queda en cada plato de una mesa. Quien la usa (`hybrid`)
+    no sabe qué modelo hay detrás. `None` si no pudo (el `hybrid` usa entonces YOLO)."""
+
+    def estimate(self, request: EstimateRequest) -> PlatesReport | None: ...
 
 
 class ClaudeCallError(RuntimeError):
@@ -69,3 +91,12 @@ OPENAI_FORMAT = Format(
     },
     closing=False,
 )
+
+
+@dataclass(frozen=True)
+class Provider:
+    """Un proveedor del modelo: cómo arma los bloques y cómo hace la llamada."""
+
+    name: str  # el valor de CLAUDE_PROVIDER
+    format: Format
+    call: Callable[[PlatesRequest, str, float], tuple[dict, dict]]

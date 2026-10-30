@@ -8,11 +8,10 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 
-from servio_vision.classifiers import claude_plates
-from servio_vision.classifiers.claude_plates import PlateEstimate, PlatesReport
 from servio_vision.classifiers.hybrid import HybridClassifier
 from servio_vision.db import Database
 from servio_vision.detector import Detection
+from servio_vision.llm import PlateEstimate, PlatesReport
 from servio_vision.pipeline import Pipeline
 from servio_vision.restaurant import Restaurant
 from servio_vision.schemas import Item
@@ -20,6 +19,7 @@ from servio_vision.smoothing import TableSmoother
 from servio_vision.tables import TableTracker
 from servio_vision.tracking import IdCounter
 from servio_vision.zones import Zones
+from tests.model_fakes import patch_estimator
 from tests.test_hybrid_reuse import FakeDetector, FakePeople
 from tests.test_main import FRAME, T0, ZONES
 
@@ -206,7 +206,7 @@ def full_plates(monkeypatch):
             people_present=True,
         )
 
-    monkeypatch.setattr(claude_plates, "estimate_plates", estimate)
+    patch_estimator(monkeypatch, estimate)
     return model
 
 

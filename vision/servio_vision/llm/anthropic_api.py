@@ -3,10 +3,12 @@
 import json
 
 from servio_vision import prompt, settings
-from servio_vision.classifiers.providers.base import (
+from servio_vision.llm.base import (
+    ANTHROPIC_FORMAT,
     ClaudeCallError,
     PermanentCallError,
     PlatesRequest,
+    Provider,
     api_error,
 )
 
@@ -53,3 +55,6 @@ def call(request: PlatesRequest, model: str, timeout_s: float) -> tuple[dict, di
         "input_tokens": resp.usage.input_tokens,
         "output_tokens": resp.usage.output_tokens,
     }
+
+
+PROVIDER = Provider("anthropic", ANTHROPIC_FORMAT, call)

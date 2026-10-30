@@ -9,11 +9,12 @@ import tempfile
 from collections.abc import Mapping
 
 from servio_vision import prompt, settings
-from servio_vision.classifiers.providers.base import (
+from servio_vision.llm.base import (
     ANTHROPIC_FORMAT,
     ClaudeCallError,
     PermanentCallError,
     PlatesRequest,
+    Provider,
 )
 
 
@@ -138,3 +139,6 @@ def call(request: PlatesRequest, model: str, timeout_s: float) -> tuple[dict, di
         "output_tokens": usage.get("output_tokens"),
         "cost_usd": result.get("total_cost_usd"),
     }
+
+
+PROVIDER = Provider("cli", ANTHROPIC_FORMAT, call)

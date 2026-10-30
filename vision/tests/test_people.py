@@ -7,10 +7,10 @@ import numpy as np
 from PIL import Image
 
 from servio_vision import people
-from servio_vision.classifiers import claude_plates
-from servio_vision.classifiers.claude_plates import PlateEstimate, PlatesReport
 from servio_vision.classifiers.hybrid import HybridClassifier
 from servio_vision.detector import Detection
+from servio_vision.llm import PlateEstimate, PlatesReport, runtime
+from tests.model_fakes import patch_estimator
 
 
 def noisy_jpeg(w=400, h=200, seed=0) -> bytes:
@@ -64,13 +64,13 @@ def test_only_plate_crops_reach_the_provider(monkeypatch):
         sent["plates"] = plates
         return answer(2)
 
-    monkeypatch.setattr(claude_plates, "estimate_plates", estimate)
+    patch_estimator(monkeypatch, estimate)
     clf = HybridClassifier(FakeDetector(PLATES), person_detector=FakePeople([]))
     clf.classify(noisy_jpeg(), "T1", [])
     assert sent["table"] is None and len(sent["plates"]) == 2
     # y build_content tampoco la agrega aunque se la pasen: una imagen por plato
     jpeg = noisy_jpeg(60, 60)
-    content = claude_plates.build_content([jpeg, jpeg], "T1", [None, jpeg])
+    content = runtime.build_content([jpeg, jpeg], "T1", [None, jpeg])
     images = [b for b in content if b["type"] == "image"]
     assert len(images) == 3  # dos platos y una referencia; la mesa, nunca
     assert content[0]["type"] == "text" and "recortes" in content[0]["text"]
@@ -78,10 +78,8 @@ def test_only_plate_crops_reach_the_provider(monkeypatch):
 
 def test_people_in_a_plate_crop_are_pixelated(monkeypatch):
     sent = []
-    monkeypatch.setattr(
-        claude_plates,
-        "estimate_plates",
-        lambda plates, *a, **k: sent.append(plates) or answer(2),
+    patch_estimator(
+        monkeypatch, lambda plates, *a, **k: sent.append(plates) or answer(2)
     )
     table = noisy_jpeg()
     plain = HybridClassifier(FakeDetector(PLATES), person_detector=FakePeople([]))
@@ -113,10 +111,8 @@ def test_people_present_is_the_local_detector_or_the_model(monkeypatch):
     """Desde arriba, los comensales quedan casi fuera del recorte de la mesa: el
     detector solo diría "nadie" con gente sentada. Vale lo que vea cualquiera."""
     model_says = {"people": False}
-    monkeypatch.setattr(
-        claude_plates,
-        "estimate_plates",
-        lambda *a, **k: answer(2, people_present=model_says["people"]),
+    patch_estimator(
+        monkeypatch, lambda *a, **k: answer(2, people_present=model_says["people"])
     )
     nobody = HybridClassifier(FakeDetector(PLATES), person_detector=FakePeople([]))
     assert nobody.classify(noisy_jpeg(), "T1", []).people_present is False
@@ -128,12 +124,12 @@ def test_people_present_is_the_local_detector_or_the_model(monkeypatch):
     )
     assert someone.classify(noisy_jpeg(), "T1", []).people_present is True
     # si Claude falla, queda lo último que vio el detector
-    monkeypatch.setattr(claude_plates, "estimate_plates", lambda *a, **k: None)
+    patch_estimator(monkeypatch, lambda *a, **k: None)
     assert someone.classify(noisy_jpeg(), "T1", []).people_present is True
 
 
 def test_no_person_detection_on_an_empty_table(monkeypatch):
-    monkeypatch.setattr(claude_plates, "estimate_plates", lambda *a, **k: answer(0))
+    patch_estimator(monkeypatch, lambda *a, **k: answer(0))
     arm = FakePeople([(0.0, 0.0, 50.0, 50.0)])
     clf = HybridClassifier(FakeDetector([]), person_detector=arm)
     assert clf.classify(noisy_jpeg(), "T1", []).items == []
@@ -142,11 +138,7 @@ def test_no_person_detection_on_an_empty_table(monkeypatch):
 
 def test_without_a_local_detector_the_model_decides(monkeypatch):
     monkeypatch.setattr(people, "load_detector", lambda: None)
-    monkeypatch.setattr(
-        claude_plates,
-        "estimate_plates",
-        lambda *a, **k: answer(2, people_present=False),
-    )
+    patch_estimator(monkeypatch, lambda *a, **k: answer(2, people_present=False))
     clf = HybridClassifier(FakeDetector(PLATES))
     assert clf.people is None
     assert clf.classify(noisy_jpeg(), "T1", []).people_present is False
