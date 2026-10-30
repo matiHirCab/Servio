@@ -6,7 +6,7 @@
 
 - **YOLO** (`yolov8n` entrenado con el dataset de Roboflow): encuentra cada plato rápido, en la laptop con CPU, y da su caja. Con la caja se mantiene el mismo id para el mismo plato entre lecturas y se recorta el plato a buena resolución aunque haya muchas mesas en el plano. Solo distingue `food` / `finished_food`, así que no alcanza para los estados intermedios.
 - **Claude** (Haiku por `claude -p` con la suscripción del equipo, o la API de Anthropic si hay key): mira el recorte de cada plato y estima `fill_ratio` (cuánta comida queda), que da los 4 estados sin entrenar nada.
-- **Plan B:** si Claude no responde, el `hybrid` usa la clase de YOLO (`food` → `lleno`, `finished_food` → `vacio`). Si YOLO no está entrenado a tiempo, se usa `claude` con el recorte de la mesa entera.
+- **Plan B:** si Claude no responde, el `hybrid` usa la clase de YOLO (`food` → `lleno`, `finished_food` → `vacio`). Si YOLO no está entrenado a tiempo, existe `claude` con el recorte de la mesa entera, pero **manda la mesa al modelo** (lo que C-3 evita), así que es opt-in (`CLAUDE_ALLOW_TABLE_IMAGES=true`, con el detector de personas para pixelar); el prompt es `vision/prompts/claude_table.txt`. Sin pesos entrenados, `hybrid` ya anda con YOLOE.
 
 ## Clasificador `hybrid` (el de la demo)
 
@@ -17,7 +17,8 @@ Por cada llamada a `classify(recorte_mesa, table_id, items_anteriores)`:
 3. **Claude:** una sola llamada por mesa con los recortes de cada plato numerados (con 10 % de margen). **La imagen de la mesa no se manda** (C-3): lo que de una persona entre en un recorte (una mano, un brazo) va pixelado, y `people_present` lo dice un detector de personas local (`people.py`, el mismo YOLO de COCO de las mesas); sin él, lo estima el modelo con los recortes. Devuelve, por plato, `fill_ratio`, `confidence`, `visible` y `same_plate`.
    - **Referencia:** cada plato manda también su recorte *recién servido*, para que Claude mida contra lo que se sirvió (sin ella, 1 galletita entera de 3 parecía «intacto»). Se toma en las primeras 3 lecturas visibles del plato y solo si Claude lo ve lleno (≥ 0,75): un id nuevo a mitad de comida no adopta un plato medio comido como «lleno». Si Claude dice `same_plate: false` (la referencia es de otra comida, p. ej. ids cambiados), se descarta y ese id no toma otra.
 4. Arma el `TableReport` con `id`, `bbox`, `position` (derivada de la caja), `fill_ratio` y el estado.
-5. Si Claude falla o tarda más de 10 s: estado según la clase de YOLO, con confianza más baja.
+5. Si Claude falla o tarda más de 10 s: estado según la clase de YOLO, con confianza más baja. Con la API caída o una clave inválida, un cortacircuito por proveedor (`classifiers/breaker.py`) deja de llamar un rato (60 s, el doble en cada prueba fallida, hasta 10 min) y se usa YOLO solo; `CLAUDE_MAX_CALLS_PER_DAY` pone un tope diario.
+6. **Mesa sin cambios** (`CLAUDE_REUSE_UNCHANGED`, por defecto sí): no se vuelve a preguntar por una mesa que no cambió, que es la mayor parte del costo. Se reutiliza la última respuesta si los platos son los mismos, ninguno se perdió, cada uno ya tiene sus primeras lecturas (la referencia), la gente es la misma y cada recorte se ve casi igual al que se mandó (miniatura en gris, diferencia media < 5 de 255). Una lectura reutilizada **no cuenta como evidencia nueva**: los platos salen con su último estado y `visible: false`, que el suavizado ignora (así una sola respuesta, quizá equivocada, no confirma un cambio de estado). Aun así se pregunta de nuevo cada 4 lecturas, y una lectura que falló nunca se reutiliza. Los umbrales (`REUSE_MAX_DIFF`, `MAX_REUSES` en `hybrid.py`) están sin calibrar con video real: ajustarlos con el banco de pruebas.
 
 ### Prompt de Claude (iterar con el video)
 

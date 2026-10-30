@@ -1,8 +1,14 @@
 """Claude por plato (TOM-3): estima cuánta comida queda en cada plato de una mesa.
 
-Recibe el recorte de la mesa y los recortes de cada plato (JPEG) y devuelve, por
-plato, `fill_ratio`, `confidence`, `visible` y `same_plate`, más `people_present`.
-Cada plato puede llevar su referencia (el recorte recién servido) antes del actual.
+Dos caminos, con distinta privacidad (C-3, docs/legal-uruguay.md):
+
+- `estimate_plates` (el normal, `hybrid`): recibe los recortes de cada plato (JPEG) y
+  devuelve, por plato, `fill_ratio`, `confidence`, `visible` y `same_plate`, más
+  `people_present`. **Al modelo van solo recortes de plato, nunca la mesa.** Cada plato
+  puede llevar su referencia (el recorte recién servido) antes del actual.
+- `estimate_table` (solo el clasificador `claude`): **manda la imagen de la mesa
+  entera** y el modelo ubica cada plato. Es opt-in (`CLAUDE_ALLOW_TABLE_IMAGES`) y quien
+  lo llama tiene que haber pixelado a las personas antes; ver `classifiers/claude.py`.
 
 Proveedor según `CLAUDE_PROVIDER`:
 - `cli` (por defecto): el Claude Code instalado y logueado (`claude -p`), con la
@@ -30,7 +36,9 @@ import logging
 import sys
 import threading
 import time
+from collections.abc import Callable
 from pathlib import Path
+from typing import TypeVar
 
 from pydantic import BaseModel, Field, ValidationError
 
@@ -46,6 +54,7 @@ from servio_vision.classifiers.providers.base import (
     PlatesRequest,
 )
 from servio_vision.classifiers.usage import UsageMeter
+from servio_vision.tracking import POSITION_LABELS
 
 logger = logging.getLogger(__name__)
 
@@ -67,6 +76,20 @@ class PlateEstimate(BaseModel):
 
 class PlatesReport(BaseModel):
     plates: list[PlateEstimate]
+    people_present: bool = True
+
+
+class TablePlate(BaseModel):
+    """Un plato de la mesa entera: el modelo lo ubica en la grilla 3×3."""
+
+    position: str
+    fill_ratio: float = Field(ge=0, le=1)
+    confidence: float = Field(ge=0, le=1)
+    visible: bool = True
+
+
+class TableEstimate(BaseModel):
+    plates: list[TablePlate]
     people_present: bool = True
 
 
@@ -168,23 +191,23 @@ def _parse(data: dict, n_plates: int) -> PlatesReport:
     return report
 
 
-def estimate_plates(
-    plate_jpegs: list[bytes],
-    table_id: str,
-    *,
-    provider: str | None = None,
-    model: str | None = None,
-    timeout_s: float | None = None,
-    references: list[bytes | None] | None = None,
-) -> PlatesReport | None:
-    """Estima `fill_ratio`, `confidence`, `visible` y `same_plate` de cada plato.
+def _parse_table(data: dict) -> TableEstimate:
+    estimate = TableEstimate.model_validate(data)
+    positions = [p.position for p in estimate.plates]
+    unknown = sorted(set(positions) - set(POSITION_LABELS))
+    if unknown:
+        raise ValueError(f"posiciones que no existen: {unknown}")
+    repeated = sorted({p for p in positions if positions.count(p) > 1})
+    if repeated:  # dos platos en la misma celda: no se pueden seguir por posición
+        raise ValueError(f"dos platos en la misma posición: {repeated}")
+    return estimate
 
-    `references`: por plato, su recorte recién servido (o `None`), ver `build_content`.
-    Devuelve `None` si Claude falla dos veces (el `hybrid` usa entonces lo de YOLO).
-    """
-    if not plate_jpegs:
-        return PlatesReport(plates=[], people_present=True)
-    # lo que no vino por parámetro (app.py lo pasa todo) sale de la configuración
+
+def _resolve(
+    provider: str | None, model: str | None, timeout_s: float | None
+) -> tuple[settings.Settings, str, str, float]:
+    """Proveedor, modelo y timeout: lo que no vino por parámetro (app.py lo pasa todo)
+    sale de la configuración."""
     cfg = settings.current()  # barato: la configuración activa o la del entorno
     provider = provider or cfg.claude_provider
     if provider not in _BACKENDS:
@@ -193,12 +216,25 @@ def estimate_plates(
         )
     model = model or cfg.model_for(provider)
     timeout_s = cfg.timeout_for(provider) if timeout_s is None else timeout_s
-    # Una sola vez y fuera del loop: las imágenes no se recodifican en cada intento, y un
-    # `references` de otro largo es un bug del que llama (ValueError), no un fallo de Claude.
-    # `references` se normaliza acá y lo usan igual las imágenes y las preguntas.
-    references = references or [None] * len(plate_jpegs)
-    content = build_content(plate_jpegs, table_id, references, _FORMATS[provider])
-    request = PlatesRequest(content, [r is not None for r in references])
+    return cfg, provider, model, timeout_s
+
+
+_Parsed = TypeVar("_Parsed")
+
+
+def _call_model(
+    request: PlatesRequest,
+    *,
+    provider: str,
+    model: str,
+    timeout_s: float,
+    cap: int | None,
+    table_id: str,
+    parse: Callable[[dict], _Parsed],
+) -> _Parsed | None:
+    """La llamada con todo lo común: el cortacircuito, el tope de llamadas por día,
+    el reintento y el conteo de uso. `parse` valida la respuesta (un error ahí se
+    reintenta como uno del proveedor). `None` si no se pudo."""
     backend = _BACKENDS[provider]
     breaker = _breaker(provider)
     if not breaker.allow():
@@ -210,12 +246,12 @@ def estimate_plates(
     try:
         for attempt in range(1, ATTEMPTS + 1):
             # cada intento se factura, también el reintento
-            if not _meter.try_start(cfg.claude_max_calls_per_day):
+            if not _meter.try_start(cap):
                 if _meter.first_cap_report():
                     logger.error(
                         "Se llegó al tope de %d llamadas al modelo por día "
                         "(CLAUDE_MAX_CALLS_PER_DAY): sigo con YOLO solo hasta mañana",
-                        cfg.claude_max_calls_per_day,
+                        cap,
                     )
                 if attempt == 1:  # no se llamó: que el cortacircuito no quede esperando
                     breaker.cancel_probe()
@@ -224,7 +260,7 @@ def estimate_plates(
             start = time.monotonic()
             try:
                 data, usage = backend(request, model, timeout_s)
-                report = _parse(data, len(plate_jpegs))
+                report = parse(data)
             except (PermanentCallError, prompt.PromptError) as e:
                 # una clave inválida o un prompt roto no se arreglan reintentando
                 logger.error(
@@ -246,9 +282,8 @@ def estimate_plates(
                     time.sleep(RETRY_WAIT_S)
                 continue
             logger.debug(
-                "Claude mesa=%s platos=%d proveedor=%s modelo=%s latencia=%.2fs uso=%s",
+                "Claude mesa=%s proveedor=%s modelo=%s latencia=%.2fs uso=%s",
                 table_id,
-                len(plate_jpegs),
                 provider,
                 model,
                 time.monotonic() - start,
@@ -265,6 +300,76 @@ def estimate_plates(
         raise
     breaker.record_failure()
     return None
+
+
+def estimate_plates(
+    plate_jpegs: list[bytes],
+    table_id: str,
+    *,
+    provider: str | None = None,
+    model: str | None = None,
+    timeout_s: float | None = None,
+    references: list[bytes | None] | None = None,
+) -> PlatesReport | None:
+    """Estima `fill_ratio`, `confidence`, `visible` y `same_plate` de cada plato.
+
+    `references`: por plato, su recorte recién servido (o `None`), ver `build_content`.
+    Devuelve `None` si Claude falla dos veces (el `hybrid` usa entonces lo de YOLO).
+    """
+    if not plate_jpegs:
+        return PlatesReport(plates=[], people_present=True)
+    cfg, provider, model, timeout_s = _resolve(provider, model, timeout_s)
+    # Una sola vez y fuera del loop: las imágenes no se recodifican en cada intento, y un
+    # `references` de otro largo es un bug del que llama (ValueError), no un fallo de Claude.
+    # `references` se normaliza acá y lo usan igual las imágenes y las preguntas.
+    references = references or [None] * len(plate_jpegs)
+    content = build_content(plate_jpegs, table_id, references, _FORMATS[provider])
+    request = PlatesRequest(content, [r is not None for r in references])
+    return _call_model(
+        request,
+        provider=provider,
+        model=model,
+        timeout_s=timeout_s,
+        cap=cfg.claude_max_calls_per_day,
+        table_id=table_id,
+        parse=lambda data: _parse(data, len(plate_jpegs)),
+    )
+
+
+def estimate_table(
+    table_jpeg: bytes,
+    table_id: str,
+    *,
+    provider: str | None = None,
+    model: str | None = None,
+    timeout_s: float | None = None,
+) -> TableEstimate | None:
+    """Los platos de una mesa entera, ubicados en la grilla 3×3 (clasificador `claude`).
+
+    **Manda la imagen de la mesa**: quien llama tiene que haber pixelado a las
+    personas y haber verificado que se permite (`CLAUDE_ALLOW_TABLE_IMAGES`, C-3).
+    `None` si el modelo falla, igual que `estimate_plates`."""
+    cfg, provider, model, timeout_s = _resolve(provider, model, timeout_s)
+    fmt = _FORMATS[provider]
+    content = [
+        fmt.text(prompt.table_whole_caption(table_id)),
+        fmt.image(base64.standard_b64encode(table_jpeg).decode()),
+    ]
+    request = PlatesRequest(
+        content,
+        [],
+        system=prompt.table_system_prompt(),
+        schema=prompt.REPORT_TABLE_SCHEMA,
+    )
+    return _call_model(
+        request,
+        provider=provider,
+        model=model,
+        timeout_s=timeout_s,
+        cap=cfg.claude_max_calls_per_day,
+        table_id=table_id,
+        parse=_parse_table,
+    )
 
 
 def main(argv: list[str]) -> int:

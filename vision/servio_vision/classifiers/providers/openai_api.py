@@ -134,6 +134,13 @@ def call(request: PlatesRequest, model: str, timeout_s: float) -> tuple[dict, di
 
     El prompt va primero como texto (la API no tiene system prompt) y sin el pedido
     de JSON: acá se responden preguntas tipadas."""
+    if request.schema is not None:
+        # la mesa entera (clasificador `claude`): la API pregunta por un número fijo
+        # de platos y acá habría que encontrarlos primero
+        raise PermanentCallError(
+            "el proveedor openai no lee la mesa entera: usá cli o anthropic, o el "
+            "clasificador hybrid"
+        )
     try:
         import openai
     except ImportError as e:

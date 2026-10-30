@@ -63,7 +63,7 @@ Implementaciones:
 - `fake` (Jessica): sin modelo, para armar el pipeline.
 - `yolo` (Tomás): solo YOLO; estado `lleno` o `vacio` según la clase detectada. Plan B sin internet.
 - `hybrid` (Tomás): YOLO encuentra los platos y Claude estima `fill_ratio` de cada uno. Si Claude falla, usa lo de YOLO. **Es el de la demo.**
-- `claude` (Tomás): solo Claude con el recorte de la mesa entera. Respaldo si YOLO no está entrenado.
+- `claude` (Tomás): solo Claude con el recorte de la mesa entera, sin detector de platos: el modelo ubica cada plato en la grilla 3×3 (`position`) y los ids se siguen por esa posición; `bbox` va vacío. Respaldo si no hay YOLO. **Manda la imagen de la mesa**, lo que C-3 sacó del camino normal, así que es **opt-in**: solo con `CLAUDE_ALLOW_TABLE_IMAGES=true` y con el detector local de personas (lo que de ellas entre en la mesa sale pixelado; las caras ya vienen difuminadas de la captura). Sin eso no arranca (`ClassifierUnavailable`). Anda con `cli` y `anthropic`, no con `openai`.
 
 ## Observación de mesa (Jessica → Matías)
 

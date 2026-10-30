@@ -362,7 +362,8 @@ def test_hybrid_no_reference_after_the_first_readings(claude):
 
 def test_hybrid_drops_a_reference_of_other_food(claude):
     """Si Claude dice que la referencia es de otra comida, no se manda más."""
-    clf = HybridClassifier(detector=FakeDetector([PLATES[0]]))
+    # tres lecturas iguales: sin reutilizar la respuesta, para mirar lo que se manda
+    clf = HybridClassifier(detector=FakeDetector([PLATES[0]]), reuse_unchanged=False)
     claude.answer = _one(0.95)
     previous = clf.classify(_jpeg(), "T1", []).items
     claude.answer = _one(0.9, same_plate=False)

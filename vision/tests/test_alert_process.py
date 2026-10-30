@@ -99,6 +99,18 @@ def test_fixture_log_matches_expected(tmp_path, name):
     assert sum(e["event"] == "observation" for e in log_lines(p)) == len(observations)
 
 
+def test_no_close_note_is_kept_for_an_alert_without_a_telegram_message(tmp_path):
+    """Si Telegram falló al abrir el aviso no hay mensaje que editar: la línea de
+    «retiraron los platos» no tiene a quién llegar y no se guarda."""
+    p = processor(tmp_path, DEMO, fail=True)
+    for s in (0, 30, 60):
+        p.process(obs(s, VACIO))  # solo platos vacíos: mesa_terminada
+    assert [a.type for a in p.open_alerts.values()] == ["mesa_terminada"]
+    p.process(obs(90))  # retiran todo
+    assert not p.open_alerts
+    assert p._close_notes == {}
+
+
 def test_observation_line_round_trips(tmp_path):
     p = processor(tmp_path)
     o = obs(0, VACIO, COMIENDO)

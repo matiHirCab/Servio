@@ -71,7 +71,7 @@ def call(request: PlatesRequest, model: str, timeout_s: float) -> tuple[dict, di
     un `.cmd`, los argumentos de varias líneas o con comillas llegan rotos.
     """
     exe = _find_cli()
-    instructions = ANTHROPIC_FORMAT.text(prompt.system_prompt())
+    instructions = ANTHROPIC_FORMAT.text(request.system or prompt.system_prompt())
     message = {
         "type": "user",
         "message": {"role": "user", "content": [instructions, *request.content]},
@@ -94,7 +94,8 @@ def call(request: PlatesRequest, model: str, timeout_s: float) -> tuple[dict, di
     ]
     if not exe.lower().endswith((".cmd", ".bat")):
         # salida validada contra el esquema (structured_output)
-        args += ["--json-schema", json.dumps(prompt.REPORT_PLATES_SCHEMA)]
+        schema = request.schema or prompt.REPORT_PLATES_SCHEMA
+        args += ["--json-schema", json.dumps(schema)]
     try:
         out = subprocess.run(
             args,

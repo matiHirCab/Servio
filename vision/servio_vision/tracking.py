@@ -149,6 +149,20 @@ def match_ids(
     return _match(bboxes, [previous], first_new or _next_number(previous_items))
 
 
+# Las nueve etiquetas posibles de `position_label` (la grilla 3×3 de la mesa).
+POSITION_LABELS = (
+    "arriba-izquierda",
+    "arriba-centro",
+    "arriba-derecha",
+    "centro-izquierda",
+    "centro",
+    "centro-derecha",
+    "abajo-izquierda",
+    "abajo-centro",
+    "abajo-derecha",
+)
+
+
 def position_label(bbox) -> str:
     """ "arriba-izquierda", "centro", "abajo-derecha"… según dónde cae el centro."""
     cx, cy = _center(bbox)

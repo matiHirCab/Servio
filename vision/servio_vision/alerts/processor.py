@@ -461,11 +461,14 @@ class AlertProcessor:
         if table_status(p.state for p in table.active_plates()) != "libre":
             return "servido"
         waiter = self.restaurant.waiter(alert.table_id) if self.restaurant else None
-        who = f"{waiter} retiró" if waiter else "Retiraron"
-        took = _duration(now - alert.created_at)
-        self._close_notes[alert.id] = (
-            f"✅ {who} los platos {took} después de que terminó la mesa."
-        )
+        # solo si hay un mensaje de Telegram que editar: `_edit` es quien la usa, y sin
+        # mensaje (Telegram falló al abrir) nadie la sacaría
+        if alert.telegram_message_id is not None:
+            who = f"{waiter} retiró" if waiter else "Retiraron"
+            took = _duration(now - alert.created_at)
+            self._close_notes[alert.id] = (
+                f"✅ {who} los platos {took} después de que terminó la mesa."
+            )
         return "retirados"
 
     def _edit(self, message_id: int) -> str:
