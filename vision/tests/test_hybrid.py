@@ -7,6 +7,7 @@ from types import SimpleNamespace
 import pytest
 from PIL import Image
 
+from servio_vision.classifier import ClassifierUnavailable
 from servio_vision.classifiers import hybrid
 from servio_vision.classifiers.hybrid import HybridClassifier
 from servio_vision.classifiers.yolo import YoloClassifier
@@ -504,3 +505,11 @@ def test_hybrid_takes_any_plate_estimator():
     report = clf.classify(_jpeg(), "T1", [])
     assert [i.state for i in report.items] == ["comiendo", "comiendo"]
     assert asked[0].table_id == "T1" and len(asked[0].plate_jpegs) == 2
+
+
+def test_hybrid_with_an_unknown_provider_is_classifier_unavailable(monkeypatch):
+    """Igual que `claude`: un CLAUDE_PROVIDER que no existe no es un `ValueError`
+    suelto, también si se arma el `hybrid` sin pasar por `build_pipeline`."""
+    monkeypatch.delitem(registry.PROVIDERS, "cli")  # el de la configuración por defecto
+    with pytest.raises(ClassifierUnavailable, match="CLAUDE_PROVIDER desconocido"):
+        HybridClassifier(detector=FakeDetector(PLATES))

@@ -123,11 +123,14 @@ def reset_state() -> None:
 
 
 def _resolve(
-    provider: str | None, model: str | None, timeout_s: float | None
-) -> tuple[settings.Settings, str, str, float]:
-    """Proveedor, modelo y timeout: lo que no vino por parámetro (app.py lo pasa todo)
-    sale de la configuración."""
-    cfg = settings.current()  # barato: la configuración activa o la del entorno
+    provider: str | None,
+    model: str | None,
+    timeout_s: float | None,
+    cfg: settings.Settings | None = None,
+) -> tuple[str, str, float]:
+    """Proveedor, modelo y timeout: lo que no vino por parámetro sale de `cfg` (o, sin
+    ella, de la configuración activa)."""
+    cfg = cfg or settings.current()  # barato: la activa o la del entorno
     provider = provider or cfg.claude_provider
     if provider not in registry.PROVIDERS:
         raise UnknownProviderError(
@@ -136,7 +139,7 @@ def _resolve(
         )
     model = model or cfg.model_for(provider)
     timeout_s = cfg.timeout_for(provider) if timeout_s is None else timeout_s
-    return cfg, provider, model, timeout_s
+    return provider, model, timeout_s
 
 
 _Parsed = TypeVar("_Parsed")
@@ -232,9 +235,10 @@ class ProviderEstimator:
         provider: str | None = None,
         model: str | None = None,
         timeout_s: float | None = None,
+        cfg: settings.Settings | None = None,
     ) -> None:
-        _, self.provider, self.model, self.timeout_s = _resolve(
-            provider, model, timeout_s
+        self.provider, self.model, self.timeout_s = _resolve(
+            provider, model, timeout_s, cfg
         )
 
     @property
@@ -298,6 +302,8 @@ def make_estimator(
     provider: str | None = None,
     model: str | None = None,
     timeout_s: float | None = None,
+    cfg: settings.Settings | None = None,
 ) -> ProviderEstimator:
-    """El estimador de platos del proveedor elegido (por defecto, el de la configuración)."""
-    return ProviderEstimator(provider, model, timeout_s)
+    """El estimador de platos del proveedor elegido (por defecto, el de `cfg` o, sin
+    ella, el de la configuración activa)."""
+    return ProviderEstimator(provider, model, timeout_s, cfg)

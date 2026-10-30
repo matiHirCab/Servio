@@ -30,6 +30,7 @@ import numpy as np
 from PIL import Image
 
 from servio_vision import llm, people, settings
+from servio_vision.classifier import ClassifierUnavailable
 from servio_vision.classifiers.yolo import (
     FoundPlate,
     decode,
@@ -195,7 +196,12 @@ class HybridClassifier:
         (`CLAUDE_REUSE_UNCHANGED`)."""
         # `llm.make_estimator` por el módulo (no importado por nombre): los tests lo
         # reemplazan ahí
-        self.estimator: PlateEstimator = estimator or llm.make_estimator()
+        if estimator is None:
+            try:
+                estimator = llm.make_estimator()
+            except llm.UnknownProviderError as e:
+                raise ClassifierUnavailable(str(e)) from e
+        self.estimator: PlateEstimator = estimator
         self.detector = detector or PlateDetector(**detector_kwargs)
         self.reuse_unchanged = (
             settings.current().claude_reuse_unchanged

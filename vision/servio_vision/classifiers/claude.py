@@ -45,6 +45,7 @@ class ClaudeClassifier:
         model: str | None = None,
         timeout_s: float | None = None,
         person_detector: people.PersonDetector | None = None,
+        cfg: settings.Settings | None = None,
     ) -> None:
         if not settings.current().claude_allow_table_images:
             raise ClassifierUnavailable(
@@ -61,7 +62,7 @@ class ClaudeClassifier:
             )
         self.people: people.PersonDetector = detector
         try:
-            self.estimator = llm.make_estimator(provider, model, timeout_s)
+            self.estimator = llm.make_estimator(provider, model, timeout_s, cfg)
         except llm.UnknownProviderError as e:
             raise ClassifierUnavailable(str(e)) from e
         self._next_id: dict[str, int] = {}  # por mesa; el número solo sube

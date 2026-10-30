@@ -74,16 +74,15 @@ def classifier_kwargs(settings: Settings) -> dict:
         if settings.yolo_conf is not None:
             kwargs["conf"] = settings.yolo_conf
         if settings.classifier == "hybrid":
-            # proveedor, modelo y timeout salen de la configuración activa
-            # (`build_pipeline` la activó); un proveedor desconocido falla acá con
-            # `UnknownProviderError`, no con un KeyError de `model_for`
+            # un proveedor desconocido falla acá con `UnknownProviderError` (que
+            # `build_pipeline` muestra), no con un KeyError de `model_for`
             kwargs.update(
-                estimator=llm.make_estimator(),
+                estimator=llm.make_estimator(cfg=settings),
                 reuse_unchanged=settings.claude_reuse_unchanged,
             )
         return kwargs
     if settings.classifier == "claude":
-        return {}  # `ClaudeClassifier` toma proveedor, modelo y timeout de la configuración activa
+        return {"cfg": settings}  # proveedor, modelo y timeout, como el hybrid
     if settings.classifier != "fake":
         return {}
     kwargs = {"mode": settings.fake_mode}
