@@ -72,6 +72,9 @@ def reset_breakers() -> None:
 
 
 # Cuánto se llamó hoy y el tope (`CLAUDE_MAX_CALLS_PER_DAY`). Ver classifiers/usage.py.
+# El contador y los cortacircuitos son del proceso, no de cada `ProviderEstimator`: dos
+# estimadores comparten el conteo del día (el tope es uno solo por local) y el
+# cortacircuito de su proveedor. Los tests los limpian con `reset_state()`.
 _meter = UsageMeter()
 
 
@@ -229,7 +232,7 @@ class ProviderEstimator:
         model: str | None = None,
         timeout_s: float | None = None,
     ) -> None:
-        self._cfg, self.provider, self.model, self.timeout_s = _resolve(
+        _, self.provider, self.model, self.timeout_s = _resolve(
             provider, model, timeout_s
         )
 
@@ -284,7 +287,7 @@ class ProviderEstimator:
             provider=self.provider,
             model=self.model,
             timeout_s=self.timeout_s,
-            cap=self._cfg.claude_max_calls_per_day,
+            cap=settings.current().claude_max_calls_per_day,  # el de ahora, no el de crearlo
             table_id=table_id,
             parse=parse,
         )

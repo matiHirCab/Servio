@@ -193,6 +193,8 @@ class HybridClassifier:
         (`CLAUDE_PROVIDER`). `reuse_unchanged`: no volver a preguntar por una mesa que no
         cambió (ver `MAX_REUSES`); sin valor, el de la configuración
         (`CLAUDE_REUSE_UNCHANGED`)."""
+        # `llm.make_estimator` por el módulo (no importado por nombre): los tests lo
+        # reemplazan ahí
         self.estimator: PlateEstimator = estimator or llm.make_estimator()
         self.detector = detector or PlateDetector(**detector_kwargs)
         self.reuse_unchanged = (

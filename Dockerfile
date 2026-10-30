@@ -26,7 +26,7 @@ RUN pip install torch==2.14.1 torchvision==0.29.1 --index-url https://download.p
 
 COPY vision/requirements.txt vision/requirements-yolo.txt ./
 # python-dotenv[cli]: el entrypoint carga /app/.env antes de arrancar (ver abajo).
-# anthropic/openai: los SDKs de los proveedores por API (claude_plates los importa al usarlos).
+# anthropic/openai: los SDKs de los proveedores por API (servio_vision/llm/ los importa al usarlos).
 RUN pip install -r requirements.txt -r requirements-yolo.txt "ultralytics==8.4.181" \
     "python-dotenv[cli]" anthropic "openai>=3.26.0"
 

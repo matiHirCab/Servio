@@ -116,7 +116,7 @@ def _answers_to_report(
             {
                 "index": i,
                 "fill_ratio": _fill_ratio(fill, f"fill_{i}"),
-                # el rango lo valida _parse (pydantic)
+                # el rango lo valida parsing.parse_plates (pydantic)
                 "confidence": _number(
                     _get(fill, "confidence"),
                     f"fill_{i}.confidence",
