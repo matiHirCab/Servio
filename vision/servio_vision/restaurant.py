@@ -62,6 +62,16 @@ class Restaurant:
                 served[track_id] = pending[0]
             return self.dishes.get(served[track_id])
 
+    def export_state(self) -> dict:
+        """Qué plato del pedido es cada plato de la cámara, como JSON: tras un
+        reinicio no se vuelve a preguntar (una llamada a la API por plato)."""
+        with self._lock:
+            return {"served": {t: dict(s) for t, s in self._served.items()}}
+
+    def restore_state(self, data: dict) -> None:
+        with self._lock:
+            self._served = {t: dict(s) for t, s in data["served"].items()}
+
     def release_missing(self, table_id: str, present: set[str]) -> None:
         """Los platos que la cámara dejó de seguir liberan su lugar del pedido: si
         el mismo plato vuelve con otro id (lo taparon, la mesa se movió), lo

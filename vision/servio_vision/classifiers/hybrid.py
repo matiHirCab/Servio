@@ -106,6 +106,16 @@ class _Asked:
     reused: int = 0  # lecturas seguidas que se reutilizó esta respuesta
 
 
+def _pairs(memory: dict) -> list:
+    """`{(mesa, plato): valor}` como `[[mesa, plato, valor], …]`: JSON no tiene tuplas
+    como clave."""
+    return [[table, plate, value] for (table, plate), value in memory.items()]
+
+
+def _unpairs(rows: list, cast) -> dict:
+    return {(table, plate): cast(value) for table, plate, value in rows}
+
+
 def _jpeg(img: Image.Image, side: int) -> bytes:
     img = img.copy()
     img.thumbnail((side, side))
@@ -200,6 +210,32 @@ class HybridClassifier:
             "model": model,
             "timeout_s": timeout_s,
         }
+
+    def export_state(self) -> dict:
+        """Lo chico que hace falta para seguir tras un reinicio, como JSON: los ids,
+        si había gente y la última lectura de cada plato. **No** las referencias (un
+        JPEG por plato) ni el conteo de lecturas: un plato que sigue lleno toma una
+        referencia nueva y uno a medio comer sigue sin ella, que el prompt admite."""
+        return {
+            "ids": self.ids.export_state(),
+            "people_present": dict(self.people_present),
+            "hidden": _pairs(self.hidden),
+            "last_fill": _pairs(self.last_fill),
+            "lost_readings": _pairs(self.lost_readings),
+        }
+
+    def restore_state(self, data: dict) -> None:
+        # primero se lee todo y recién después se asigna: una foto rota no deja a
+        # medias el estado del clasificador
+        people_present = {t: bool(v) for t, v in data["people_present"].items()}
+        hidden = _unpairs(data["hidden"], int)
+        last_fill = _unpairs(data["last_fill"], float)
+        lost_readings = _unpairs(data["lost_readings"], int)
+        self.ids.restore_state(data["ids"])
+        self.people_present = people_present
+        self.hidden = hidden
+        self.last_fill = last_fill
+        self.lost_readings = lost_readings
 
     def classify(
         self, image: bytes, table_id: str, previous_items: list[Item]
