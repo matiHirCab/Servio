@@ -75,16 +75,34 @@ def test_the_write_what_happened_prompt_goes_with_its_question():
     assert held(desk)[2] == 0
 
 
-def test_a_question_whose_message_never_reached_telegram_is_not_kept():
-    """Sin mensaje no hay botones que contestar ni mensaje que editar al cerrar."""
+class DownTelegram(FakeTelegram):
+    """Telegram no contesta ahora: el mensaje (con sus botones) queda en la cola de
+    reintentos de `notify.py` y llega más tarde."""
 
-    class DownTelegram(FakeTelegram):
-        def send(self, text, buttons=None):
-            return None
+    def send(self, text, buttons=None):
+        self.sent.append((text, buttons))
 
-    desk, _ = make(DownTelegram())
-    assert ask(desk, "a1") is None
-    assert held(desk) == (0, 0, 0)
+
+def test_a_question_whose_message_is_queued_still_answers_when_it_arrives():
+    """El mensaje que sale tarde por la cola trae los botones de esta pregunta: los
+    toques tienen que encontrarla."""
+    logged: list[dict] = []
+    desk = FeedbackDesk(DownTelegram(), logged.append, clock=Clock())
+    assert ask(desk, "a1") is None  # todavía sin message_id
+    token = next(iter(desk._questions))
+    desk.handle({"callback_query": {"id": "c1", "data": f"fb:{token}:0", "from": {}}})
+    assert [e["event"] for e in logged] == ["alert_feedback"]
+
+
+def test_a_question_without_a_message_expires_after_the_queue_gave_up():
+    """Sin `message_id` nadie la va a cerrar con `rewrite`: vence sola, un rato más
+    largo de lo que la cola de Telegram reintenta."""
+    desk, clock = make(DownTelegram())
+    ask(desk, "a1")
+    assert held(desk) == (1, 0, 0)  # guardada, aunque sin mensaje
+    clock.now += RESOLVED_GRACE_S + 1
+    ask(desk, "a2")
+    assert held(desk)[0] == 1  # a1 venció; queda solo a2
 
 
 def test_memory_stays_small_over_many_alerts():

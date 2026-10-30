@@ -17,8 +17,13 @@ def no_global_processor(monkeypatch):
     monkeypatch.setattr(alerts, "_processor", None)
 
 
+POSITIONS = ("arriba-izquierda", "abajo-derecha", "centro")
+
+
 def plate(n: int, state: str = "comiendo") -> tuple[str, str, str]:
-    return (f"T1-p{n}", state, "centro")
+    # cada plato en su lugar: dos en el mismo lugar se toman por un cambio de id
+    # (`alerts/state.py`), no por un plato que se va
+    return (f"T1-p{n}", state, POSITIONS[(n - 1) % len(POSITIONS)])
 
 
 class SnapshotDb(RecordingDb):
@@ -61,6 +66,64 @@ def test_a_plate_that_comes_back_in_time_is_not_inserted_twice(tmp_path):
         p.process(obs(30 * k, plate(1)))  # p2 se va cinco lecturas
     p.process(obs(180, plate(1), plate(2)))  # y vuelve
     assert db._next_id == 2  # `served` se llamó una vez por plato
+    p.close()
+
+
+def test_a_row_is_kept_until_the_plates_retirement_reached_the_database(tmp_path):
+    """Con la base caída, el retiro de un plato no se pudo registrar: su fila no se
+    olvida (sin ella, el retiro se perdería y las métricas lo seguirían contando en
+    la mesa). Cuando la base vuelve, se registra y recién ahí se olvida."""
+    outage = PRUNE_SERVED_AFTER_READINGS + 10
+    db = RecordingDb()
+    p = recording(tmp_path, db, Restaurant.load())
+    p.process(
+        obs(0, plate(1), plate(2))
+    )  # la base anda: los dos platos quedan en la mesa
+    db.fail_readings = outage  # y se cae
+    for k in range(1, outage + 1):
+        p.process(obs(30 * k, plate(1)))  # p2 se fue, pero el retiro no se registra
+    assert "T1-p2" in p._served_rows  # más allá del plazo, pero sin registrar
+    assert len(db.readings) == 1  # la base solo recibió la primera lectura
+
+    seconds = 30 * (outage + 1)
+    p.process(obs(seconds, plate(1)))  # la base vuelve
+    p.process(obs(seconds + 30, plate(1)))
+    retired = [gone for _, gone in db.readings if gone]
+    assert retired == [[2]]  # el retiro de la fila 2 llegó, una sola vez
+    assert "T1-p2" not in p._served_rows  # y ahora sí se olvida
+    p.close()
+
+
+def test_plates_are_matched_to_their_table_exactly(tmp_path):
+    """Una mesa «mesa» no se lleva los platos de «mesa-1» por compartir el prefijo."""
+    from datetime import UTC, datetime, timedelta
+
+    from servio_vision.alerts.models import TableObservation
+
+    def reading(table: str, seconds: int, plate_ids: list[str]) -> TableObservation:
+        return TableObservation(
+            schema_version=1,
+            camera_id="cam-1",
+            ts=datetime(2026, 10, 30, 20, 0, tzinfo=UTC) + timedelta(seconds=seconds),
+            table_id=table,
+            people_present=True,
+            items=[
+                {
+                    "track_id": pid,
+                    "state": "comiendo",
+                    "fill_ratio": 0.55,
+                    "confidence": 0.9,
+                    "position": "centro",
+                }
+                for pid in plate_ids
+            ],
+        )
+
+    p = recording(tmp_path, RecordingDb(), Restaurant.load())
+    p.process(reading("mesa-1", 0, ["mesa-1-p1"]))
+    for k in range(PRUNE_SERVED_AFTER_READINGS + 5):  # solo se lee la otra mesa
+        p.process(reading("mesa", 30 * k, ["mesa-p1"]))
+    assert "mesa-1-p1" in p._served_rows  # es de otra mesa: no se cuenta ausente
     p.close()
 
 

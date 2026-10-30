@@ -248,15 +248,22 @@ class AlertProcessor:
 
     def _prune_served(self, table_id: str, table: TableState) -> None:
         """Olvida las filas de los platos que llevan `PRUNE_SERVED_AFTER_READINGS`
-        lecturas seguidas fuera de su mesa. Solo memoria: anda aunque la base esté
-        caída."""
-        prefix = f"{table_id}-"
-        for track_id in [t for t in self._served_rows if t.startswith(prefix)]:
+        lecturas seguidas fuera de su mesa y cuyo retiro ya llegó a la base.
+
+        Es memoria y anda aunque la base esté caída, pero una fila no se olvida
+        mientras su plato siga en `_on_table`: eso quiere decir que el retiro todavía
+        no se pudo registrar (`_on_table` se actualiza recién cuando la base escribió),
+        y sin la fila se perdería."""
+        awaiting_retirement = self._on_table.get(table_id, set())
+        for track_id in [t for t in self._served_rows if _table_of(t) == table_id]:
             if track_id in table.plates:
                 self._absent.pop(track_id, None)
                 continue
             absent = self._absent[track_id] = self._absent.get(track_id, 0) + 1
-            if absent >= PRUNE_SERVED_AFTER_READINGS:
+            if (
+                absent >= PRUNE_SERVED_AFTER_READINGS
+                and track_id not in awaiting_retirement
+            ):
                 del self._served_rows[track_id]
                 del self._absent[track_id]
 
@@ -538,6 +545,13 @@ class AlertProcessor:
         text = build("")
         self.notifier.edit(message_id, text)  # si falla, ya se logueó
         return text
+
+
+def _table_of(track_id: str) -> str:
+    """`T1-p3` → `T1`; `mesa-1-p3` → `mesa-1`. El id de un plato es `{mesa}-{id}` y el
+    del plato no lleva guion (`p3`); cortar por el último guion no confunde una mesa
+    con otra que empieza igual (`mesa` y `mesa-1`), a diferencia de un prefijo."""
+    return track_id.rsplit("-", 1)[0]
 
 
 def _duration(elapsed: timedelta) -> str:
