@@ -145,6 +145,8 @@ class Settings(BaseSettings):
     claude_provider: Provider = "cli"
     claude_model: str | None = None  # cli y anthropic; por defecto DEFAULT_MODELS
     openai_model: str | None = None
+    claude_reuse_unchanged: bool = True
+    """no volver a preguntar al modelo por una mesa que no cambió (hybrid.py)"""
     claude_allow_table_images: bool = False
     """permitir que el clasificador `claude` mande la mesa entera al modelo (C-3)"""
     claude_max_calls_per_day: int | None = Field(None, ge=1)

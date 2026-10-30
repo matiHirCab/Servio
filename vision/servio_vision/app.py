@@ -78,6 +78,7 @@ def classifier_kwargs(settings: Settings) -> dict:
                 provider=provider,
                 model=settings.model_for(provider),
                 timeout_s=settings.timeout_for(provider),
+                reuse_unchanged=settings.claude_reuse_unchanged,
             )
         return kwargs
     if settings.classifier == "claude":
