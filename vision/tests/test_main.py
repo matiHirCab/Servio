@@ -291,3 +291,16 @@ def test_env_file_thresholds_apply(tmp_path, monkeypatch):
     assert build_pipeline(settings_from_args(args)) is not None
     assert configured[0].t2 == 120  # del .env, no 2 × interval
     monkeypatch.delenv("ALERT_T2")
+
+
+def test_unknown_model_provider_is_a_clean_failure(tmp_path, caplog):
+    """Un CLAUDE_PROVIDER que no existe no rompe el arranque con un traceback:
+    `build_pipeline` avisa qué opciones hay y devuelve `None`."""
+    zones_path = tmp_path / "zones.json"
+    save_zones(ZONES, zones_path)
+    args = build_parser().parse_args(
+        ["--source", "0", "--zones", str(zones_path), "--classifier", "hybrid"]
+    )
+    cfg = settings_from_args(args).model_copy(update={"claude_provider": "bedrock"})
+    assert build_pipeline(cfg) is None
+    assert "CLAUDE_PROVIDER desconocido" in caplog.text

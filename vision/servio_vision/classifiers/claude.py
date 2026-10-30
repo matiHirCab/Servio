@@ -60,7 +60,10 @@ class ClaudeClassifier:
                 "pixelar a los comensales. pip install -r requirements-yolo.txt"
             )
         self.people: people.PersonDetector = detector
-        self.estimator = llm.make_estimator(provider, model, timeout_s)
+        try:
+            self.estimator = llm.make_estimator(provider, model, timeout_s)
+        except llm.UnknownProviderError as e:
+            raise ClassifierUnavailable(str(e)) from e
         self._next_id: dict[str, int] = {}  # por mesa; el número solo sube
 
     def classify(

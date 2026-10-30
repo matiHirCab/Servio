@@ -74,23 +74,16 @@ def classifier_kwargs(settings: Settings) -> dict:
         if settings.yolo_conf is not None:
             kwargs["conf"] = settings.yolo_conf
         if settings.classifier == "hybrid":
-            provider = settings.claude_provider
+            # proveedor, modelo y timeout salen de la configuración activa
+            # (`build_pipeline` la activó); un proveedor desconocido falla acá con
+            # `UnknownProviderError`, no con un KeyError de `model_for`
             kwargs.update(
-                estimator=llm.make_estimator(
-                    provider,
-                    settings.model_for(provider),
-                    settings.timeout_for(provider),
-                ),
+                estimator=llm.make_estimator(),
                 reuse_unchanged=settings.claude_reuse_unchanged,
             )
         return kwargs
     if settings.classifier == "claude":
-        provider = settings.claude_provider
-        return {
-            "provider": provider,
-            "model": settings.model_for(provider),
-            "timeout_s": settings.timeout_for(provider),
-        }
+        return {}  # `ClaudeClassifier` toma proveedor, modelo y timeout de la configuración activa
     if settings.classifier != "fake":
         return {}
     kwargs = {"mode": settings.fake_mode}
@@ -188,7 +181,7 @@ def build_pipeline(settings: Settings) -> Pipeline | None:
     )
     try:
         classifier = get_classifier(settings.classifier, **classifier_kwargs(settings))
-    except (ClassifierUnavailable, NotImplementedError) as e:
+    except (ClassifierUnavailable, NotImplementedError, llm.UnknownProviderError) as e:
         logger.error("%s", e)  # el mensaje dice qué hacer
         return None
     restaurant = load_restaurant(settings.restaurante)

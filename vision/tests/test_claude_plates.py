@@ -20,7 +20,7 @@ from servio_vision.llm import (
 from servio_vision.llm.base import ClaudeCallError
 
 JPEG = b"\xff\xd8fake"
-REQUEST = base.PlatesRequest(runtime.build_content([JPEG], "T1"), [False])
+REQUEST = base.ProviderRequest(runtime.build_content([JPEG], "T1"), [False])
 
 
 def estimate_plates(plates, table_id, *, references=None, **kwargs):

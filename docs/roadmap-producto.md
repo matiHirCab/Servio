@@ -33,7 +33,7 @@ Reglas para estas fases:
 
 ### A-1 · Configuración en un solo lugar
 **Jessica · A · 2 d · depende de: nada**
-Crear `servio_vision/settings.py` con `pydantic-settings`: un objeto `Settings` que lee `.env` y un archivo `servio.toml` del local (cámara, mesas, umbrales, proveedor del modelo, Telegram). Reemplazar los `os.getenv` sueltos (`main.py`, `claude_plates.py`, `detector.py`, `dish_match.py`, `prompt.py`, `smoothing.py`, `alerts/config.py`, `notify.py`) por parámetros que reciben de `Settings`. Los flags quedan solo para pisar valores puntuales.
+Crear `servio_vision/settings.py` con `pydantic-settings`: un objeto `Settings` que lee `.env` y un archivo `servio.toml` del local (cámara, mesas, umbrales, proveedor del modelo, Telegram). Reemplazar los `os.getenv` sueltos (`main.py`, `llm/` (los proveedores), `detector.py`, `dish_match.py`, `prompt.py`, `smoothing.py`, `alerts/config.py`, `notify.py`) por parámetros que reciben de `Settings`. Los flags quedan solo para pisar valores puntuales.
 
 **Hecho cuando:** `grep -r getenv servio_vision` solo encuentra `settings.py`, `.env.example` documenta todo, y `python main.py --config casa-jessica.toml` arranca sin otros flags.
 

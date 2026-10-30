@@ -32,7 +32,11 @@ Qué hay en cada archivo:
 Prueba rápida: `python -m servio_vision.llm plato1.jpg plato2.jpg`
 """
 
-from servio_vision.llm.base import EstimateRequest, PlateEstimator
+from servio_vision.llm.base import (
+    EstimateRequest,
+    PlateEstimator,
+    UnknownProviderError,
+)
 from servio_vision.llm.parsing import (
     PlateEstimate,
     PlatesReport,
@@ -49,6 +53,7 @@ __all__ = [
     "ProviderEstimator",
     "TableEstimate",
     "TablePlate",
+    "UnknownProviderError",
     "make_estimator",
     "reset_state",
 ]

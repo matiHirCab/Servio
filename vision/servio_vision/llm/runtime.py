@@ -23,7 +23,8 @@ from servio_vision.llm.base import (
     EstimateRequest,
     Format,
     PermanentCallError,
-    PlatesRequest,
+    ProviderRequest,
+    UnknownProviderError,
 )
 from servio_vision.llm.parsing import (
     PlatesReport,
@@ -129,7 +130,7 @@ def _resolve(
     cfg = settings.current()  # barato: la configuración activa o la del entorno
     provider = provider or cfg.claude_provider
     if provider not in registry.PROVIDERS:
-        raise ValueError(
+        raise UnknownProviderError(
             f"CLAUDE_PROVIDER desconocido: {provider!r}. "
             f"Opciones: {sorted(registry.PROVIDERS)}"
         )
@@ -142,7 +143,7 @@ _Parsed = TypeVar("_Parsed")
 
 
 def _call_model(
-    request: PlatesRequest,
+    request: ProviderRequest,
     *,
     provider: str,
     model: str,
@@ -255,7 +256,7 @@ class ProviderEstimator:
         references = request.references or [None] * len(jpegs)
         content = build_content(jpegs, request.table_id, references, self._format)
         return self._call(
-            PlatesRequest(content, [r is not None for r in references]),
+            ProviderRequest(content, [r is not None for r in references]),
             request.table_id,
             lambda data: parse_plates(data, len(jpegs)),
         )
@@ -271,7 +272,7 @@ class ProviderEstimator:
             fmt.text(prompt.table_whole_caption(table_id)),
             fmt.image(base64.standard_b64encode(table_jpeg).decode()),
         ]
-        request = PlatesRequest(
+        request = ProviderRequest(
             content,
             [],
             system=prompt.table_system_prompt(),
@@ -280,7 +281,7 @@ class ProviderEstimator:
         return self._call(request, table_id, parse_table)
 
     def _call(
-        self, request: PlatesRequest, table_id: str, parse: Callable[[dict], _Parsed]
+        self, request: ProviderRequest, table_id: str, parse: Callable[[dict], _Parsed]
     ) -> _Parsed | None:
         return _call_model(
             request,

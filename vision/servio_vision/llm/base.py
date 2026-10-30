@@ -31,6 +31,10 @@ class PlateEstimator(Protocol):
     def estimate(self, request: EstimateRequest) -> PlatesReport | None: ...
 
 
+class UnknownProviderError(ValueError):
+    """`CLAUDE_PROVIDER` no es uno de los del registro (`registry.PROVIDERS`)."""
+
+
 class ClaudeCallError(RuntimeError):
     """La llamada a Claude falló o devolvió algo que no se pudo leer."""
 
@@ -52,7 +56,7 @@ def api_error(prefix: str, error: Exception) -> ClaudeCallError:
 
 
 @dataclass(frozen=True)
-class PlatesRequest:
+class ProviderRequest:
     """Lo que se manda por una mesa: el contenido ya armado y, por plato, si lleva
     referencia (la Decisions API pregunta same_plate solo para esos).
 
@@ -99,4 +103,4 @@ class Provider:
 
     name: str  # el valor de CLAUDE_PROVIDER
     format: Format
-    call: Callable[[PlatesRequest, str, float], tuple[dict, dict]]
+    call: Callable[[ProviderRequest, str, float], tuple[dict, dict]]

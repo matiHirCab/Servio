@@ -13,8 +13,8 @@ from servio_vision.llm.base import (
     ANTHROPIC_FORMAT,
     ClaudeCallError,
     PermanentCallError,
-    PlatesRequest,
     Provider,
+    ProviderRequest,
 )
 
 
@@ -65,7 +65,7 @@ def _cli_env(environ: Mapping[str, str] | None = None) -> dict[str, str]:
     return env
 
 
-def call(request: PlatesRequest, model: str, timeout_s: float) -> tuple[dict, dict]:
+def call(request: ProviderRequest, model: str, timeout_s: float) -> tuple[dict, dict]:
     """`claude -p` con las imágenes por stdin (stream-json).
 
     El prompt va dentro del mensaje y no como argumento: en Windows, si `claude` es

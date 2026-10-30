@@ -197,3 +197,10 @@ def test_the_openai_provider_cannot_read_a_whole_table():
     encuentre los platos de una mesa entera."""
     c = ClaudeClassifier(provider="openai", person_detector=FakePeople())
     assert c.classify(table_jpeg(), "T1", []) is None
+
+
+def test_unknown_provider_is_classifier_unavailable():
+    """Un proveedor que no existe es un `ClassifierUnavailable` (que el arranque
+    sabe mostrar), no un `ValueError` suelto."""
+    with pytest.raises(ClassifierUnavailable, match="CLAUDE_PROVIDER desconocido"):
+        ClaudeClassifier(provider="bedrock", person_detector=FakePeople())
