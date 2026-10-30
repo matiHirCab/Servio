@@ -78,6 +78,26 @@ class IdCounter:
             del where[pid]
         return ids
 
+    def export_state(self) -> dict:
+        """La memoria de ids como JSON, para seguir tras un reinicio: el número que
+        sigue y dónde estaba cada plato recordado."""
+        return {
+            "last": dict(self._last),
+            "reading": dict(self._reading),
+            "where": {
+                table: {pid: [list(bbox), r] for pid, (bbox, r) in plates.items()}
+                for table, plates in self._where.items()
+            },
+        }
+
+    def restore_state(self, data: dict) -> None:
+        self._last = {t: int(n) for t, n in data["last"].items()}
+        self._reading = {t: int(n) for t, n in data["reading"].items()}
+        self._where = {
+            table: {pid: (tuple(bbox), int(r)) for pid, (bbox, r) in plates.items()}
+            for table, plates in data["where"].items()
+        }
+
     def missing(self, table_id: str) -> list[tuple[str, tuple]]:
         """(id, última caja) de los platos que YOLO no vio en la última `assign` de
         esa mesa pero todavía se recuerdan (hasta `MAX_MISSING` lecturas)."""

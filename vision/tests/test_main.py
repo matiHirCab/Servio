@@ -2,6 +2,7 @@
 
 import json
 from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
 
 import cv2
 import numpy as np
@@ -252,9 +253,10 @@ def test_config_reaches_alerts(tmp_path, monkeypatch):
     monkeypatch.setattr(
         alerts,
         "configure",
-        lambda config, telegram, restaurant=None, env=None, **kw: calls.append(
-            (config.t1, telegram, env["TELEGRAM_GROUP_CHAT_ID"])
-        ),
+        lambda config, telegram, restaurant=None, env=None, **kw: (
+            calls.append((config.t1, telegram, env["TELEGRAM_GROUP_CHAT_ID"])),
+            SimpleNamespace(db=None),  # lo que devuelve configure: el procesador
+        )[1],
     )
     monkeypatch.setattr(alerts, "process", lambda o: [], raising=False)
     args = build_parser().parse_args(
@@ -280,7 +282,10 @@ def test_env_file_thresholds_apply(tmp_path, monkeypatch):
     monkeypatch.setattr(
         alerts,
         "configure",
-        lambda config, telegram, restaurant=None, **kw: configured.append(config),
+        lambda config, telegram, restaurant=None, **kw: (
+            configured.append(config),
+            SimpleNamespace(db=None),
+        )[1],
     )
     monkeypatch.setattr(alerts, "process", lambda o: [], raising=False)
     assert build_pipeline(settings_from_args(args)) is not None

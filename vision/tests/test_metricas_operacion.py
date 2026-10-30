@@ -121,7 +121,7 @@ def test_a_database_from_the_m1_branch_keeps_its_columns(tmp_path):
     db = _db(tmp_path)
     try:
         [version] = db.query("SELECT version_num FROM alembic_version")
-        assert version[0] == "0005"
+        assert version[0] == "0006"
         [row] = db.query("SELECT precio FROM platos WHERE id = 'lomo'")
         assert row["precio"] == 890
         [served] = db.query("SELECT ultimo_fill_ratio FROM platos_servidos")

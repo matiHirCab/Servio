@@ -195,17 +195,18 @@ def build_pipeline(settings: Settings) -> Pipeline | None:
         "TELEGRAM_BOT_TOKEN": settings.telegram_bot_token,
         "TELEGRAM_GROUP_CHAT_ID": settings.telegram_group_chat_id,
     }
-    alerts.configure(
+    # una cámara en vivo sigue donde quedó tras un reinicio; un video, no
+    live = bool(settings.source) and is_live_source(settings.source)
+    processor = alerts.configure(
         config,
         telegram=settings.telegram,
         restaurant=restaurant,
         env=telegram_env,
         database_url=settings.database_url,
         local_id=settings.local_id,
-        # una cámara en vivo sigue donde quedó tras un reinicio; un video, no
-        resume=bool(settings.source) and is_live_source(settings.source),
+        resume=live,
     )
-    return Pipeline(
+    pipeline = Pipeline(
         classifier,
         zones,
         alerts.process,
@@ -218,7 +219,12 @@ def build_pipeline(settings: Settings) -> Pipeline | None:
         if restaurant is not None
         else None,
         smoother_factory=lambda: TableSmoother(finished_after, **smoothing),
+        # la misma base que los avisos: ahí guarda lo que recuerda (sin base, nada)
+        state_db=processor.db,
     )
+    if live:
+        pipeline.resume()  # los ids y el suavizado, para que sigan siendo los mismos
+    return pipeline
 
 
 def build_health_monitor(settings: Settings) -> HealthMonitor | None:

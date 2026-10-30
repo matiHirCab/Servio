@@ -118,6 +118,38 @@ class TableSmoother:
 
         return [track.accepted for track in self._tracks.values()]
 
+    def export_state(self) -> dict:
+        """Los platos que sigue, con lo que falta para confirmar un cambio de estado,
+        como JSON: tras un reinicio, una sola lectura dudosa no los cambia."""
+        return {
+            "tracks": {
+                item_id: {
+                    "accepted": t.accepted.model_dump(mode="json"),
+                    "candidate": t.candidate,
+                    "streak": t.streak,
+                    "missing": t.missing,
+                    "state_since": t.state_since.isoformat() if t.state_since else None,
+                    "finished": t.finished,
+                }
+                for item_id, t in self._tracks.items()
+            }
+        }
+
+    def restore_state(self, data: dict) -> None:
+        self._tracks = {
+            item_id: _Track(
+                accepted=Item.model_validate(t["accepted"]),
+                candidate=t["candidate"],
+                streak=int(t["streak"]),
+                missing=int(t["missing"]),
+                state_since=datetime.fromisoformat(t["state_since"])
+                if t["state_since"]
+                else None,
+                finished=bool(t["finished"]),
+            )
+            for item_id, t in data["tracks"].items()
+        }
+
     def remap_boxes(self, remap) -> None:
         """Pasa las cajas de los platos al recorte nuevo de la mesa (si se movió)."""
         for track in self._tracks.values():

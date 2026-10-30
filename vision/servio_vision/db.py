@@ -161,6 +161,15 @@ estado_servicio = Table(
     Column("guardado_at", String, nullable=False),
     Column("estado", String, nullable=False),  # JSON de alerts/persist.py
 )
+estado_pipeline = Table(
+    "estado_pipeline",
+    metadata,
+    Column("local_id", String, primary_key=True),
+    Column("guardado_at", String, nullable=False),
+    Column("estado", String, nullable=False),  # JSON de Pipeline.export_state
+)
+# Qué tabla guarda cada foto de estado (`save_state(kind=...)`).
+STATE_TABLES = {"alertas": estado_servicio, "pipeline": estado_pipeline}
 
 
 class Row(tuple):
@@ -489,20 +498,23 @@ class Database:
 
     # --- estado para seguir después de un reinicio (A-5) ---
 
-    def save_state(self, state: str, at: datetime) -> None:
-        """Guarda la foto del estado de esta casa (pisa la anterior)."""
+    def save_state(self, state: str, at: datetime, kind: str = "alertas") -> None:
+        """Guarda la foto del estado de esta casa (pisa la anterior). `kind`: la de los
+        avisos (`"alertas"`) o la del pipeline (`"pipeline"`): cada una en su tabla."""
+        table = STATE_TABLES[kind]
         row = {"local_id": self.local_id, "guardado_at": _iso(at), "estado": state}
         with self._lock, self._engine.begin() as conn:
             conn.execute(
-                self._upsert(estado_servicio)
+                self._upsert(table)
                 .values(row)
                 .on_conflict_do_update(index_elements=["local_id"], set_=row)
             )
 
-    def load_state(self) -> tuple[str, datetime] | None:
+    def load_state(self, kind: str = "alertas") -> tuple[str, datetime] | None:
         """`(foto, cuándo se guardó)` de esta casa, o None si nunca se guardó."""
+        table = STATE_TABLES[kind].name
         rows = self.query(
-            "SELECT estado, guardado_at FROM estado_servicio WHERE local_id = :local",
+            f"SELECT estado, guardado_at FROM {table} WHERE local_id = :local",
             {"local": self.local_id},
         )
         if not rows:
