@@ -6,8 +6,11 @@ estima cuánta comida queda en cada uno.
    `IdCounter` lo recuerda (`MAX_MISSING` lecturas): si Claude lo ve, sigue con su id
    y su lectura, y se lo recuerda de nuevo. Si su caja se pisa con una que YOLO sí vio,
    es el mismo plato con otro id y no se manda.
-3. Cada plato se recorta con 10 % de margen.
-4. Una llamada a Claude por mesa (`claude_plates.estimate_plates`) con la mesa y los platos;
+3. Cada plato se recorta con 10 % de margen. Lo que entre de una persona en el
+   recorte (una mano, un brazo) va pixelado: las personas las encuentra en la máquina
+   `people.py` (C-3). **La imagen de la mesa no se manda**: al modelo van solo los
+   recortes, y `people_present` sale del detector local (si no hay, del modelo).
+4. Una llamada al modelo por mesa (`PlateEstimator.estimate`, sin saber cuál es) con los platos;
    cada plato que ya tiene referencia (su recorte recién servido) la lleva al lado.
 5. Si Claude falla, usa el estado de la clase de YOLO con confianza más baja; si el
    detector no da estado (YOLOE sin entrenar), la lectura se descarta (`None`).
@@ -19,11 +22,15 @@ estima cuánta comida queda en cada uno.
 
 import io
 import logging
+import threading
 from dataclasses import dataclass
+from typing import Any
 
+import numpy as np
 from PIL import Image
 
-from servio_vision.classifiers import claude_plates
+from servio_vision import llm, people, settings
+from servio_vision.classifier import ClassifierUnavailable
 from servio_vision.classifiers.yolo import (
     FoundPlate,
     decode,
@@ -31,6 +38,12 @@ from servio_vision.classifiers.yolo import (
     items_from_labels,
 )
 from servio_vision.detector import PlateDetector
+from servio_vision.llm import (
+    EstimateRequest,
+    PlateEstimate,
+    PlateEstimator,
+    PlatesReport,
+)
 from servio_vision.schemas import EMPTY_MAX, FULL_MIN, Item, TableReport
 from servio_vision.tracking import IdCounter, bbox_iou, position_label
 
@@ -38,7 +51,6 @@ logger = logging.getLogger(__name__)
 
 CROP_MARGIN = 0.10
 CROP_SIDE = 384  # px del lado mayor de cada recorte de plato
-TABLE_SIDE = 1024  # px del lado mayor de la mesa que ve Claude
 # Lecturas seguidas sin ver la comida para mostrar un plato como «tapado». Antes de
 # eso conserva su última lectura (un brazo que pasa no lo tapa).
 HIDDEN_READINGS = 3
@@ -63,6 +75,52 @@ LOST_EMPTY_FILL = 0.3
 # adopta como «lleno» un plato medio comido. Si Claude dice que la referencia es de otra
 # comida (`same_plate=False`, ids cambiados), se descarta.
 REFERENCE_READINGS = 3
+# Una mesa que no cambió no se vuelve a mandar al modelo (la mayor parte del costo es
+# preguntar lo mismo): se reutiliza su última respuesta mientras cada plato se vea casi
+# igual al recorte que se mandó (diferencia media de brillo en una miniatura de
+# THUMB×THUMB, de 0 a 255; el ruido de la cámara da ~1) y, aun así, cada `MAX_REUSES`
+# lecturas seguidas se pregunta de nuevo, por si un cambio chico no pasó el umbral.
+# Un plato que cambia, llega o se va, o gente que entra o sale, siempre se pregunta.
+MAX_REUSES = 3
+REUSE_MAX_DIFF = 5.0
+THUMB = 24
+
+
+def _thumb(jpeg: bytes) -> np.ndarray:
+    """Miniatura en gris del recorte: promedia el ruido de la cámara y deja lo que
+    cambió de verdad (una porción menos, una mano)."""
+    img = Image.open(io.BytesIO(jpeg)).convert("L")
+    return np.asarray(
+        img.resize((THUMB, THUMB), Image.Resampling.BOX), dtype=np.float32
+    )
+
+
+class ReusedReport(PlatesReport):
+    """La respuesta de una lectura anterior, reutilizada porque la mesa no cambió.
+    No es evidencia nueva: `finish` no la cuenta como una lectura más (ver
+    `HybridClassifier._carry_over`), si no una sola respuesta, quizá equivocada,
+    bastaría para que el suavizado acepte un cambio de estado."""
+
+
+@dataclass
+class _Asked:
+    """Lo que se le preguntó al modelo por última vez en una mesa."""
+
+    ids: tuple[str, ...]
+    thumbs: list[np.ndarray]
+    people_present: bool | None
+    report: PlatesReport
+    reused: int = 0  # lecturas seguidas que se reutilizó esta respuesta
+
+
+def _pairs(memory: dict) -> list:
+    """`{(mesa, plato): valor}` como `[[mesa, plato, valor], …]`: JSON no tiene tuplas
+    como clave."""
+    return [[table, plate, value] for (table, plate), value in memory.items()]
+
+
+def _unpairs(rows: list, cast) -> dict:
+    return {(table, plate): cast(value) for table, plate, value in rows}
 
 
 def _jpeg(img: Image.Image, side: int) -> bytes:
@@ -73,13 +131,22 @@ def _jpeg(img: Image.Image, side: int) -> bytes:
     return buf.getvalue()
 
 
-def _crop(img: Image.Image, bbox) -> Image.Image:
+def _crop_box(img: Image.Image, bbox) -> tuple[float, float, float, float]:
+    """(left, top, right, bottom) del recorte del plato, con margen, en píxeles."""
     w, h = img.size
     x, y, bw, bh = bbox[0] * w, bbox[1] * h, bbox[2] * w, bbox[3] * h
     mx, my = CROP_MARGIN * bw, CROP_MARGIN * bh
-    return img.crop(
-        (max(0, x - mx), max(0, y - my), min(w, x + bw + mx), min(h, y + bh + my))
-    )
+    return (max(0, x - mx), max(0, y - my), min(w, x + bw + mx), min(h, y + bh + my))
+
+
+def _crop(
+    img: Image.Image, bbox, persons: list[people.Box] | None = None
+) -> Image.Image:
+    """El recorte del plato; con `persons` (cajas en la imagen de la mesa), lo que
+    de ellas entre en el recorte va pixelado."""
+    box = _crop_box(img, bbox)
+    crop = img.crop(box)
+    return people.anonymize_crop(crop, (box[0], box[1]), persons or [])
 
 
 def _looks_taken(fill_ratio: float, last_fill: float | None) -> bool:
@@ -99,9 +166,9 @@ class Prepared:
     table_id: str
     plates: list[FoundPlate]  # primero los que vio YOLO, después los perdidos
     lost: set[str]  # ids de los platos que YOLO no vio en esta lectura
-    table_jpeg: bytes
-    plate_jpegs: list[bytes]
+    plate_jpegs: list[bytes]  # ya con las personas pixeladas
     references: list[bytes | None]  # por plato, su recorte recién servido
+    people_present: bool | None = None  # del detector local; None si no hay
 
     @property
     def seen_items(self) -> list[Item]:
@@ -118,24 +185,67 @@ class HybridClassifier:
     def __init__(
         self,
         detector: PlateDetector | None = None,
-        provider: str | None = None,
-        model: str | None = None,
-        timeout_s: float | None = None,
+        estimator: PlateEstimator | None = None,
+        person_detector: people.PersonDetector | None = None,
+        reuse_unchanged: bool | None = None,
         **detector_kwargs,
     ):
+        """`estimator`: quién lee los platos; sin valor, el proveedor de la configuración
+        (`CLAUDE_PROVIDER`). `reuse_unchanged`: no volver a preguntar por una mesa que no
+        cambió (ver `MAX_REUSES`); sin valor, el de la configuración
+        (`CLAUDE_REUSE_UNCHANGED`)."""
+        # `llm.make_estimator` por el módulo (no importado por nombre): los tests lo
+        # reemplazan ahí
+        if estimator is None:
+            try:
+                estimator = llm.make_estimator()
+            except llm.UnknownProviderError as e:
+                raise ClassifierUnavailable(str(e)) from e
+        self.estimator: PlateEstimator = estimator
         self.detector = detector or PlateDetector(**detector_kwargs)
+        self.reuse_unchanged = (
+            settings.current().claude_reuse_unchanged
+            if reuse_unchanged is None
+            else reuse_unchanged
+        )
+        self._asked: dict[str, _Asked] = {}  # por mesa; cada mesa en su hilo
+        self._asked_lock = threading.Lock()
+        # personas en la mesa: para pixelarlas en los recortes y saber si hay gente
+        # sin mandar la mesa al modelo (C-3)
+        self.people = person_detector or people.load_detector()
         self.ids = IdCounter()
-        self.people_present: dict[str, bool] = {}  # último que dijo Claude, por mesa
+        self.people_present: dict[str, bool] = {}  # última lectura, por mesa
         self.hidden: dict[tuple[str, str], int] = {}  # lecturas seguidas sin verlo
         self.last_fill: dict[tuple[str, str], float] = {}  # última lectura visible
         self.lost_readings: dict[tuple[str, str], int] = {}  # seguidas sin YOLO
         self.references: dict[tuple[str, str], bytes] = {}  # ver REFERENCE_READINGS
         self.readings: dict[tuple[str, str], int] = {}  # lecturas visibles por plato
-        self.claude_kwargs = {
-            "provider": provider,
-            "model": model,
-            "timeout_s": timeout_s,
+
+    def export_state(self) -> dict:
+        """Lo chico que hace falta para seguir tras un reinicio, como JSON: los ids,
+        si había gente y la última lectura de cada plato. **No** las referencias (un
+        JPEG por plato) ni el conteo de lecturas: un plato que sigue lleno toma una
+        referencia nueva y uno a medio comer sigue sin ella, que el prompt admite."""
+        return {
+            "ids": self.ids.export_state(),
+            "people_present": dict(self.people_present),
+            "hidden": _pairs(self.hidden),
+            "last_fill": _pairs(self.last_fill),
+            "lost_readings": _pairs(self.lost_readings),
         }
+
+    def restore_state(self, data: dict) -> None:
+        # primero se lee todo y recién después se asigna: una foto rota no deja a
+        # medias el estado del clasificador
+        people_present = {t: bool(v) for t, v in data["people_present"].items()}
+        hidden = _unpairs(data["hidden"], int)
+        last_fill = _unpairs(data["last_fill"], float)
+        lost_readings = _unpairs(data["lost_readings"], int)
+        self.ids.restore_state(data["ids"])
+        self.people_present = people_present
+        self.hidden = hidden
+        self.last_fill = last_fill
+        self.lost_readings = lost_readings
 
     def classify(
         self, image: bytes, table_id: str, previous_items: list[Item]
@@ -159,37 +269,134 @@ class HybridClassifier:
             # a Claude, lee el hueco como "plato vacío" y queda un fantasma.
             and self.last_fill.get((table_id, pid), 1.0) >= LOST_EMPTY_FILL
         ]
+        self._forget_gone(table_id, plates, previous_items)
         everything = plates + lost
+        # personas solo si hay algo que mandar: en una mesa vacía no se gasta YOLO
+        persons = (
+            self.people.detect(img) if everything and self.people is not None else None
+        )
         return Prepared(
             table_id=table_id,
             plates=everything,
             lost={p.id for p in lost},
-            table_jpeg=_jpeg(img, TABLE_SIDE) if everything else b"",
-            plate_jpegs=[_jpeg(_crop(img, p.bbox), CROP_SIDE) for p in everything],
+            plate_jpegs=[
+                _jpeg(_crop(img, p.bbox, persons), CROP_SIDE) for p in everything
+            ],
             references=[self.references.get((table_id, p.id)) for p in everything],
+            people_present=None if persons is None else bool(persons),
         )
 
-    def ask(self, prepared: Prepared) -> claude_plates.PlatesReport | None:
-        """La llamada a Claude. No toca el estado del clasificador."""
-        if not prepared.plates:
-            return claude_plates.PlatesReport(plates=[], people_present=True)
-        return claude_plates.estimate_plates(
-            prepared.table_jpeg,
-            prepared.plate_jpegs,
-            prepared.table_id,
-            references=prepared.references,
-            **self.claude_kwargs,
+    def _forget_gone(
+        self, table_id: str, plates: list[FoundPlate], previous_items: list[Item]
+    ) -> None:
+        """Borra lo que se guardó de los platos que ya no están. Los ids solo suben,
+        así que un plato retirado no vuelve a usarse: sin esto, un servicio de días con
+        cientos de platos junta sus lecturas y, sobre todo, su recorte de referencia
+        (un JPEG por plato). Sigue vivo el que YOLO ve, el que `IdCounter` todavía
+        recuerda como perdido y el que está en la lectura anterior."""
+        alive = (
+            {p.id for p in plates}
+            | {pid for pid, _ in self.ids.missing(table_id)}
+            | {i.id for i in previous_items}
         )
+        for memory in (
+            self.hidden,
+            self.last_fill,
+            self.lost_readings,
+            self.references,
+            self.readings,
+        ):
+            gone = [k for k in list(memory) if k[0] == table_id and k[1] not in alive]
+            for key in gone:
+                memory.pop(key, None)
+
+    def ask(self, prepared: Prepared) -> PlatesReport | None:
+        """La llamada a Claude: solo los recortes de plato, nunca la mesa (C-3). No
+        toca el estado del clasificador."""
+        if not prepared.plates:
+            return PlatesReport(plates=[], people_present=True)
+        if self.reuse_unchanged:
+            reused = self._reusable(prepared)
+            if reused is not None:
+                logger.debug(
+                    "Mesa %s sin cambios: se reutiliza la lectura", prepared.table_id
+                )
+                return reused
+        report = self.estimator.estimate(
+            EstimateRequest(
+                prepared.plate_jpegs, prepared.table_id, prepared.references
+            )
+        )
+        if self.reuse_unchanged:
+            self._remember(prepared, report)
+        return report
+
+    def _reusable(self, prepared: Prepared) -> PlatesReport | None:
+        """La última respuesta del modelo para esta mesa, si nada cambió; `None` si hay
+        que volver a preguntar. Conservador: ante cualquier duda, se pregunta."""
+        with self._asked_lock:
+            asked = self._asked.get(prepared.table_id)
+        ids = tuple(p.id for p in prepared.plates)
+        if (
+            asked is None
+            or asked.reused >= MAX_REUSES
+            or prepared.lost  # un plato que YOLO perdió: caso delicado, se pregunta
+            or asked.ids != ids
+            or asked.people_present != prepared.people_present
+            # un plato nuevo todavía arma su referencia con las primeras lecturas
+            or any(
+                self.readings.get((prepared.table_id, i), 0) < REFERENCE_READINGS
+                for i in ids
+            )
+        ):
+            return None
+        thumbs = [_thumb(jpeg) for jpeg in prepared.plate_jpegs]
+        if any(
+            float(np.abs(old - new).mean()) > REUSE_MAX_DIFF
+            for old, new in zip(asked.thumbs, thumbs, strict=True)
+        ):
+            return None
+        asked.reused += 1
+        return ReusedReport(
+            plates=asked.report.plates, people_present=asked.report.people_present
+        )
+
+    def _remember(self, prepared: Prepared, report: PlatesReport | None) -> None:
+        """Guarda lo que se preguntó; sin respuesta no queda nada que reutilizar."""
+        with self._asked_lock:
+            if report is None:
+                self._asked.pop(prepared.table_id, None)
+                return
+            self._asked[prepared.table_id] = _Asked(
+                ids=tuple(p.id for p in prepared.plates),
+                thumbs=[_thumb(jpeg) for jpeg in prepared.plate_jpegs],
+                people_present=prepared.people_present,
+                report=report,
+            )
 
     def finish(
         self,
         prepared: Prepared,
-        report: claude_plates.PlatesReport | None,
+        report: PlatesReport | None,
         previous_items: list[Item],
     ) -> TableReport | None:
         table_id = prepared.table_id
         if not prepared.plates:
             return TableReport(items=[])
+        if isinstance(report, ReusedReport):
+            carried = self._carry_over(prepared, previous_items)
+            if carried is not None:
+                return carried
+        # Lo que vio el detector local **o** lo que infiere el modelo de los recortes
+        # (manos, cubiertos en uso): desde arriba, los comensales quedan casi fuera
+        # del recorte de la mesa y el detector solo diría "nadie" con gente sentada,
+        # y eso cierra avisos de plato lleno (engine.py). Si Claude falló, el detector
+        # solo suma: un "nadie" suyo no pisa la última lectura buena.
+        local = prepared.people_present
+        if report is not None:
+            self.people_present[table_id] = bool(local) or report.people_present
+        elif local:
+            self.people_present[table_id] = True
         if report is None:
             # sin Claude no hay cómo saber si un plato perdido sigue ahí: se omite
             detected = [p for p in prepared.plates if p.id not in prepared.lost]
@@ -202,7 +409,6 @@ class HybridClassifier:
                 people_present=self.people_present.get(table_id, True),
                 notes="sin Claude: estado de YOLO",
             )
-        self.people_present[table_id] = report.people_present
         last = {i.id: i for i in previous_items if i.state is not None}
         items = []
         for p, est, crop, ref in zip(
@@ -221,6 +427,7 @@ class HybridClassifier:
             self.hidden[key] = 0 if visible else self.hidden.get(key, 0) + 1
             if visible and p.id not in prepared.lost:
                 self._update_reference(key, est, crop, sent=ref is not None)
+            reading: dict[str, Any]  # los campos de `Item` que cambian según el caso
             if visible:
                 self.last_fill[key] = est.fill_ratio
                 reading = {"fill_ratio": est.fill_ratio, "confidence": est.confidence}
@@ -247,11 +454,35 @@ class HybridClassifier:
                     **reading,
                 )
             )
-        return TableReport(items=items, people_present=report.people_present)
+        return TableReport(items=items, people_present=self.people_present[table_id])
 
-    def _update_reference(
-        self, key, est: claude_plates.PlateEstimate, crop: bytes, sent: bool
-    ):
+    def _carry_over(
+        self, prepared: Prepared, previous_items: list[Item]
+    ) -> TableReport | None:
+        """La mesa tal como estaba, sin lectura nueva: cada plato con su último estado
+        y `visible=False`, que el suavizado no cuenta (como un plato tapado). No toca
+        la memoria del clasificador (referencias, lecturas, `hidden`). `None` si algún
+        plato no tiene todavía un estado: entonces va como lectura normal."""
+        last = {i.id: i for i in previous_items if i.state is not None}
+        if any(p.id not in last for p in prepared.plates):
+            return None
+        return TableReport(
+            items=[
+                Item(
+                    id=p.id,
+                    position=position_label(p.bbox),
+                    bbox=p.bbox,
+                    fill_ratio=last[p.id].fill_ratio,
+                    state=last[p.id].state,
+                    confidence=last[p.id].confidence,
+                    visible=False,
+                )
+                for p in prepared.plates
+            ],
+            people_present=self.people_present.get(prepared.table_id, True),
+        )
+
+    def _update_reference(self, key, est: PlateEstimate, crop: bytes, sent: bool):
         # `same_plate` solo dice algo si esta lectura llevó la referencia: con lecturas
         # en paralelo, la referencia puede haberse guardado después de preparar esta
         if sent and not est.same_plate and self.references.pop(key, None) is not None:

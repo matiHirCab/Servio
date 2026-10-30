@@ -7,12 +7,19 @@ from pathlib import Path
 import pytest
 
 from servio_vision.alerts.config import load_config
-from servio_vision.alerts.engine import EngineResult, evaluate, table_name
+from servio_vision.alerts.engine import EngineResult, evaluate
+from servio_vision.alerts.messages import table_name
 from servio_vision.alerts.models import Alert, TableObservation
 from servio_vision.alerts.state import TableState, empty_table, update_table
 
 FIXTURES = Path(__file__).resolve().parents[2] / "fixtures"
-SCENARIOS = ["mesa_completa", "plato_lleno_mucho", "id_cambiado"]
+SCENARIOS = [
+    "mesa_completa",
+    "plato_lleno_mucho",
+    "id_cambiado",
+    "plato_vacio",
+    "mesa_terminada_recordatorios",
+]
 START = datetime(2026, 10, 17, 20, 0, 0, tzinfo=UTC)
 FILL = {"lleno": 0.9, "comiendo": 0.55, "por_terminar": 0.2, "vacio": 0.02}
 PROD = load_config(interval=30, demo=False, env={})

@@ -17,34 +17,35 @@ Un solo programa en Python, corriendo en una laptop:
                                                    [Telegram: grupo "Mozos"]
 ```
 
-No hay backend web ni dashboard. El estado vive en memoria; se guarda un log en `vision/out/eventos.jsonl` y, con los datos del restaurante (`fixtures/restaurante/`), una base SQLite relacional en `vision/out/servio.db` (ver `servio_vision/db.py`) para las métricas.
+No hay backend web ni dashboard. El estado vive en memoria; se guarda un log en `vision/out/eventos.jsonl` y, con los datos del restaurante (`fixtures/restaurante/`), una base relacional para las métricas (`servio_vision/db.py`, SQLAlchemy Core con migraciones de Alembic): SQLite en `vision/out/servio.db`, o el Postgres compartido de `DATABASE_URL`, donde cada casa escribe con su `local_id` (A-6).
 
 ## Componentes
 
 | Parte | Carpeta | Qué hace | Dueño |
 |---|---|---|---|
-| Pipeline | `vision/main.py`, `servio_vision/{capture,zones,change,smoothing}.py` | Lee el video, recorta cada mesa, decide cuándo clasificar, suaviza | Jessica |
-| Clasificador | `servio_vision/classifiers/` | YOLO encuentra los platos; Claude estima cuánta comida queda | Tomás |
-| Reglas y avisos | `servio_vision/alerts/` | Estado de cada mesa, reglas, envío a Telegram, log | Matías |
+| Configuración y armado | `servio_vision/{settings,cli,app}.py`, `vision/main.py`, `vision/config/servio.example.toml` | Un `Settings` por casa (flags > toml > `.env`), y el armado del pipeline a partir de él | Jessica |
+| Pipeline | `servio_vision/{pipeline,capture,privacy,zones,smoothing,recording}.py` | Lee la fuente, difumina caras, recorta cada mesa, clasifica, suaviza, graba si se pidió | Jessica |
+| Clasificador | `servio_vision/classifiers/` y `servio_vision/llm/` (el modelo, un archivo por proveedor) | YOLO encuentra los platos; Claude estima cuánta comida queda | Tomás |
+| Reglas y avisos | `servio_vision/alerts/` | Núcleo (`core.py`: estado de cada mesa, reglas, avisos abiertos, sin E/S) y sus suscriptores (`outputs.py`: Telegram, log, base); textos en `messages.py`; bot de Telegram en `bot.py` | Matías |
 
 Dueños por carpeta en [09-convenciones.md](09-convenciones.md).
 
 ## Por qué así
 
-- **Un solo proceso:** el mozo no responde, así que no hace falta servidor ni webhook. Menos piezas que se rompen en la demo.
-- **YOLO + Claude juntos:** YOLO (entrenado con el dataset de Roboflow) encuentra cada plato rápido y en la laptop, y da su posición, lo que permite mantener el mismo id para el mismo plato. Claude mira el recorte de cada plato y estima cuánta comida queda, cosa que YOLO no sabe hacer bien (solo distingue lleno/vacío). Si Claude no responde (sin internet), el clasificador usa lo que dice YOLO.
-- **Interfaz única `Classifier`:** el pipeline no sabe qué modelo usa. Hay tres implementaciones: `fake` (sin modelo, para desarrollar), `yolo` (solo YOLO, plan B sin internet) y `hybrid` (YOLO + Claude, la de la demo).
+- **Un solo proceso:** no hace falta un servidor ni un webhook: las respuestas de los mozos (botones y `/metricas`) se escuchan con *long polling* desde un hilo del mismo programa. Menos piezas que se rompen.
+- **YOLO + Claude juntos:** YOLO (entrenado con el dataset de Roboflow) encuentra cada plato rápido y en la laptop, y da su posición, lo que permite mantener el mismo id para el mismo plato. Claude mira el recorte de cada plato y estima cuánta comida queda, cosa que YOLO no sabe hacer bien (solo distingue lleno/vacío). Si Claude no responde (sin internet, una clave inválida o el tope diario de llamadas), el clasificador usa lo que dice YOLO. El modelo es intercambiable: `CLAUDE_PROVIDER` elige `cli` (la suscripción), `anthropic` (la API) u `openai` (la Decisions API); cada proveedor vive en su archivo de `servio_vision/llm/` (la interfaz es `PlateEstimator`; sumar uno es un archivo más una línea en `llm/registry.py`).
+- **Interfaz única `Classifier`:** el pipeline no sabe qué modelo usa. Hay cuatro implementaciones: `fake` (sin modelo, para desarrollar), `yolo` (solo YOLO, plan B sin internet), `hybrid` (YOLO + el modelo, la de la demo) y `claude` (la mesa entera al modelo, opt-in por privacidad).
 - **Las reglas viven aparte de la visión:** se ajustan umbrales sin tocar el modelo, y se prueban con fixtures sin video ni Claude.
 
 ## Flujo de datos
 
-1. `main.py` lee un frame por segundo del video o la cámara.
+1. `main.py` arma un `Settings` (flags, `--config casa.toml`, `.env`) y `app.run` lee un frame cada `interval` segundos del video o la cámara, ya con las caras difuminadas.
 2. Recorta cada mesa según `config/zones.json`, desde la resolución original.
 3. Si el recorte cambió (o pasó el refresco forzado), llama a `classifier.classify(recorte, table_id, items_anteriores)`, que devuelve un `TableReport` con los platos, su estado y su posición.
 4. El suavizado acepta un cambio de estado solo si se repite (ver [04-vision.md](04-vision.md)).
 5. Con la lectura suavizada se arma una **observación** de la mesa (formato en [03-contratos.md](03-contratos.md)) y se pasa a `alerts`.
-6. `alerts` actualiza el estado de la mesa (desde cuándo cada plato está en cada estado), corre las reglas y manda o edita mensajes de Telegram.
-7. Cada observación y cada aviso se escriben en `vision/out/eventos.jsonl`.
+6. El núcleo de `alerts` actualiza el estado de la mesa (desde cuándo cada plato está en cada estado), corre las reglas y devuelve eventos (aviso abierto, recordado, cerrado).
+7. Los suscriptores de esos eventos mandan o editan los mensajes de Telegram, escriben cada observación y cada aviso en `vision/out/eventos.jsonl` y guardan en la base. Con base, el estado se guarda para seguir tras un reinicio (A-5).
 
 ## Recursos
 

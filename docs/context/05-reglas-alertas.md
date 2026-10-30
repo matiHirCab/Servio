@@ -12,11 +12,11 @@ Viven en `vision/servio_vision/alerts/` (Matías). Se evalúan cada vez que lleg
 
 ## Plato y mozo en los avisos, y respuestas del mozo
 
-Con los datos del restaurante (`fixtures/restaurante/`, simulados para la demo; en producción, la comanda), los avisos empiezan con el emoji, el mozo y la mesa ("🍽️ Juan · Mesa 3: terminó.") y el de `plato_lleno_mucho` nombra el plato: "❓ Mesa 3 · Juan: Risotto de hongos sigue lleno hace 12 min. ¿Está todo bien? Pasá a preguntar y contanos qué pasó." Ese aviso trae botones con las respuestas típicas del plato y "✏️ Otra respuesta"; la respuesta se agrega al mensaje y queda en el log (`alert_feedback`, ver `03`). Un "plato" que no corresponde a nada del pedido de la mesa no cuenta para los avisos.
+Con los datos del restaurante (`fixtures/restaurante/`, simulados para la demo; en producción, la comanda), los avisos empiezan con el emoji, el mozo y la mesa ("🍽️ Juan · Mesa 3: terminó.") y el de `plato_lleno_mucho` nombra el plato: "❓ Juan · Mesa 3: Risotto de hongos sigue lleno hace 12 min. ¿Está todo bien? Pasá a preguntar y contanos qué pasó." Ese aviso trae botones con las respuestas típicas del plato y "✏️ Otra respuesta"; la respuesta se agrega al mensaje y queda en el log (`alert_feedback`, ver `03`). Un "plato" que no corresponde a nada del pedido de la mesa no cuenta para los avisos.
 
 ## Recordatorio y cierre
 
-El mozo no responde, así que el antispam es por tiempo:
+Los botones del mozo solo cuentan qué pasó (no cierran ni silencian el aviso), así que el antispam es por tiempo:
 
 - **Un aviso abierto por `(mesa, tipo)`.** Mientras esté abierto no se manda otro igual.
 - **Recordatorio:** si la condición sigue después de R minutos, se manda un recordatorio ("Mesa 3: los platos vacíos siguen sin retirar hace 4 min"). Producción R = 3 min, demo 2 × `interval`. Máximo 2 recordatorios.
@@ -75,7 +75,9 @@ El motor es una función pura en `alerts/engine.py`: `evaluate(table, now, confi
 - Usa `table.active_plates()` (sin los provisionales) y los umbrales de `config.py`.
 - Recordatorios a `created_at + R × n`, hasta `max_reminders`.
 - Las lecturas seguidas sin gente las cuenta `TableState.people_absent_readings` (`alerts/state.py`).
-- `alerts.process(observation)` (`alerts/processor.py`) une todo: actualiza el estado, corre el motor, manda, recuerda o edita, y escribe el log. Los avisos de una mesa que se abren en la misma evaluación van en un solo mensaje, y lo mismo sus recordatorios (en un mensaje nuevo). Al cerrar se edita el mensaje en el que se abrió: si ya están cerrados todos sus avisos, con "✅ ya resuelto" al final; si no, solo la línea cerrada lleva "✅".
-- Si Telegram falla al abrir, el aviso queda abierto sin `telegram_message_id` (no se reintenta) y al cerrarse no se edita nada.
+- `alerts.process(observation)` (`alerts/processor.py`) une todo. El núcleo (`alerts/core.py`, `AlertCore`) actualiza el estado, corre el motor y arma los avisos con su texto (`alerts/messages.py`), sin E/S: devuelve eventos (`TableUpdated`, `AlertsOpened`, `AlertsReminded`, `AlertsResolved`). Los suscriptores (`alerts/outputs.py`) los reciben en orden: el canal (`TelegramOutput`, que manda, recuerda o edita y le pone el `message_id` al aviso), el log (`EventLogOutput`) y la base (`DatabaseOutput`). Los avisos de una mesa que se abren en la misma evaluación van en un solo mensaje, y lo mismo sus recordatorios (en un mensaje nuevo). Al cerrar se edita el mensaje en el que se abrió: si ya están cerrados todos sus avisos, con "✅ ya resuelto" al final; si no, solo la línea cerrada lleva "✅".
+- Si Telegram falla al abrir, el aviso queda abierto sin `telegram_message_id` (no se reintenta) y al cerrarse no se edita nada. Lo mismo si el canal lanza una excepción: no se reintenta, así un error que llega después de mandar no repite el aviso en cada lectura.
 
-Los tests (`tests/test_alert_engine.py`) reproducen `fixtures/observations/*.jsonl` lectura por lectura con los umbrales de producción y comparan exactamente contra `fixtures/expected/*.alerts.json` (pytest).
+- Con base, el estado (mesas, avisos abiertos con su `message_id`, platos servidos) se guarda en `estado_servicio` (`alerts/persist.py`) al abrir o cerrar un aviso y al aparecer un plato; cuando cambia algo que usan las reglas, a lo sumo una vez por `SAVE_RULES_EVERY_S` (1 s), en la primera lectura que llega pasado ese tiempo; y si no, cada `SAVE_STATE_EVERY_S`. Un corte brusco pierde como mucho los cambios que esperaban esa lectura. Con una cámara en vivo, al arrancar se sigue desde ahí si el guardado es reciente (`RESUME_MAX_AGE_S`); si no, de cero.
+
+Los tests (`tests/test_alert_engine.py` el motor, `tests/test_alert_core.py` el núcleo solo, `tests/test_alert_crash.py` un corte a mitad de cada fixture) reproducen `fixtures/observations/*.jsonl` lectura por lectura con los umbrales de producción y comparan exactamente contra `fixtures/expected/*.alerts.json` (pytest).

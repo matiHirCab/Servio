@@ -6,11 +6,11 @@ API que usa `main.py`:
   manda, recuerda o edita, y escribe todo en `out/eventos.jsonl` (ver `processor.py`).
 """
 
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
-from dotenv import load_dotenv
-
+from servio_vision import VISION_DIR, settings
 from servio_vision.alerts.config import DEFAULT_INTERVAL, AlertConfig, load_config
 from servio_vision.alerts.models import TableObservation
 from servio_vision.alerts.notify import get_notifier
@@ -18,7 +18,6 @@ from servio_vision.alerts.processor import AlertProcessor
 from servio_vision.db import Database
 from servio_vision.restaurant import Restaurant
 
-VISION_DIR = Path(__file__).resolve().parents[2]
 DEFAULT_LOG = VISION_DIR / "out" / "eventos.jsonl"
 
 _processor: AlertProcessor | None = None
@@ -29,17 +28,33 @@ def configure(
     telegram: bool = True,
     log_path: Path | None = None,
     restaurant: Restaurant | None = None,
+    env: Mapping[str, str] | None = None,
+    database_url: str | None = None,
+    local_id: str | None = None,
+    resume: bool = False,
 ) -> AlertProcessor:
-    """Arranca un estado nuevo (sin mesas ni avisos abiertos) con estos umbrales."""
+    """Arranca un estado nuevo (sin mesas ni avisos abiertos) con estos umbrales;
+    con `resume`, sigue con el que dejó la corrida anterior en la base (A-5), si es
+    reciente. Solo vale con la base, o sea con datos del restaurante.
+    `env`: token y grupo de Telegram (los pasa `app.py`); sin él, los de la
+    configuración del entorno. `database_url` y `local_id`: la base compartida y
+    con qué nombre escribe esta casa (A-6); sin URL, SQLite junto al log."""
     global _processor
     if _processor is not None:
         _processor.close()
-    load_dotenv(VISION_DIR.parent / ".env")  # no pisa variables ya puestas
     log_path = log_path or DEFAULT_LOG
     # con datos del restaurante, todo queda también en la base (junto al log)
-    db = Database(log_path.parent / "servio.db") if restaurant is not None else None
+    db = None
+    if restaurant is not None:
+        # lo que no vino por parámetro (app.py lo pasa) sale de la configuración
+        cfg = settings.current()
+        db = Database(
+            log_path.parent / "servio.db",
+            url=database_url if database_url is not None else cfg.database_url,
+            local_id=local_id or cfg.local_id,
+        )
     _processor = AlertProcessor(
-        config, get_notifier(telegram), log_path, restaurant, db
+        config, get_notifier(telegram, env), log_path, restaurant, db, resume=resume
     )
     return _processor
 

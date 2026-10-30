@@ -9,13 +9,13 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
 
 import probar_video
 
-from servio_vision.classifiers import claude_plates
-from servio_vision.classifiers.claude_plates import (
+from servio_vision.classifiers.hybrid import HybridClassifier
+from servio_vision.detector import Detection
+from servio_vision.llm import (
     PlateEstimate,
     PlatesReport,
 )
-from servio_vision.classifiers.hybrid import HybridClassifier
-from servio_vision.detector import Detection
+from tests.model_fakes import patch_estimator
 
 BOXES = [
     [
@@ -45,7 +45,7 @@ def _frames():
 
 
 def _run(monkeypatch, tmp_path, parallel: bool):
-    def estimate(table, plates, table_id, **kwargs):
+    def estimate(plates, table_id, **kwargs):
         return PlatesReport(
             plates=[
                 PlateEstimate(index=i, fill_ratio=0.5, confidence=0.8)
@@ -53,7 +53,7 @@ def _run(monkeypatch, tmp_path, parallel: bool):
             ]
         )
 
-    monkeypatch.setattr(claude_plates, "estimate_plates", estimate)
+    patch_estimator(monkeypatch, estimate)
     tmp_path.mkdir()
     clf = HybridClassifier(detector=ScriptedDetector())
     timeline: list = []

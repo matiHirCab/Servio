@@ -6,8 +6,7 @@ Qué hacer después de la hackathon para que Servio quede prolijo, bien armado y
 
 - **No hay restaurante todavía.** Se prueba en nuestras casas, con una cámara (celular con DroidCam o cámara IP) mirando una mesa desde arriba, como en la hackathon. Por eso el plan se apoya en un **banco de pruebas en casa** (fase B) que reemplaza los datos que daría un restaurante.
 - **El código creció rápido.** Son ~7.200 líneas que funcionan y tienen buenos tests, pero hay partes que hacen demasiado:
-  - `classifiers/claude_plates.py` (541 líneas) mezcla tres proveedores: `claude -p`, la API de Anthropic y OpenAI.
-  - `alerts/processor.py` junta estado, reglas, log, base, textos de Telegram, botones y comandos.
+  - `alerts/processor.py` junta estado, reglas, log, base, textos de Telegram, botones y comandos (ya partido: A-4).
   - `main.py` tiene a la vez el `Pipeline`, el armado de las piezas y los flags.
   - La configuración está repartida entre flags, `.env` y `os.getenv` sueltos en 7 archivos.
 - **Los docs de contexto quedaron viejos.** `01` y `02` dicen que el mozo no responde y que no hay base, y ya hay botones, `/metricas` y `servio.db`.
@@ -34,7 +33,7 @@ Reglas para estas fases:
 
 ### A-1 · Configuración en un solo lugar
 **Jessica · A · 2 d · depende de: nada**
-Crear `servio_vision/settings.py` con `pydantic-settings`: un objeto `Settings` que lee `.env` y un archivo `servio.toml` del local (cámara, mesas, umbrales, proveedor del modelo, Telegram). Reemplazar los `os.getenv` sueltos (`main.py`, `claude_plates.py`, `detector.py`, `dish_match.py`, `prompt.py`, `smoothing.py`, `alerts/config.py`, `notify.py`) por parámetros que reciben de `Settings`. Los flags quedan solo para pisar valores puntuales.
+Crear `servio_vision/settings.py` con `pydantic-settings`: un objeto `Settings` que lee `.env` y un archivo `servio.toml` del local (cámara, mesas, umbrales, proveedor del modelo, Telegram). Reemplazar los `os.getenv` sueltos (`main.py`, `llm/` (los proveedores), `detector.py`, `dish_match.py`, `prompt.py`, `smoothing.py`, `alerts/config.py`, `notify.py`) por parámetros que reciben de `Settings`. Los flags quedan solo para pisar valores puntuales.
 
 **Hecho cuando:** `grep -r getenv servio_vision` solo encuentra `settings.py`, `.env.example` documenta todo, y `python main.py --config casa-jessica.toml` arranca sin otros flags.
 
@@ -45,13 +44,15 @@ Mover `Pipeline` a `servio_vision/pipeline.py` y el armado de las piezas (`build
 **Hecho cuando:** `main.py` tiene menos de 100 líneas y `test_main.py` pasa sin cambios de comportamiento.
 
 ### A-3 · Un proveedor de modelo por archivo
-**Tomás · A · 2 d · depende de: A-1**
-Partir `claude_plates.py` en un paquete `servio_vision/llm/` con una interfaz `PlateEstimator` (`estimate(request) -> PlatesReport`) y un archivo por proveedor (`claude_cli.py`, `anthropic_api.py`, `openai_api.py`). El parseo y la validación quedan en un módulo común. `hybrid.py` recibe un `PlateEstimator` y no sabe cuál es.
+**Tomás · A · 2 d · hecho** (no dependía de A-1: los proveedores siguen leyendo `settings.current()`; con A-1 se les pasa `Settings`)
+Se partió el antiguo `claude_plates.py` en el paquete `servio_vision/llm/`: la interfaz `PlateEstimator` (`estimate(request) -> PlatesReport`) en `base.py`, un archivo por proveedor (`claude_cli.py`, `anthropic_api.py`, `openai_api.py`), el registro en `registry.py`, el parseo y la validación en `parsing.py` y lo común de llamar (cortacircuito, tope, reintento) en `runtime.py`. `hybrid.py` recibe un `PlateEstimator` y no sabe cuál es.
 
 **Hecho cuando:** sumar un proveedor nuevo es un archivo nuevo más una línea en el registro, y `test_claude_plates.py` y `test_hybrid.py` pasan.
 
 ### A-4 · Avisos: estado y reglas por un lado, salidas por el otro
-**Matías · A · 4 d · depende de: nada**
+**Matías · A · 4 d · hecho** (junto con A-5, como P1)
+Hecho así: el núcleo es `alerts/core.py` (`AlertCore.apply(obs)` devuelve eventos: `TableUpdated`, `AlertsOpened`, `AlertsReminded`, `AlertsResolved`); los suscriptores, `alerts/outputs.py` (`TelegramOutput`, `EventLogOutput`, `DatabaseOutput`); los textos, `alerts/messages.py`; el bot, `alerts/bot.py` (escucha y comandos, y del canal solo usa `BotChannel`). `AlertProcessor` (`processor.py`) quedó como la fachada que los arma, con la misma firma.
+
 Partir `AlertProcessor` en:
 - **núcleo:** estado de mesas, reglas y avisos abiertos, sin entrada/salida;
 - **suscriptores** de los eventos del núcleo (aviso abierto, recordado, cerrado, plato servido, respuesta): `EventLog`, `Database` y el notificador;
@@ -61,7 +62,9 @@ Partir `AlertProcessor` en:
 **Hecho cuando:** el núcleo se prueba con fixtures sin log, sin base y sin notificador, y `test_integration_alerts.py` produce los mismos avisos.
 
 ### A-5 · Estado que sobrevive a un reinicio
-**Matías · A · 2 d · depende de: A-4**
+**Matías · A · 2 d · hecho** (junto con A-4, como P1)
+Hecho así: la foto (`alerts/persist.py`) va a la tabla `estado_servicio` y se recupera con `resume` (solo cámara en vivo) si tiene menos de `RESUME_MAX_AGE_S`. Además de al abrir o cerrar un aviso, se guarda cuando cambia algo que usan las reglas, a lo sumo una vez por segundo (`SAVE_RULES_EVERY_S`, para no escribir en cada lectura con Postgres remoto), en la primera lectura que llega pasado ese tiempo: un corte brusco pierde como mucho los cambios que esperaban esa lectura. El test es `tests/test_alert_crash.py` (corta antes de cada lectura de cada fixture, con ese tope en 0).
+
 Guardar en `servio.db` los platos abiertos, desde cuándo están en cada estado y los avisos abiertos (con su `message_id`), y recuperarlos al arrancar. Si el último guardado es muy viejo, se arranca de cero.
 
 **Hecho cuando:** un test corta el proceso a mitad de un fixture, lo relanza y los avisos son los mismos que sin corte.

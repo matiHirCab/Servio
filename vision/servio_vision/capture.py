@@ -8,6 +8,10 @@ Todas las fuentes se recorren igual: `for frame, ts in open_source(...)`.
   - Carpeta: una foto cada `interval` segundos a partir de `start`.
   - Cámara o URL del celular: reloj real.
 
+Privacidad (C-3): cada frame pasa por un anonimizador **apenas se lee**, acá y en
+ningún otro lado; por defecto, las caras difuminadas de `privacy.py`. Todo lo que
+viene después (pipeline, vista de demo, grabaciones, `out/`) ya no ve una cara.
+
 Prueba manual:
     python -m servio_vision.capture --source <video | carpeta | 0 | url> [--interval 1]
 """
@@ -17,6 +21,7 @@ import logging
 import sys
 import threading
 import time
+import weakref
 from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -24,13 +29,19 @@ from pathlib import Path
 import cv2
 import numpy as np
 
+from servio_vision import privacy
+from servio_vision.privacy import Anonymizer
+
 logger = logging.getLogger(__name__)
 
 IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png", ".webp", ".bmp"}
 STREAM_PREFIXES = ("http://", "https://", "rtsp://", "rtmp://")
 CAMERA_WARMUP_S = 1.5  # frames de la cámara que se descartan al abrirla
-CAMERA_RECONNECT_S = 60.0  # cuánto se reintenta, en total, una cámara que se cortó
-CAMERA_RETRY_S = 2.0  # espera entre intentos de abrirla
+# Tope de reconexión para las herramientas que corren a mano (vista_demo): el servicio
+# no lo usa, `reconnect_s=None` reintenta hasta que la cámara vuelva.
+CAMERA_RECONNECT_S = 60.0
+CAMERA_RETRY_S = 2.0  # espera antes del segundo intento de abrirla
+CAMERA_RETRY_MAX_S = 30.0  # la espera se duplica en cada intento hasta este tope
 STREAM_TIMEOUT_MS = (
     5000  # una apertura o lectura de un stream por red colgada corta acá
 )
@@ -40,11 +51,24 @@ READ_RETRY_S = 0.1  # espera entre lecturas fallidas
 Frame = tuple[np.ndarray, datetime]
 
 
+class CameraUnavailable(OSError):
+    """La cámara no abre. Es pasajero (el router o el celular arrancan después que
+    la PC): `app.run` lo reintenta, a diferencia de un archivo que falta."""
+
+
+def is_live_source(source: str) -> bool:
+    """¿Es una cámara (webcam o stream) y no un video, una carpeta o una foto?"""
+    return source.isdigit() or source.startswith(STREAM_PREFIXES)
+
+
 def open_source(
     source: str,
     interval: float = 1.0,
     speed: float | None = None,
     start: datetime | None = None,
+    anonymize: Anonymizer | None = None,
+    face_model: Path | None = None,
+    reconnect_s: float | None = None,
 ) -> Iterator[Frame]:
     """Iterador de `(frame, ts)` según el tipo de `source`.
 
@@ -53,18 +77,39 @@ def open_source(
     velocidad (1 = tiempo real, 10 = diez veces más rápido). Sin `speed` va
     lo más rápido posible.
     `start`: ts del primer frame de un video o carpeta (por defecto, ahora).
+    `anonymize`: se aplica a cada frame apenas se lee; por defecto, las caras
+    difuminadas (`privacy.default_anonymizer()`, con el detector `face_model` de la
+    configuración si se pasa). Es el **único** lugar donde se engancha: los lectores
+    devuelven el frame crudo y acá se envuelve.
+    `reconnect_s`: solo cámaras; cuánto reintenta una cámara que se cortó antes de
+    darse por vencida. `None` (lo normal) no se rinde: un corte de Wi-Fi o un reinicio
+    del router no tienen que dejar el servicio apagado.
+
+    Abre la fuente y resuelve el anonimizador antes de devolver el iterador: una
+    fuente que no existe o no abre, o el modelo de caras que falta
+    (`PrivacyError`, un `OSError`), fallan acá y no en el primer frame.
     """
     if interval <= 0:
         raise ValueError("interval tiene que ser mayor a 0")
     start = start or datetime.now(UTC)
-    if source.isdigit() or source.startswith(STREAM_PREFIXES):
-        return read_camera(int(source) if source.isdigit() else source, interval)
     path = Path(source)
-    if path.is_dir():
-        return read_folder(path, interval, speed, start)
-    if path.is_file():
-        return read_video(path, interval, speed, start)
-    raise FileNotFoundError(f"No existe la fuente: {source}")
+    is_camera = is_live_source(source)
+    if not is_camera and not path.exists():
+        raise FileNotFoundError(f"No existe la fuente: {source}")
+    # recién con una fuente que existe: un error de tipeo no tiene que terminar en
+    # "no se pudo bajar el modelo"
+    anonymize = anonymize or privacy.default_anonymizer(face_model=face_model)
+    if is_camera:
+        raw = read_camera(
+            int(source) if source.isdigit() else source, interval, reconnect_s
+        )
+    elif path.is_dir():
+        raw = read_folder(path, interval, speed, start)
+    elif path.suffix.lower() in IMAGE_SUFFIXES:
+        raw = read_image(path, start)  # una foto suelta: un solo frame
+    else:
+        raw = read_video(path, interval, speed, start)
+    return ((anonymize(frame), ts) for frame, ts in raw)
 
 
 def declared_fps(cap: cv2.VideoCapture) -> float:
@@ -85,12 +130,23 @@ def frame_seconds(cap: cv2.VideoCapture, index: int, fps: float) -> float:
     return index / fps
 
 
+# Los lectores abren la fuente al llamarlos (una función común que falla con
+# `OSError` ahí mismo) y devuelven el generador de frames crudos; `open_source` los
+# envuelve con el anonimizador.
+
+
 def read_video(
     path: Path, interval: float, speed: float | None, start: datetime
 ) -> Iterator[Frame]:
     cap = cv2.VideoCapture(str(path))
     if not cap.isOpened():
         raise OSError(f"No se pudo abrir el video: {path}")
+    return _video_frames(cap, interval, speed, start)
+
+
+def _video_frames(
+    cap: cv2.VideoCapture, interval: float, speed: float | None, start: datetime
+) -> Iterator[Frame]:
     fps = declared_fps(cap)
     pacer = _Pacer(speed)
     next_reading = 0.0  # segundo del video de la próxima lectura
@@ -121,6 +177,12 @@ def read_folder(
     files = sorted(p for p in path.iterdir() if p.suffix.lower() in IMAGE_SUFFIXES)
     if not files:
         raise FileNotFoundError(f"No hay imágenes en {path}")
+    return _folder_frames(files, interval, speed, start)
+
+
+def _folder_frames(
+    files: list[Path], interval: float, speed: float | None, start: datetime
+) -> Iterator[Frame]:
     pacer = _Pacer(speed)
     for i, file in enumerate(files):
         frame = cv2.imread(str(file))
@@ -132,13 +194,32 @@ def read_folder(
         yield frame, start + timedelta(seconds=seconds)
 
 
-def read_camera(source: int | str, interval: float) -> Iterator[Frame]:
-    reader = CameraReader(source)
-    reader.start()
+def read_image(path: Path, start: datetime) -> Iterator[Frame]:
+    frame = cv2.imread(str(path))
+    if frame is None:
+        raise OSError(f"No se pudo leer la imagen: {path}")
+    return iter([(frame, start)])
+
+
+def read_camera(
+    source: int | str, interval: float, reconnect_s: float | None = None
+) -> Iterator[Frame]:
+    reader = CameraReader(source, reconnect_s)
+    reader.start()  # OSError si no abre
+    frames = _camera_frames(reader, interval)
+    # si nadie llega a iterar (falló algo entre abrir y el primer frame), el hilo de
+    # la cámara se para igual cuando el generador se descarta
+    weakref.finalize(frames, reader.stop)
+    return frames
+
+
+def _camera_frames(reader: "CameraReader", interval: float) -> Iterator[Frame]:
     last = -interval
     try:
         # `frames()` da siempre el frame más nuevo: si el loop estuvo ocupado
-        # clasificando, se entrega el actual, no uno de hace 10 s.
+        # clasificando, se entrega el actual, no uno de hace 10 s. Solo el que se
+        # entrega llega al anonimizador: detectar caras en los ~30 fps que se
+        # descartan entre lecturas gastaría la CPU al vicio.
         for frame in reader.frames():
             now = time.monotonic()
             if now - last >= interval:
@@ -154,13 +235,18 @@ class CameraReader:
     Se lee siempre, aunque el loop esté ocupado clasificando: si no, el buffer
     se llena, el frame entregado es viejo y un stream por red (DroidCam, IP
     Webcam) corta la conexión. Un fallo suelto de lectura se reintenta; con
-    `READ_FAILURES_TO_RECONNECT` seguidos, reabre la cámara. Se da por vencida si
-    pasan `CAMERA_RECONNECT_S` sin un frame bueno, aunque abra y se vuelva a cortar.
-    Lo usan `read_camera` y `tools/vista_demo.py`.
+    `READ_FAILURES_TO_RECONNECT` seguidos, reabre la cámara, con esperas que crecen
+    hasta `CAMERA_RETRY_MAX_S`. Con `reconnect_s` se da por vencida si pasan tantos
+    segundos sin un frame bueno, aunque abra y se vuelva a cortar; con `None` no.
+    Lo usan `read_camera` y `tools/vista_demo.py`. Entrega frames **crudos**: quien
+    los consume los pasa por el anonimizador (`open_source` lo hace; `vista_demo`
+    también). No se hace en el hilo porque detectar caras tarda ~120 ms y a 30 fps
+    el hilo no daría abasto: el buffer se llenaría y los frames saldrían viejos.
     """
 
-    def __init__(self, source: int | str) -> None:
+    def __init__(self, source: int | str, reconnect_s: float | None = None) -> None:
         self.source = source
+        self.reconnect_s = reconnect_s
         self.fps = 30.0
         self._cond = threading.Condition()
         self._frame: np.ndarray | None = None
@@ -174,7 +260,7 @@ class CameraReader:
         """Abre la cámara (`OSError` si no abre) y empieza a leer."""
         cap = self._open()
         if cap is None:
-            raise OSError(f"No se pudo abrir la cámara: {self.source}")
+            raise CameraUnavailable(f"No se pudo abrir la cámara: {self.source}")
         self.fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
         self._thread = threading.Thread(target=self._run, args=(cap,), daemon=True)
         self._thread.start()
@@ -235,11 +321,14 @@ class CameraReader:
             return None
         return cap
 
-    def _run(self, cap: cv2.VideoCapture) -> None:
+    def _run(self, first: cv2.VideoCapture) -> None:
+        # `None` cuando se reconectó sin éxito: ya no hay nada que liberar al salir
+        cap: cv2.VideoCapture | None = first
         failures = 0
         down_since: float | None = None  # desde cuándo no llega un frame bueno
         try:
             while not self._stop.is_set():
+                assert cap is not None  # si no, el bucle terminó con `break`
                 ok, frame = cap.read()
                 if ok:
                     failures = 0
@@ -258,7 +347,10 @@ class CameraReader:
                     self._stop.wait(READ_RETRY_S)
                     continue
                 cap.release()
-                cap = self._reconnect(down_since + CAMERA_RECONNECT_S)
+                deadline = (
+                    None if self.reconnect_s is None else down_since + self.reconnect_s
+                )
+                cap = self._reconnect(deadline)
                 if cap is None:
                     break
                 failures = 0
@@ -269,16 +361,36 @@ class CameraReader:
                 self._done = True
                 self._cond.notify_all()
 
-    def _reconnect(self, deadline: float) -> cv2.VideoCapture | None:
-        """Reabre la cámara hasta `deadline` (`time.monotonic()`)."""
+    def _reconnect(self, deadline: float | None) -> cv2.VideoCapture | None:
+        """Reabre la cámara hasta `deadline` (`time.monotonic()`); sin `deadline`,
+        hasta que vuelva o se llame a `stop()`."""
         logger.warning("La cámara se cortó, reintento: %s", self.source)
-        while not self._stop.is_set() and time.monotonic() < deadline:
+        waits = retry_waits(CAMERA_RETRY_S, CAMERA_RETRY_MAX_S)
+        attempts = 0
+        while not self._stop.is_set() and (
+            deadline is None or time.monotonic() < deadline
+        ):
             cap = self._open()
+            attempts += 1
             if cap is not None:
                 logger.info("Cámara reconectada: %s", self.source)
                 return cap
-            self._stop.wait(CAMERA_RETRY_S)
+            if attempts % 10 == 0:  # un corte largo no llena el log, pero se nota
+                logger.warning(
+                    "La cámara sigue sin volver (%d intentos): %s",
+                    attempts,
+                    self.source,
+                )
+            self._stop.wait(next(waits))
         return None
+
+
+def retry_waits(first: float, cap: float) -> Iterator[float]:
+    """Esperas entre intentos: `first`, el doble, el doble... hasta `cap`."""
+    wait = first
+    while True:
+        yield min(wait, cap)
+        wait *= 2
 
 
 class _Pacer:
@@ -307,12 +419,16 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     count = 0
-    for frame, ts in open_source(args.source, args.interval, args.speed):
-        height, width = frame.shape[:2]
-        print(f"{ts.isoformat(timespec='milliseconds')}  {width}x{height}")
-        count += 1
-        if args.limit is not None and count >= args.limit:
-            break
+    try:
+        for frame, ts in open_source(args.source, args.interval, args.speed):
+            height, width = frame.shape[:2]
+            print(f"{ts.isoformat(timespec='milliseconds')}  {width}x{height}")
+            count += 1
+            if args.limit is not None and count >= args.limit:
+                break
+    except OSError as e:  # también PrivacyError
+        print(e, file=sys.stderr)
+        return 2
     print(f"{count} frames", file=sys.stderr)
     return 0 if count else 1
 

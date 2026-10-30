@@ -19,10 +19,10 @@
 
 | Carpeta | Dueño |
 |---|---|
-| `vision/servio_vision/classifiers/` (salvo `fake.py`), `tracking.py`, `prompt.py`, `tools/{build_eval_set,eval}.py`, `tools/train_yolo.ipynb` | Tomás |
+| `vision/servio_vision/classifiers/` (salvo `fake.py`), `vision/servio_vision/llm/`, `tracking.py`, `prompt.py`, `tools/{build_eval_set,eval}.py`, `tools/train_yolo.ipynb` | Tomás |
 | `vision/servio_vision/schemas.py`, `classifier.py` | Tomás (contrato con Jessica: cambios con su revisión) |
 | `vision/servio_vision/alerts/`, `tools/replay.py`, `fixtures/` | Matías |
-| `vision/main.py`, `servio_vision/{capture,zones,smoothing,tables}.py`, `classifiers/fake.py`, `tools/draw_zones.py`, `tools/{vista_demo,resumen}.py`, `config/` | Jessica |
+| `vision/main.py`, `servio_vision/{settings,cli,app,pipeline,capture,privacy,recording,zones,smoothing,tables}.py`, `classifiers/fake.py`, `tools/draw_zones.py`, `tools/{vista_demo,resumen}.py`, `config/` | Jessica |
 | `docs/` | Todos, por PR |
 
 ## Código
@@ -39,14 +39,37 @@
 - Commits cortos en presente: `vision: agrega suavizado por voto mayoritario`.
 - PR chico a `main`, otra persona aprueba. `main` siempre tiene que andar.
 
-## Variables de entorno
+## Configuración
 
-Ver `.env.example`: `CLAUDE_PROVIDER`, `CLAUDE_MODEL`, `OPENAI_MODEL`, `CLAUDE_TIMEOUT_S`, `OPENAI_TIMEOUT_S`, `CLAUDE_CLI`, `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `CLAUDE_PROMPT_FILE`, `OPENAI_PROMPT_FILE`, `SMOOTH_READINGS`, `SMOOTH_HARD_READINGS`, `SMOOTH_MIN_CONFIDENCE`, `YOLO_WEIGHTS`, `TELEGRAM_BOT_TOKEN`, `TELEGRAM_GROUP_CHAT_ID`, `DEMO_MODE`.
+**Un solo lugar: `servio_vision/settings.py`** (A-1). Es el único módulo que lee el entorno; `grep -r getenv servio_vision` no tiene que encontrar otro. Un `Settings` junta, en este orden de prioridad, los **flags** (`servio_vision/cli.py`), el **`servio.toml` de la casa** (`--config`, modelo en `vision/config/servio.example.toml`), el **entorno y el `.env`** del repo, y los defaults. `app.py` arma el pipeline con ese objeto y pasa cada valor por parámetro; un módulo que se construye sin parámetros (herramientas, tests) toma `settings.current()`.
+
+- Si agregás algo configurable: un campo en `Settings` (con su rango), una línea en `.env.example` y, si es de la casa, en `servio.example.toml`. Nada de `os.getenv` en otro archivo.
+- Variables del `.env` (ver `.env.example`): `CLAUDE_PROVIDER`, `CLAUDE_MODEL`, `OPENAI_MODEL`, `CLAUDE_TIMEOUT_S`, `OPENAI_TIMEOUT_S`, `CLAUDE_CLI`, `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `CLAUDE_PROMPT_FILE`, `OPENAI_PROMPT_FILE`, `SMOOTH_READINGS`, `SMOOTH_HARD_READINGS`, `SMOOTH_MIN_CONFIDENCE`, `YOLO_WEIGHTS`, `YOLO_DEVICE`, `FACE_MODEL`, `TELEGRAM_BOT_TOKEN`, `TELEGRAM_GROUP_CHAT_ID`, `DEMO_MODE`, `ALERT_T1`, `ALERT_T2`, `ALERT_REMINDER`, `FINISHED_AFTER`, `DATABASE_URL`. Las claves de la casa (`source`, `interval`, `classifier`, `zones`, `local_id`…) van en el toml o en flags; en el entorno llevan prefijo (`SERVIO_SOURCE`) para que un `SOURCE` cualquiera no se cuele. La sección `[roles]` del mismo toml es de `roles.py` y `Settings` no la mira.
+- **Base** (`servio_vision/db.py`): el esquema se cambia con una migración de Alembic en `servio_vision/migrations/versions/`, nunca editando tablas a mano; tiene que correr en SQLite y en Postgres. Toda fila de lo que pasa en vivo lleva `local_id`.
+- Secretos (tokens, API keys) siempre en el `.env`, nunca en el toml.
 
 ## Privacidad y datos
 
-- A Claude solo se mandan recortes de mesas y platos, no el salón entero.
+- **Caras difuminadas apenas se lee el frame** (`servio_vision/privacy.py`, enganchado en `capture.py`): nada de lo que viene después (pipeline, vista de demo, grabaciones, `out/`) ve una cara. Si agregás una forma nueva de leer frames, sumala como lector de `capture.open_source`, que es el único que envuelve los frames con `privacy.default_anonymizer()`; `CameraReader` solo entrega frames **crudos**, no lo uses directo para mostrar ni guardar. El modelo de YuNet se baja a `vision/models/` (ignorado); `FACE_MODEL` apunta a otra ruta.
+- **No se guardan frames** salvo con `main.py --record DIR`, y esos también salen difuminados. Una herramienta que escribe imágenes en `out/` tiene que leerlas con `capture.open_source`.
+- Al modelo de la nube se mandan **solo recortes de platos** (`hybrid.py`), nunca la mesa ni el salón, y lo que de una persona entre en un recorte va pixelado (`people.py`). Si agregás un proveedor o cambiás `build_content`, el test `test_only_plate_crops_reach_the_provider` lo vigila.
 - Datasets, pesos e imágenes nunca se suben al repo (`vision/data/`, `vision/models/` y `vision/out/` están en `.gitignore`):
   - Video de la demo grabado por el equipo: carpeta compartida del equipo.
   - Dataset *AI Smart Restaurant Surveillance* de Roboflow (CC BY 4.0): se baja en local para entrenar y evaluar; se cita en `vision/README.md`.
   - Videos de YouTube: solo para probar, no se muestran en la demo ni se redistribuyen.
+
+## CI y tests
+
+El CI (`.github/workflows/ci.yml`) corre en cada PR y en cada push a `main` y `develop`:
+
+| Job | Qué verifica |
+|---|---|
+| `vision` | `ruff check`, `ruff format --check` y `pytest` con cobertura en Python 3.11. Falla si la cobertura baja del piso (`fail_under` en `vision/pyproject.toml`). Es el check obligatorio. |
+| `compat-py313` | `pytest` en Python 3.13. |
+| `higiene` | No hay `.env`, pesos, imágenes ni videos versionados (ver «Privacidad y datos»). |
+
+Aparte, `solo-develop-a-main.yml` corre solo en PRs hacia `main` y falla si no vienen de `develop` (job `origen-develop`). Para que bloquee el merge, hay que marcarlo como obligatorio en la regla de `main`.
+
+- Todo PR con lógica nueva trae sus tests. Los tests no usan red, ni YOLO, ni Telegram: se mockean (`httpx.MockTransport`, clasificador `fake`, módulos falsos para `ultralytics`).
+- Cobertura en local: `cd vision && pytest --cov` (agregá `--cov-report=term-missing` para ver qué líneas faltan). Si la cobertura sube bastante, subí `fail_under`; nunca lo bajes para que pase un PR. El piso actual es 90 % (el CI en Linux mide ~92,7 %).
+- Las migraciones de Alembic se prueban en `tests/test_migrations.py`: una sola cabeza, subir, bajar (salvo las que se declaran irreversibles, como `0003`) y volver a subir en SQLite.

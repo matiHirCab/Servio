@@ -9,11 +9,15 @@ python3.11 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
 pip install -r requirements-yolo.txt          # para --classifier yolo o hybrid
 python main.py --source data/videos/demo.mp4 --classifier fake --no-telegram
+python main.py --config config/casa-jessica.toml          # todo lo de la casa en un archivo
 ```
 
+- **Configuración en un solo lugar** (`servio_vision/settings.py`): un `servio.toml` por casa con la cámara, la cadencia, el clasificador, las zonas, el restaurante y los umbrales (`config/servio.example.toml` es el modelo; `config/casa-*.toml` está ignorado por git), más el `.env` para los secretos y lo de la máquina (`.env.example` documenta todo). Prioridad: flags > toml > `.env` > defaults. Los flags solo pisan valores puntuales.
 - `--classifier fake|yolo|hybrid|claude`: `fake` no usa modelo; `hybrid` (YOLO + Claude) es el de la demo; `yolo` es el plan B sin internet.
-- `--demo` (o `DEMO_MODE=true`): umbrales de demo (la cadencia es siempre `--interval`, 30 s). El flag le gana a la variable.
+- `--demo` (o `DEMO_MODE=true`, o `demo = true` en el toml): umbrales de demo (la cadencia es siempre `--interval`, 30 s). El flag le gana a la variable.
 - `--no-telegram`: imprime los avisos en vez de mandarlos.
+- **Privacidad:** las caras se difuminan apenas se lee el frame, con un detector local (YuNet, de OpenCV). La primera vez baja el modelo (~230 KB) a `models/`; sin internet, copialo de la carpeta del equipo o apuntá `FACE_MODEL` a él (una ruta relativa cuenta desde la raíz del repo). Nada de lo que se muestra o se guarda tiene caras. `python -m servio_vision.privacy --source <foto o video>` guarda en `out/privacidad/` cómo quedan.
+- `--record DIR`: guarda cada frame procesado (ya difuminado) como JPEG con su hora. **Sin este flag no se guarda ninguna imagen.** Las grabaciones van a la carpeta compartida del equipo, nunca al repo.
 - Cada corrida deja `out/eventos.jsonl`; se puede reproducir (plan B de la demo) con `python tools/replay.py --file out/eventos.jsonl --speed 10` (`--no-telegram` para imprimir). Como el log se agrega, el replay lo corta en corridas (`run_started`) y reproduce la última con los umbrales con que se hizo (`--run N` para otra, `--all` para todas). También acepta un fixture: `--file ../fixtures/observations/mesa_completa.jsonl`, con umbrales de producción (`--demo` para los de demo). Escribe su propio log en `out/replay.jsonl` (se pisa en cada replay).
 - **Prueba punta a punta de los avisos (MAT-7):** `python main.py --source <video> --classifier fake --demo --speed 10 --limit 20` manda al grupo los tres tipos de aviso de cada mesa en ~1 min. El fake no mira la imagen, así que sirve cualquier video con sus zonas, pero tiene que durar al menos 10 min (`--limit 20` × 30 s); si es más corto, el loop corta antes y faltan avisos. Pensado para 2 mesas: cada mesa siguiente arranca su ciclo 3 lecturas más tarde, así que con más mesas subí `--limit` (+3 por mesa, y el video en proporción). Con Telegram usá siempre `--speed`: sin él el video corre a tope y se pasa el límite de ~20 mensajes por minuto del grupo. Cada mesa suma ~10 mensajes y ediciones por ciclo, así que con 4 mesas o más bajá a `--speed 5` o menos. El mismo recorrido, sin Telegram ni video, está en `tests/test_integration_alerts.py`.
 
@@ -28,6 +32,16 @@ Con [DroidCam](https://www.dev47apps.com/) (Android y iPhone) el celular sirve d
 - Dejá la app en primer plano, el celular enchufado y sin ahorro de batería para DroidCam.
 - La cámara se lee en un hilo aparte (si no, DroidCam corta la conexión mientras Claude clasifica) y, si se corta, se reconecta sola: se da por vencida si pasan 60 s sin un frame bueno. Una lectura por red que se cuelga (celular sin Wi-Fi) corta a los 5 s.
 - **Mesas:** se detectan solas en cada lectura (YOLO de COCO, clase "dining table"; necesita `requirements-yolo.txt`) y se llaman "Mesa 1", "Mesa 2"… Si se mueven, el recuadro las sigue. Para zonas fijas, `--zones config/zones.json` (con `tools/draw_zones.py`).
+- **Montaje:** altura, ángulo, luz y cámaras probadas en [docs/montaje-camara.md](../docs/montaje-camara.md). Antes de arrancar, `python -m servio_vision.framing --config config/casa-<quien>.toml` (mismos flags que `main.py`) dice si la mesa sale cortada, oscura o desenfocada; `main.py` repite el chequeo en la primera lectura.
+
+## Probar todo como usuario
+
+```bash
+python tools/probar_usuario.py                 # nube o PC: video de prueba, fake, 3 mesas, ~40 s
+python tools/probar_usuario.py --source "..\video demo test.mp4" --classifier hybrid
+```
+
+Levanta el servicio entero (vista de reconocimiento sin ventana, avisos sin Telegram, base y métricas) y deja en `out/prueba_usuario/` lo que ve cada rol: fotos de la vista, los avisos de cada mozo (`mozo_<nombre>.txt`), las métricas del encargado y del dueño, el resumen e `INFORME.md` con los chequeos. Aparta el log y la base de antes en `out/respaldo/` (`--conservar` para no hacerlo). Para que Claude Code lo pruebe como mozo, encargado y dueño está el skill `.claude/skills/probar-como-usuario/`.
 
 ## Tests
 
@@ -80,9 +94,13 @@ Con la comanda del restaurante, Servio sabe **qué plato es cada uno** y **qué 
 - **Los avisos** empiezan con el emoji, el mozo y la mesa ("🍽️ Juan · Mesa 1: terminó."). El de plato lleno nombra el plato y trae **botones** con las respuestas típicas de ese plato, más "✏️ Otra respuesta" (el bot pide que escriban y toma lo que respondan).
 - **Las respuestas** se escuchan en un hilo aparte (long polling: sin servidor ni webhook), se agregan al mensaje ("📝 Ana: Muy dulces") y quedan en el log (`alert_feedback`).
 
-## Base de datos (SQLite)
+## Base de datos (SQLite local o Postgres compartido)
 
-Con datos del restaurante, todo queda también en una base relacional: `vision/out/servio.db` (SQLite, un archivo, sin servidor; en producción sería Postgres con el mismo esquema, ver `servio_vision/db.py`). Tablas: `mozos`, `mesas`, `platos`, `respuestas_tipicas`, `platos_servidos`, `avisos` y `respuestas`. En vivo se guardan los platos que aparecen (con el plato del pedido que son), los avisos que se abren y cierran, y las respuestas de los mozos (de botón o escritas). Se puede abrir con cualquier cliente de SQLite.
+Con datos del restaurante, todo queda también en una base relacional (`servio_vision/db.py`, SQLAlchemy Core). Tablas: `mozos`, `mesas`, `platos`, `respuestas_tipicas`, `platos_servidos`, `avisos` y `respuestas`. En vivo se guardan los platos que aparecen (con el plato del pedido que son), los avisos que se abren y cierran, y las respuestas de los mozos (de botón o escritas).
+
+- **Sin `DATABASE_URL`**: `vision/out/servio.db`, SQLite, un archivo sin servidor (tests, sin internet). Se abre con cualquier cliente de SQLite.
+- **Con `DATABASE_URL`** en el `.env` (Postgres en Neon o Supabase; la URL va por un canal privado, nunca por el repo): todas las casas escriben en la misma base y `tools/metricas.py` lee de ahí. Driver: `pip install -r requirements-postgres.txt`. Cada casa escribe con su **`local_id`** (`local_id = "casa-jessica"` en su toml): los avisos van con clave `(local_id, id)`, así dos casas con una "Mesa 1" no se pisan. La comanda (`mozos`, `mesas`, `platos`) es compartida: todas las casas cargan el mismo `fixtures/restaurante/`. `tools/metricas.py --config casa.toml` muestra lo que pasó en vivo en esa casa.
+- **Migraciones** (Alembic, `servio_vision/migrations/`): al abrir la base se aplican las que falten, así se agregan columnas sin borrar datos; una base de antes de Alembic se reconoce y se actualiza sola. Para una migración nueva: `python -m alembic -c servio_vision/migrations/alembic.ini revision -m "qué cambia"` y escribir el `upgrade()` a mano (SQLite y Postgres tienen que poder correrla).
 
 ## Métricas de platos y mozos
 
@@ -107,7 +125,7 @@ python tools/resumen.py --image out/resumen.png
 No hay créditos de AWS, así que Claude va por el Claude Code logueado (`claude -p`, suscripción del equipo). Probar con un recorte de mesa y los de sus platos:
 
 ```bash
-python -m servio_vision.classifiers.claude_plates mesa.jpg plato1.jpg plato2.jpg
+python -m servio_vision.llm plato1.jpg plato2.jpg
 ```
 
 - `CLAUDE_PROVIDER=cli` (por defecto), `anthropic` (necesita `ANTHROPIC_API_KEY` y `pip install anthropic`) u `openai` (Decisions API de OpenAI, modelo `gpt-6-luna` o el de `OPENAI_MODEL`, timeout de 14 s o el de `OPENAI_TIMEOUT_S`; necesita `OPENAI_API_KEY` y `pip install "openai>=3.26.0"`). Con `openai` no hay JSON libre: se hacen preguntas tipadas por plato (`prompt.decision_questions`) y se arma el mismo `PlatesReport`.

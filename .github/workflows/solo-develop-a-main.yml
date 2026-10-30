@@ -1,0 +1,21 @@
+name: Solo develop a main
+
+# A main solo se mergea desde develop. Este check falla en cualquier otro PR hacia main.
+# Para que bloquee el merge, tiene que estar marcado como obligatorio en la regla de main.
+on:
+  pull_request:
+    branches: [main]
+
+jobs:
+  origen-develop:
+    runs-on: ubuntu-latest
+    steps:
+      - name: El PR viene de develop
+        env:
+          HEAD_REF: ${{ github.head_ref }}
+          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+        run: |
+          if [ "$HEAD_REF" != "develop" ] || [ "$HEAD_REPO" != "$GITHUB_REPOSITORY" ]; then
+            echo "::error::A main solo se mergea desde develop. Este PR viene de $HEAD_REPO:$HEAD_REF. Abrilo contra develop."
+            exit 1
+          fi

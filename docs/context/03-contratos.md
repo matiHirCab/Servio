@@ -63,7 +63,7 @@ Implementaciones:
 - `fake` (Jessica): sin modelo, para armar el pipeline.
 - `yolo` (Tomás): solo YOLO; estado `lleno` o `vacio` según la clase detectada. Plan B sin internet.
 - `hybrid` (Tomás): YOLO encuentra los platos y Claude estima `fill_ratio` de cada uno. Si Claude falla, usa lo de YOLO. **Es el de la demo.**
-- `claude` (Tomás): solo Claude con el recorte de la mesa entera. Respaldo si YOLO no está entrenado.
+- `claude` (Tomás): solo Claude con el recorte de la mesa entera, sin detector de platos: el modelo ubica cada plato en la grilla 3×3 (`position`) y los ids se siguen por esa posición; `bbox` va vacío. Respaldo si no hay YOLO. **Manda la imagen de la mesa**, lo que C-3 sacó del camino normal, así que es **opt-in**: solo con `CLAUDE_ALLOW_TABLE_IMAGES=true` y con el detector local de personas (lo que de ellas entre en la mesa sale pixelado; las caras ya vienen difuminadas de la captura). Sin eso no arranca (`ClassifierUnavailable`). Anda con `cli` y `anthropic`, no con `openai`.
 
 ## Observación de mesa (Jessica → Matías)
 
@@ -108,7 +108,7 @@ Telegram: `sendMessage` al grupo `TELEGRAM_GROUP_CHAT_ID` al abrir o recordar; `
 Ejemplos concretos de este contrato para probar sin video ni modelo:
 
 - `fixtures/observations/*.jsonl`: una observación de mesa por línea (formato de arriba). Escenarios mínimos: mesa que pasa de lleno a vacío y se retira, plato lleno 12 min con gente y después sin gente, id que cambia en la misma posición.
-- `fixtures/expected/*.alerts.json`: avisos que tienen que salir para cada escenario, con el segundo en que salen. Una lista de eventos en orden, con los nombres del log: `{ "at_seconds": 130, "event": "alert_opened" | "alert_reminder" | "alert_resolved", "type": "mesa_por_terminar", "table_id": "T1" }`, con `at_seconds` contado desde la primera línea del `.jsonl` (umbrales de producción).
+- `fixtures/expected/*.alerts.json`: avisos que tienen que salir para cada escenario, con el segundo en que salen. Una lista de eventos en orden, con los nombres del log: `{ "at_seconds": 130, "event": "alert_opened" | "alert_reminder" | "alert_resolved", "type": "mesa_terminada" | "plato_vacio" | "plato_lleno_mucho", "table_id": "T1" }`, con `at_seconds` contado desde la primera línea del `.jsonl` (umbrales de producción).
 
 Los modelos de la observación de mesa (`TableObservation`, `ObservedPlate`) y del aviso (`Alert`) están en `vision/servio_vision/alerts/models.py`. Rechazan campos desconocidos y un `state` que no coincide con su `fill_ratio`.
 
@@ -117,7 +117,7 @@ Los modelos de la observación de mesa (`TableObservation`, `ObservedPlate`) y d
 Con datos del restaurante, lo mismo queda también en una base relacional (`vision/out/servio.db`, esquema en `vision/servio_vision/db.py`). Además de observaciones y avisos, las respuestas de los mozos al aviso de plato lleno: `{"event": "alert_feedback", "ts", "alert_id", "table_id", "type", "dish", "waiter", "answer", "free_text", "answered_by", "seconds_to_answer"}`.
 
 
-Una línea JSON por evento, en el orden en que pasan. Lo escribe `alerts.process()` (`alerts/processor.py`). El archivo se **agrega** (no se pisa): varias corridas quedan una detrás de otra; borralo antes de la corrida de la demo si querés una sola.
+Una línea JSON por evento, en el orden en que pasan. Lo escribe `alerts.process()` (`EventLogOutput` en `alerts/outputs.py`). El archivo se **agrega** (no se pisa): varias corridas quedan una detrás de otra; borralo antes de la corrida de la demo si querés una sola.
 
 - Inicio de corrida: `{"event": "run_started", "started_at": ..., "config": {"interval": 30, "t1": 60, "t2": 600, "reminder": 180, "max_reminders": 2}}`, la primera línea que escribe cada corrida (al hacer `alerts.configure()`), con la hora real y los umbrales resueltos (`AlertConfig`). `replay.py` corta el archivo acá y reproduce con esos umbrales.
 - Observación: `{"event": "observation", ...}` con los campos de la observación de mesa. Sin `event`, la línea valida como `TableObservation`. Se escribe antes de aplicarla, así queda aunque `alerts` la rechace (por ejemplo, un `ts` que va hacia atrás).

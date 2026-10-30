@@ -12,6 +12,7 @@ El resultado es un `Zones` como el de `config/zones.json`, así el resto del
 pipeline (recorte por mesa, suavizado, avisos) no cambia.
 """
 
+import functools
 import logging
 from dataclasses import dataclass
 from typing import Protocol
@@ -41,13 +42,20 @@ class BoxDetector(Protocol):
     def detect(self, frame: np.ndarray) -> list[tuple[Box, float]]: ...
 
 
+@functools.lru_cache(maxsize=4)
+def coco_model(weights: str = DEFAULT_TABLE_WEIGHTS):
+    """El YOLO de COCO cargado una sola vez por pesos: lo comparten las mesas y las
+    personas (`people.py`, C-3) en vez de tener dos copias en memoria."""
+    from ultralytics import YOLO
+
+    return YOLO(weights)
+
+
 class TableDetector:
     """Mesas con un YOLO de COCO: [(recuadro, confianza)], la más segura primero."""
 
     def __init__(self, weights: str = DEFAULT_TABLE_WEIGHTS, conf: float = MIN_CONF):
-        from ultralytics import YOLO
-
-        self.model = YOLO(weights)
+        self.model = coco_model(weights)
         self.conf = conf
 
     def detect(self, frame: np.ndarray) -> list[tuple[Box, float]]:
@@ -80,6 +88,18 @@ class TableTracker:
         self.camera_id = camera_id
         self.tables: list[_Table] = []
         self._next = 1
+
+    def export_state(self) -> dict:
+        """Las mesas con su id y su caja, como JSON: tras un reinicio, la mesa que
+        estaba tapada o la que apareció antes no corre los números (T1, T2…)."""
+        return {
+            "next": self._next,
+            "tables": [{"id": t.table_id, "box": list(t.box)} for t in self.tables],
+        }
+
+    def restore_state(self, data: dict) -> None:
+        self._next = int(data["next"])
+        self.tables = [_Table(t["id"], tuple(t["box"])) for t in data["tables"]]
 
     def update(self, frame: np.ndarray) -> Zones:
         height, width = frame.shape[:2]
@@ -174,7 +194,8 @@ def _swallows(new: Box, old: Box) -> bool:
 
 
 def _blend(old: Box, new: Box) -> Box:
-    return tuple(SMOOTHING * n + (1 - SMOOTHING) * o for o, n in zip(old, new))
+    x0, y0, x1, y1 = (SMOOTHING * n + (1 - SMOOTHING) * o for o, n in zip(old, new))
+    return (x0, y0, x1, y1)
 
 
 def _expand(box: Box, width: int, height: int) -> Box:

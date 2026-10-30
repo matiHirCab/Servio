@@ -64,6 +64,8 @@ def items_from_labels(plates: list[FoundPlate], confidence_factor: float = 1.0):
     devuelve `None` si no queda ningún plato con estado (p. ej., YOLOE sin entrenar)."""
     items = []
     for p in plates:
+        if p.detection is None:  # un plato perdido: no lo vio YOLO, no hay clase
+            continue
         state = STATE_FROM_LABEL.get(p.detection.label)
         if state is None:
             logger.debug("clase %r sin estado, salteo %s", p.detection.label, p.id)

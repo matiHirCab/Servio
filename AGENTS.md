@@ -4,7 +4,7 @@ Guía para agentes de IA (Claude Code, Kiro, etc.) y para el equipo. Leé este a
 
 ## Qué es Servio (en una línea)
 
-Una cámara en alto mira el salón; YOLO encuentra los platos de cada mesa, Claude estima cuánta comida queda en cada uno, y cuando una mesa terminó, tiene platos vacíos o un plato sigue lleno mucho rato, le llega un aviso al mozo por Telegram.
+Una cámara en alto mira el salón; YOLO encuentra los platos de cada mesa, un modelo (Claude por defecto, o OpenAI; `CLAUDE_PROVIDER`) estima cuánta comida queda en cada uno, y cuando una mesa terminó, tiene platos vacíos o un plato sigue lleno mucho rato, le llega un aviso al mozo por Telegram.
 
 Contexto: MVP de hackathon, 24 horas, equipo de 3 personas (Tomás, Matías, Jessica). Todo es un programa en Python dentro de `vision/`: no hay backend web ni dashboard. Lo que pasa (platos servidos, avisos, respuestas de los mozos) queda en una base SQLite (`vision/out/servio.db`) de la que salen las métricas (`tools/metricas.py`).
 
@@ -21,7 +21,10 @@ Contexto: MVP de hackathon, 24 horas, equipo de 3 personas (Tomás, Matías, Jes
 | [docs/context/08-plan-24h.md](docs/context/08-plan-24h.md) | Querés el panorama: roles y fases por hora. |
 | [docs/context/09-convenciones.md](docs/context/09-convenciones.md) | Antes de commitear: estructura, dueños por carpeta, ramas, estilo, variables de entorno. |
 | [docs/context/11-tareas.md](docs/context/11-tareas.md) | Vas a hacer una tarea: qué hacer, en qué archivo, de qué depende y cuándo está hecha. |
+| [docs/context/12-roles.md](docs/context/12-roles.md) | Vas a mostrar algo según quién mira (mozo, encargado, dueño): vistas, métricas y avisos por rol, y dónde se configura. |
+| [docs/context/13-metricas.md](docs/context/13-metricas.md) | Vas a calcular o mostrar una métrica: lista cerrada de M-1, fórmula, de qué tabla sale, qué rol la ve y en qué pantalla. |
 | [docs/roadmap-producto.md](docs/roadmap-producto.md) | Vas a hacer una tarea de después de la hackathon (fases A–E): arquitectura, banco de pruebas en casa, mejoras y funciones nuevas. |
+| [docs/montaje-camara.md](docs/montaje-camara.md) | Vas a armar la cámara en una casa: altura, ángulo, luz, cámaras probadas y el chequeo de encuadre. |
 
 ## Reglas para agentes
 
@@ -29,6 +32,6 @@ Contexto: MVP de hackathon, 24 horas, equipo de 3 personas (Tomás, Matías, Jes
 2. **Trabajá solo en tus carpetas** según la tabla «Dueños por carpeta» de [09-convenciones.md](docs/context/09-convenciones.md), salvo que la tarea diga otra cosa.
 3. **Primero que funcione, después que sea lindo.** Es una hackathon: preferí lo simple y demostrable.
 4. **Siempre con mock.** Cada parte tiene que poder correr sola: el pipeline con `--classifier fake`, las reglas con `fixtures/` y `--no-telegram`, el clasificador con fotos sueltas.
-5. **Nada de secretos en el repo.** Tokens y claves van en `.env` (ignorado) y se documentan en `.env.example`.
+5. **Nada de secretos en el repo.** Tokens y claves van en `.env` (ignorado) y se documentan en `.env.example`. Toda la configuración se lee en un solo lugar, `servio_vision/settings.py` (ver «Configuración» en [09-convenciones.md](docs/context/09-convenciones.md)); no agregues `os.getenv` en otro archivo.
 6. **No subas imágenes, videos, datasets ni pesos al repo.** Ver «Privacidad y datos» en [09-convenciones.md](docs/context/09-convenciones.md).
 7. Escribí docs y comentarios en español; código (nombres de variables, funciones) en inglés.
