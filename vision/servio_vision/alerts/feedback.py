@@ -84,12 +84,15 @@ class FeedbackDesk:
         question.message_id = message_id
         with self._lock:
             self._forget_resolved()
-            if message_id is None:
-                # Telegram no lo recibió: no hay botones que contestar ni mensaje que
-                # editar al cerrar, así que nadie lo volvería a mirar
-                return None
             self._questions[token] = question
-            self._by_message[message_id] = question
+            if message_id is not None:
+                self._by_message[message_id] = question
+            else:
+                # Telegram no lo recibió ahora, pero `notify.py` lo reintenta: si sale
+                # tarde, trae los botones de este token y tienen que encontrar la
+                # pregunta. Sin `message_id` nadie la cierra con `rewrite`, así que
+                # vence sola, más tarde de lo que la cola reintenta.
+                question.resolved_at = self._clock()
         return message_id
 
     def _forget_resolved(self) -> None:
