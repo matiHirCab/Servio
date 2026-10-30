@@ -15,6 +15,7 @@ servidor ni webhook. Con `--no-telegram` (ConsoleNotifier) no hay nada que escuc
 import logging
 import secrets
 import threading
+import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -25,6 +26,11 @@ from servio_vision.restaurant import OTHER_ANSWER
 logger = logging.getLogger(__name__)
 
 OTHER = "otro"
+# Un aviso cerrado se sigue pudiendo contestar un rato: el mozo que tocó «Otra respuesta»
+# justo antes del cierre escribe su texto después. Pasado esto se olvida la pregunta:
+# sin eso, cada aviso de plato lleno de semanas quedaba en memoria (con el texto, los
+# platos y el cierre). Un aviso abierto no se olvida nunca, dure lo que dure.
+RESOLVED_GRACE_S = 1800.0
 
 
 @dataclass
@@ -42,6 +48,7 @@ class Question:
     answered: bool = False  # ya respondió alguien (un segundo toque no cuenta)
     # el aviso se cerró: arma el texto "ya resuelto" con las respuestas
     final: Callable[[str], str] | None = None
+    resolved_at: float | None = None  # reloj del `FeedbackDesk`, cuando se cerró
 
 
 class FeedbackDesk:
@@ -52,9 +59,11 @@ class FeedbackDesk:
         notifier: Any,
         log_event: Callable[[dict], None],
         commands: dict[str, Callable[[], None]] | None = None,
+        clock: Callable[[], float] = time.monotonic,
     ) -> None:
         self.notifier = notifier
         self.log_event = log_event
+        self._clock = clock  # los tests lo adelantan
         # comandos del grupo ("/metricas" → commands["metricas"]())
         self.commands = commands or {}
         self._questions: dict[str, Question] = {}  # token → pregunta
@@ -74,10 +83,30 @@ class FeedbackDesk:
         message_id = self.notifier.send(question.text, rows)
         question.message_id = message_id
         with self._lock:
+            self._forget_resolved()
+            if message_id is None:
+                # Telegram no lo recibió: no hay botones que contestar ni mensaje que
+                # editar al cerrar, así que nadie lo volvería a mirar
+                return None
             self._questions[token] = question
-            if message_id is not None:
-                self._by_message[message_id] = question
+            self._by_message[message_id] = question
         return message_id
+
+    def _forget_resolved(self) -> None:
+        """Saca las preguntas cerradas hace más de `RESOLVED_GRACE_S`, con su mensaje
+        y sus pedidos de «escribí qué pasó». Con el lock tomado."""
+        now = self._clock()
+        expired = [
+            token
+            for token, q in self._questions.items()
+            if q.resolved_at is not None and now - q.resolved_at > RESOLVED_GRACE_S
+        ]
+        for token in expired:
+            question = self._questions.pop(token)
+            if question.message_id is not None:
+                self._by_message.pop(question.message_id, None)
+            for prompt_id in [p for p, t in self._prompts.items() if t == token]:
+                del self._prompts[prompt_id]
 
     def suffix(self, message_id: int) -> str:
         """Respuestas ya registradas de ese mensaje, para no perderlas al editarlo."""
@@ -99,6 +128,8 @@ class FeedbackDesk:
             text = build(self._suffix(question))
             if question is not None and resolved:
                 question.final = build
+                question.resolved_at = self._clock()
+            self._forget_resolved()
             self.notifier.edit(message_id, text)
         return text
 
