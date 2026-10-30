@@ -24,6 +24,7 @@ import io
 import logging
 import threading
 from dataclasses import dataclass
+from typing import Any
 
 import numpy as np
 from PIL import Image
@@ -205,7 +206,7 @@ class HybridClassifier:
         self.lost_readings: dict[tuple[str, str], int] = {}  # seguidas sin YOLO
         self.references: dict[tuple[str, str], bytes] = {}  # ver REFERENCE_READINGS
         self.readings: dict[tuple[str, str], int] = {}  # lecturas visibles por plato
-        self.claude_kwargs = {
+        self.claude_kwargs: dict[str, Any] = {
             "provider": provider,
             "model": model,
             "timeout_s": timeout_s,
@@ -420,6 +421,7 @@ class HybridClassifier:
             self.hidden[key] = 0 if visible else self.hidden.get(key, 0) + 1
             if visible and p.id not in prepared.lost:
                 self._update_reference(key, est, crop, sent=ref is not None)
+            reading: dict[str, Any]  # los campos de `Item` que cambian según el caso
             if visible:
                 self.last_fill[key] = est.fill_ratio
                 reading = {"fill_ratio": est.fill_ratio, "confidence": est.confidence}

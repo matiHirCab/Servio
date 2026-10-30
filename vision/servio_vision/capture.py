@@ -321,11 +321,14 @@ class CameraReader:
             return None
         return cap
 
-    def _run(self, cap: cv2.VideoCapture) -> None:
+    def _run(self, first: cv2.VideoCapture) -> None:
+        # `None` cuando se reconectó sin éxito: ya no hay nada que liberar al salir
+        cap: cv2.VideoCapture | None = first
         failures = 0
         down_since: float | None = None  # desde cuándo no llega un frame bueno
         try:
             while not self._stop.is_set():
+                assert cap is not None  # si no, el bucle terminó con `break`
                 ok, frame = cap.read()
                 if ok:
                     failures = 0

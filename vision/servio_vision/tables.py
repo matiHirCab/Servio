@@ -194,7 +194,8 @@ def _swallows(new: Box, old: Box) -> bool:
 
 
 def _blend(old: Box, new: Box) -> Box:
-    return tuple(SMOOTHING * n + (1 - SMOOTHING) * o for o, n in zip(old, new))
+    x0, y0, x1, y1 = (SMOOTHING * n + (1 - SMOOTHING) * o for o, n in zip(old, new))
+    return (x0, y0, x1, y1)
 
 
 def _expand(box: Box, width: int, height: int) -> Box:

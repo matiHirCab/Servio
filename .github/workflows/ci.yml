@@ -34,6 +34,8 @@ jobs:
       - run: pip install -r requirements-dev.txt
       - run: ruff check .
       - run: ruff format --check .
+      # Tipos de todo `servio_vision/` (la configuración y cómo endurecerla, en pyproject.toml).
+      - run: mypy
       # El piso de cobertura (`fail_under`) está en pyproject.toml.
       - name: Tests con cobertura
         run: pytest -q --cov --cov-report=term --cov-report=xml

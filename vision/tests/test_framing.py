@@ -92,6 +92,14 @@ def test_cli_checks_a_photo(tmp_path, capsys):
     )
 
 
+def test_cli_without_a_source_says_so_instead_of_crashing(monkeypatch, caplog):
+    """Antes `open_source(None)` tiraba un AttributeError sin explicar nada."""
+    monkeypatch.delenv("SERVIO_SOURCE", raising=False)
+    with caplog.at_level("ERROR"):
+        assert framing.main([]) == 2
+    assert "Falta la fuente" in caplog.text
+
+
 def test_a_fixed_zone_over_the_whole_frame_is_glued_to_the_borders():
     """Una zona dibujada a todo el cuadro es una mesa sin aire, no "sin mesa"."""
     [glued] = framing.problems(textured_frame(), zones_with(table(0, 0, 639, 479)))
