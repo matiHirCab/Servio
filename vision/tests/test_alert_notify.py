@@ -20,14 +20,22 @@ CHAT_ID = "-1001"
 
 
 def notifier(handler) -> tuple[TelegramNotifier, list[httpx.Request]]:
+    tg, requests, _ = retrying(handler)
+    return tg, requests
+
+
+def retrying(handler) -> tuple[TelegramNotifier, list[httpx.Request], list[float]]:
+    """Como `notifier`, más las esperas entre reintentos (sin dormir de verdad)."""
     requests: list[httpx.Request] = []
+    sleeps: list[float] = []
 
     def record(request: httpx.Request) -> httpx.Response:
         requests.append(request)
         return handler(request)
 
     client = httpx.Client(transport=httpx.MockTransport(record))
-    return TelegramNotifier(TOKEN, CHAT_ID, client=client), requests
+    tg = TelegramNotifier(TOKEN, CHAT_ID, client=client, sleep=sleeps.append)
+    return tg, requests, sleeps
 
 
 def ok(result) -> httpx.Response:
@@ -79,6 +87,83 @@ def test_failures_are_logged_and_do_not_raise(handler, caplog):
         assert tg.edit(1, "hola") is False
     assert caplog.records
     assert TOKEN not in caplog.text
+
+
+def too_many_requests(retry_after: int) -> httpx.Response:
+    return httpx.Response(
+        429,
+        json={
+            "ok": False,
+            "description": "Too Many Requests: retry later",
+            "parameters": {"retry_after": retry_after},
+        },
+    )
+
+
+def test_send_waits_retry_after_on_429_and_delivers():
+    answers = iter([too_many_requests(3), ok({"message_id": 7})])
+    tg, requests, sleeps = retrying(lambda r: next(answers))
+    assert tg.send("hola") == 7
+    assert len(requests) == 2
+    assert sleeps == [3]
+
+
+def test_send_retries_a_network_error_then_delivers():
+    calls = iter([None, None, ok({"message_id": 8})])
+
+    def handler(request):
+        answer = next(calls)
+        if answer is None:
+            return network_error(request)
+        return answer
+
+    tg, requests, sleeps = retrying(handler)
+    assert tg.send("hola") == 8
+    assert len(requests) == 3
+    assert len(sleeps) == 2
+
+
+def test_send_retries_a_server_error():
+    answers = iter([httpx.Response(502, text="bad gateway"), ok({"message_id": 9})])
+    tg, requests, _ = retrying(lambda r: next(answers))
+    assert tg.send("hola") == 9
+    assert len(requests) == 2
+
+
+def test_send_gives_up_after_a_few_attempts_and_does_not_raise(caplog):
+    tg, requests, sleeps = retrying(network_error)
+    with caplog.at_level(logging.WARNING):
+        assert tg.send("hola") is None
+    assert len(requests) == 3
+    assert len(sleeps) == 2
+    assert TOKEN not in caplog.text
+
+
+def test_a_client_error_is_not_retried():
+    tg, requests, sleeps = retrying(
+        lambda r: httpx.Response(
+            400, json={"ok": False, "description": "Bad Request: chat not found"}
+        )
+    )
+    assert tg.send("hola") is None
+    assert len(requests) == 1
+    assert sleeps == []
+
+
+def test_retry_after_is_capped_so_the_loop_is_not_stuck():
+    answers = iter([too_many_requests(3600), ok({"message_id": 1})])
+    tg, _, sleeps = retrying(lambda r: next(answers))
+    assert tg.send("hola") == 1
+    assert sleeps and sleeps[0] <= 10
+
+
+def test_get_updates_is_not_retried_inside_the_call():
+    """El long polling ya lo repite el bucle de feedback.py; reintentar acá lo
+    trabaría con esperas largas mientras llegan botones."""
+    tg, requests, sleeps = retrying(network_error)
+    assert tg.get_updates(None) == []
+    assert len(requests) == 1
+    assert sleeps == []
 
 
 def test_httpx_does_not_log_the_url_with_the_token(caplog):

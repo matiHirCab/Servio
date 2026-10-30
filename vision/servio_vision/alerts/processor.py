@@ -15,7 +15,7 @@ import dataclasses
 import json
 import logging
 import threading
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -154,7 +154,24 @@ class AlertProcessor:
             return
         track_id = self._alert_plate.get(alert.id)
         served_id = self._served_rows.get(track_id) if track_id else None
-        self.db.alert_opened(alert.id, alert.type, alert.table_id, served_id, ts)
+        self._db_write(
+            "el aviso abierto",
+            self.db.alert_opened,
+            alert.id,
+            alert.type,
+            alert.table_id,
+            served_id,
+            ts,
+        )
+
+    @staticmethod
+    def _db_write(what: str, write: Callable[..., Any], *args: Any) -> None:
+        """Una escritura a la base. La base es auxiliar (métricas e historial): si
+        falla se loguea y se sigue, así el aviso al mozo sale igual."""
+        try:
+            write(*args)
+        except Exception:
+            logger.exception("No se pudo guardar %s en la base", what)
 
     def _send_metrics(self) -> None:
         """`/metricas` en el grupo: la imagen de métricas con un resumen corto.
@@ -203,7 +220,7 @@ class AlertProcessor:
             self.restaurant.see_plates(
                 obs.table_id, [p.track_id for p in table.active_plates()]
             )
-        self._record_plates(obs, table, obs.ts)
+        self._db_write("las lecturas", self._record_plates, obs, table, obs.ts)
 
         result = evaluate(table, obs.ts, self.config, self.open_alerts.values())
         opened_all = [self._with_context(a, table, obs.ts) for a in result.opened]
@@ -263,7 +280,13 @@ class AlertProcessor:
                 event["close_reason"] = reasons[alert.id]
             log(event)
             if self.db is not None:
-                self.db.alert_resolved(alert.id, obs.ts, reasons[alert.id])
+                self._db_write(
+                    "el aviso cerrado",
+                    self.db.alert_resolved,
+                    alert.id,
+                    obs.ts,
+                    reasons[alert.id],
+                )
 
         return events
 
