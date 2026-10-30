@@ -1,8 +1,8 @@
 """Motor de reglas (MAT-3). Ver docs/context/05-reglas-alertas.md.
 
 `evaluate(table, now, config, open_alerts)` es pura: con el estado de una mesa decide qué
-avisos abrir, cuáles recordar y cuáles cerrar. No manda nada; eso lo hace `processor.py`
-(`alerts.process()`), que además agrupa en un solo mensaje los avisos de la misma mesa.
+avisos abrir, cuáles recordar y cuáles cerrar. No manda nada: lo usa el núcleo
+(`core.py`), y los textos salen de `messages.py`.
 
 Por cada `(mesa, tipo)` hay como máximo un aviso abierto:
 - condición sí y no hay aviso abierto → se abre;
@@ -10,12 +10,12 @@ Por cada `(mesa, tipo)` hay como máximo un aviso abierto:
 - condición no y hay uno abierto → se cierra (`resuelta`).
 """
 
-import re
 from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 
 from servio_vision.alerts.config import AlertConfig
+from servio_vision.alerts.messages import open_message, reminder_message
 from servio_vision.alerts.models import Alert, AlertType
 from servio_vision.alerts.state import TableState, table_status
 
@@ -76,7 +76,7 @@ def evaluate(
             reminded.append(
                 Reminder(
                     alert=current.model_copy(update={"reminders_sent": n}),
-                    message=_reminder_message(alert_type, table.table_id, now - since),
+                    message=reminder_message(alert_type, table.table_id, now - since),
                 )
             )
     return EngineResult(opened, reminded, resolved)
@@ -135,36 +135,7 @@ def _new_alert(
         id=f"{table_id}-{alert_type}-{int(now.timestamp())}",
         table_id=table_id,
         type=alert_type,
-        message=_open_message(alert_type, table_id, now - since),
+        message=open_message(alert_type, table_id, now - since),
         created_at=now,
         status="abierta",
     )
-
-
-def table_name(table_id: str) -> str:
-    """Nombre para el mensaje: `T1` → `Mesa 1`; cualquier otro id queda igual."""
-    match = re.fullmatch(r"T(\d+)", table_id)
-    return f"Mesa {match.group(1)}" if match else table_id
-
-
-def _minutes(elapsed: timedelta) -> int:
-    return max(1, round(elapsed.total_seconds() / 60))
-
-
-def _open_message(alert_type: AlertType, table_id: str, elapsed: timedelta) -> str:
-    name = table_name(table_id)
-    if alert_type == "mesa_terminada":
-        return f"🍽️ {name}: terminó."
-    if alert_type == "plato_vacio":
-        return f"🧹 {name}: hay platos vacíos para retirar."
-    return f"❓ {name}: un plato sigue lleno hace {_minutes(elapsed)} min. ¿Está todo bien?"
-
-
-def _reminder_message(alert_type: AlertType, table_id: str, elapsed: timedelta) -> str:
-    name = table_name(table_id)
-    minutes = _minutes(elapsed)
-    if alert_type == "mesa_terminada":
-        return f"🍽️ {name}: terminó hace {minutes} min."
-    if alert_type == "plato_vacio":
-        return f"🧹 {name}: los platos vacíos siguen sin retirar hace {minutes} min."
-    return f"❓ {name}: el plato sigue lleno hace {minutes} min. ¿Está todo bien?"

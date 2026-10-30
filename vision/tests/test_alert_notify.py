@@ -8,11 +8,11 @@ import sys
 import httpx
 import pytest
 
+from servio_vision.alerts.messages import resolved_text
 from servio_vision.alerts.notify import (
     ConsoleNotifier,
     TelegramNotifier,
     get_notifier,
-    resolved_text,
 )
 
 TOKEN = "123:secreto"

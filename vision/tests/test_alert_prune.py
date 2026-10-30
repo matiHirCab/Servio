@@ -5,7 +5,8 @@ import json
 import pytest
 
 from servio_vision import alerts
-from servio_vision.alerts.processor import PRUNE_SERVED_AFTER_READINGS, AlertProcessor
+from servio_vision.alerts.outputs import PRUNE_SERVED_AFTER_READINGS
+from servio_vision.alerts.processor import AlertProcessor
 from servio_vision.restaurant import Restaurant
 from tests.test_alert_db_failures import RecordingDb, recording
 from tests.test_alert_engine import obs
@@ -49,10 +50,10 @@ def test_a_plate_that_left_is_forgotten_after_the_grace_period(tmp_path):
     for _ in range(PRUNE_SERVED_AFTER_READINGS - 1):
         seconds += 30
         p.process(obs(seconds, plate(1)))  # p2 ya no está
-    assert "T1-p2" in p._served_rows  # todavía dentro del plazo
+    assert "T1-p2" in p.db_output.served_rows  # todavía dentro del plazo
     seconds += 30
     p.process(obs(seconds, plate(1)))
-    assert set(p._served_rows) == {"T1-p1"}
+    assert set(p.db_output.served_rows) == {"T1-p1"}
     p.close()
 
 
@@ -82,7 +83,7 @@ def test_a_row_is_kept_until_the_plates_retirement_reached_the_database(tmp_path
     db.fail_readings = outage  # y se cae
     for k in range(1, outage + 1):
         p.process(obs(30 * k, plate(1)))  # p2 se fue, pero el retiro no se registra
-    assert "T1-p2" in p._served_rows  # más allá del plazo, pero sin registrar
+    assert "T1-p2" in p.db_output.served_rows  # más allá del plazo, pero sin registrar
     assert len(db.readings) == 1  # la base solo recibió la primera lectura
 
     seconds = 30 * (outage + 1)
@@ -90,7 +91,7 @@ def test_a_row_is_kept_until_the_plates_retirement_reached_the_database(tmp_path
     p.process(obs(seconds + 30, plate(1)))
     retired = [gone for _, gone in db.readings if gone]
     assert retired == [[2]]  # el retiro de la fila 2 llegó, una sola vez
-    assert "T1-p2" not in p._served_rows  # y ahora sí se olvida
+    assert "T1-p2" not in p.db_output.served_rows  # y ahora sí se olvida
     p.close()
 
 
@@ -123,7 +124,8 @@ def test_plates_are_matched_to_their_table_exactly(tmp_path):
     p.process(reading("mesa-1", 0, ["mesa-1-p1"]))
     for k in range(PRUNE_SERVED_AFTER_READINGS + 5):  # solo se lee la otra mesa
         p.process(reading("mesa", 30 * k, ["mesa-p1"]))
-    assert "mesa-1-p1" in p._served_rows  # es de otra mesa: no se cuenta ausente
+    # es de otra mesa: no se cuenta ausente
+    assert "mesa-1-p1" in p.db_output.served_rows
     p.close()
 
 
@@ -138,8 +140,8 @@ def test_saved_state_does_not_grow_with_every_plate_served(tmp_path):
     p.close()
     saved = json.loads(db.last_state)["served_rows"]
     # lo que cabe en el plazo (30 lecturas / 3 por plato) y el plato de ahora, no 150
-    assert len(p._served_rows) <= PRUNE_SERVED_AFTER_READINGS // 3 + 2
-    assert len(saved) == len(p._served_rows)
+    assert len(p.db_output.served_rows) <= PRUNE_SERVED_AFTER_READINGS // 3 + 2
+    assert len(saved) == len(p.db_output.served_rows)
 
 
 def test_the_plate_of_an_alert_is_forgotten_once_the_alert_is_recorded(tmp_path):
@@ -158,7 +160,8 @@ def test_the_plate_of_an_alert_is_forgotten_once_the_alert_is_recorded(tmp_path)
     for seconds in (0, 30, 60):
         p.process(obs(seconds, plate(1, "lleno")))
     assert [a.type for a in p.open_alerts.values()] == ["plato_lleno_mucho"]
-    assert p._alert_plate == {}  # ya se usó: nadie lo vuelve a leer
+    assert "alert_plate" not in json.loads(db.last_state)  # el plato va en el evento
     (opened,) = db.opened
-    assert opened[3] == p._served_rows["T1-p1"]  # y el aviso quedó ligado a su plato
+    # y el aviso quedó ligado a su plato
+    assert opened[3] == p.db_output.served_rows["T1-p1"]
     p.close()

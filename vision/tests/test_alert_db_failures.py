@@ -193,8 +193,10 @@ def test_a_down_database_does_not_flood_the_log(tmp_path, caplog):
     try:
         with caplog.at_level(logging.ERROR):
             for _ in range(20):  # veinte lecturas con la base caída
-                p._db_write("el estado", boom)
-            p._db_write("el aviso abierto", boom)  # otra escritura: se loguea aparte
+                p.db_output.write("el estado", boom)
+            p.db_output.write(
+                "el aviso abierto", boom
+            )  # otra escritura: se loguea aparte
         messages = [r.getMessage() for r in caplog.records]
         assert len([m for m in messages if "el estado" in m]) == 1
         assert len([m for m in messages if "el aviso abierto" in m]) == 1
@@ -204,14 +206,14 @@ def test_a_down_database_does_not_flood_the_log(tmp_path, caplog):
             raise ValueError("no existe la columna")
 
         with caplog.at_level(logging.ERROR):
-            p._db_write("el estado", schema_error)
+            p.db_output.write("el estado", schema_error)
         assert "No se pudo guardar el estado" in caplog.records[-1].getMessage()
         assert caplog.records[-1].exc_info[0] is ValueError
 
         # pasado el minuto vuelve a loguear y cuenta los que se callaron
-        p._db_logged[("el estado", "RuntimeError")] -= 61
+        p.db_output._logged[("el estado", "RuntimeError")] -= 61
         with caplog.at_level(logging.ERROR):
-            p._db_write("el estado", boom)
+            p.db_output.write("el estado", boom)
         assert "y 19 fallos más" in caplog.records[-1].getMessage()
     finally:
         p.close()

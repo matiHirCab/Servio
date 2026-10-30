@@ -43,7 +43,7 @@ Tomás pidió sumar todas las propuestas internas. Ya están en el catálogo (`M
 | `sobra_por_plato` | ¿Cuánto queda en el plato cuando se lo llevan? | Último `fill_ratio` de los platos que se fueron de la mesa (el loop marca `retirado_at` en la lectura en que dejan de estar; si vuelven a verse, se borra), promedio por plato. Más adelante puede afinar el desperdicio en $ (precio × lo que sobra, en vez del plato entero). | `platos_servidos.ultimo_fill_ratio` y `retirado_at` (nuevas) | Dueño | Carta | **Se calcula** (`SQL_LEFTOVER`). Solo con datos en vivo. |
 | `adopcion` | ¿Los mozos usan Servio? | Avisos de plato lleno ya cerrados que tuvieron respuesta / total, y cuántos se marcaron "No hacía falta". Si baja, el local deja de usar Servio: para nosotros avisa que el cliente se puede ir. | `avisos`, `respuestas` | Dueño | Resultados | **Se calcula** (`SQL_ADOPTION`). Con C-5 cuenta todos los avisos y el botón "No hacía falta". |
 
-Datos nuevos que guarda el loop (`alerts/processor.py`), en una transacción por lectura de mesa:
+Datos nuevos que guarda el loop (`DatabaseOutput` en `alerts/outputs.py`), en una transacción por lectura de mesa:
 - En `platos_servidos`, el último `fill_ratio` del plato. Si la lectura no lo trae queda vacío, para no arrastrar uno viejo.
 - También en `platos_servidos`, `retirado_at`: la lectura en que el plato se fue de la mesa.
 - Una fila en `estados_plato` cada vez que el plato cambia de estado.

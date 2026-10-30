@@ -39,6 +39,9 @@ class FakeTelegram:
     def is_group(self, chat_id):
         return chat_id == -1
 
+    def get_updates(self, offset, timeout=20):
+        return []
+
 
 def question():
     return Question(
@@ -225,6 +228,7 @@ def test_second_tap_does_not_count_twice():
 
 def test_message_format_is_emoji_waiter_table_message(tmp_path):
     from servio_vision.alerts.config import AlertConfig
+    from servio_vision.alerts.messages import mention_waiter
     from servio_vision.alerts.notify import ConsoleNotifier
     from servio_vision.alerts.processor import AlertProcessor
 
@@ -235,9 +239,9 @@ def test_message_format_is_emoji_waiter_table_message(tmp_path):
         Restaurant.load(),
     )
     try:
-        assert p._mention_waiter("🍽️ Mesa 1: terminó.", "T1") == (
-            "🍽️ Juan · Mesa 1: terminó."
-        )
+        assert mention_waiter(
+            "🍽️ Mesa 1: terminó.", "T1", p.restaurant.waiter("T1")
+        ) == ("🍽️ Juan · Mesa 1: terminó.")
     finally:
         p.close()
 
@@ -262,7 +266,7 @@ def test_metrics_command_sends_the_image(tmp_path):
         Database(tmp_path / "servio.db"),
     )
     try:
-        p.feedback.handle(
+        p.bot.handle(
             {"message": {"chat": {"id": -1}, "text": "/metricas@servio_mozos_bot"}}
         )
     finally:
@@ -307,3 +311,10 @@ def test_picking_up_the_plates_says_who_and_how_long(tmp_path):
         text.endswith(" después de que terminó la mesa.") and "ya resuelto" not in text
     )
     assert row["motivo_cierre"] == "retirados"
+
+
+def test_reply_prompt_names_the_table_like_the_alert():
+    from servio_vision.alerts.messages import reply_prompt, table_name
+
+    assert reply_prompt("Donas", "T1").endswith("con Donas (Mesa 1).")
+    assert reply_prompt(None, "A3").endswith(f"({table_name('A3')}).")  # no "Mesa 3"

@@ -1,7 +1,8 @@
 """Envío a Telegram (MAT-4). Ver docs/context/06-notificaciones.md.
 
 Solo envío, con `httpx` directo a la Bot API: `send` abre un mensaje en el grupo y
-devuelve su `message_id`; `edit` lo reescribe (al cerrar, con `resolved_text`).
+devuelve su `message_id`; `edit` lo reescribe (al cerrar, con el texto de
+`messages.resolved_text`).
 Si Telegram falla se loguea y se sigue: nunca lanza, así el loop no se frena. Antes
 de rendirse reintenta lo que puede ser pasajero (red, 5xx y el 429 de «esperá N
 segundos»): un aviso perdido por un parpadeo de internet es un mozo que no se entera.
@@ -15,10 +16,12 @@ reintentar (red, 5xx, 429), va a una cola acotada que un hilo de fondo sigue
 reintentando con espera creciente, hasta `BACKLOG_MAX_AGE_S` (un aviso más viejo ya no
 sirve). Mientras haya cola, los envíos nuevos entran detrás sin esperar a una red que no
 anda, y salen en orden cuando vuelve. Un mensaje que sale así, tarde, no le deja su
-`message_id` a `processor.py` (`send` ya devolvió `None`): el mozo lo recibe, pero el
+`message_id` al aviso (`send` ya devolvió `None`): el mozo lo recibe, pero el
 aviso no se puede editar al cerrarse; igual que cuando Telegram falla del todo.
 
-El agrupado por mesa y guardar el `message_id` en el `Alert` son de `processor.py`.
+El agrupado por mesa y guardar el `message_id` en el `Alert` son de `outputs.py`
+(`TelegramOutput`). Los textos, de `messages.py`. Escuchar respuestas y comandos
+(`get_updates` y compañía) lo usa el bot (`bot.py`), que solo depende de `BotChannel`.
 """
 
 import logging
@@ -40,7 +43,6 @@ logger = logging.getLogger(__name__)
 logging.getLogger("httpx").setLevel(logging.WARNING)
 
 API_URL = "https://api.telegram.org"
-RESOLVED_SUFFIX = "\n\n✅ ya resuelto"
 SEND_ATTEMPTS = 3  # el primero y dos reintentos
 RETRY_WAIT_S = 1.0  # espera entre intentos si Telegram no pide otra
 RETRY_WAIT_MAX_S = 10.0  # tope por espera: el loop de lecturas espera al envío
@@ -64,11 +66,6 @@ class _Queued:
     method: str
     payload: dict[str, Any]
     queued_at: float
-
-
-def resolved_text(text: str) -> str:
-    """Texto del mensaje original con la marca de resuelto."""
-    return text + RESOLVED_SUFFIX
 
 
 # Botones de un mensaje: filas de (texto, callback_data).

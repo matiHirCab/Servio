@@ -117,7 +117,7 @@ Los modelos de la observación de mesa (`TableObservation`, `ObservedPlate`) y d
 Con datos del restaurante, lo mismo queda también en una base relacional (`vision/out/servio.db`, esquema en `vision/servio_vision/db.py`). Además de observaciones y avisos, las respuestas de los mozos al aviso de plato lleno: `{"event": "alert_feedback", "ts", "alert_id", "table_id", "type", "dish", "waiter", "answer", "free_text", "answered_by", "seconds_to_answer"}`.
 
 
-Una línea JSON por evento, en el orden en que pasan. Lo escribe `alerts.process()` (`alerts/processor.py`). El archivo se **agrega** (no se pisa): varias corridas quedan una detrás de otra; borralo antes de la corrida de la demo si querés una sola.
+Una línea JSON por evento, en el orden en que pasan. Lo escribe `alerts.process()` (`EventLogOutput` en `alerts/outputs.py`). El archivo se **agrega** (no se pisa): varias corridas quedan una detrás de otra; borralo antes de la corrida de la demo si querés una sola.
 
 - Inicio de corrida: `{"event": "run_started", "started_at": ..., "config": {"interval": 30, "t1": 60, "t2": 600, "reminder": 180, "max_reminders": 2}}`, la primera línea que escribe cada corrida (al hacer `alerts.configure()`), con la hora real y los umbrales resueltos (`AlertConfig`). `replay.py` corta el archivo acá y reproduce con esos umbrales.
 - Observación: `{"event": "observation", ...}` con los campos de la observación de mesa. Sin `event`, la línea valida como `TableObservation`. Se escribe antes de aplicarla, así queda aunque `alerts` la rechace (por ejemplo, un `ts` que va hacia atrás).

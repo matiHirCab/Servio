@@ -6,7 +6,7 @@ Qué hacer después de la hackathon para que Servio quede prolijo, bien armado y
 
 - **No hay restaurante todavía.** Se prueba en nuestras casas, con una cámara (celular con DroidCam o cámara IP) mirando una mesa desde arriba, como en la hackathon. Por eso el plan se apoya en un **banco de pruebas en casa** (fase B) que reemplaza los datos que daría un restaurante.
 - **El código creció rápido.** Son ~7.200 líneas que funcionan y tienen buenos tests, pero hay partes que hacen demasiado:
-  - `alerts/processor.py` junta estado, reglas, log, base, textos de Telegram, botones y comandos.
+  - `alerts/processor.py` junta estado, reglas, log, base, textos de Telegram, botones y comandos (ya partido: A-4).
   - `main.py` tiene a la vez el `Pipeline`, el armado de las piezas y los flags.
   - La configuración está repartida entre flags, `.env` y `os.getenv` sueltos en 7 archivos.
 - **Los docs de contexto quedaron viejos.** `01` y `02` dicen que el mozo no responde y que no hay base, y ya hay botones, `/metricas` y `servio.db`.
@@ -50,7 +50,9 @@ Se partió el antiguo `claude_plates.py` en el paquete `servio_vision/llm/`: la 
 **Hecho cuando:** sumar un proveedor nuevo es un archivo nuevo más una línea en el registro, y `test_claude_plates.py` y `test_hybrid.py` pasan.
 
 ### A-4 · Avisos: estado y reglas por un lado, salidas por el otro
-**Matías · A · 4 d · depende de: nada**
+**Matías · A · 4 d · hecho** (junto con A-5, como P1)
+Hecho así: el núcleo es `alerts/core.py` (`AlertCore.apply(obs)` devuelve eventos: `TableUpdated`, `AlertsOpened`, `AlertsReminded`, `AlertsResolved`); los suscriptores, `alerts/outputs.py` (`TelegramOutput`, `EventLogOutput`, `DatabaseOutput`); los textos, `alerts/messages.py`; el bot, `alerts/bot.py` (escucha y comandos, y del canal solo usa `BotChannel`). `AlertProcessor` (`processor.py`) quedó como la fachada que los arma, con la misma firma.
+
 Partir `AlertProcessor` en:
 - **núcleo:** estado de mesas, reglas y avisos abiertos, sin entrada/salida;
 - **suscriptores** de los eventos del núcleo (aviso abierto, recordado, cerrado, plato servido, respuesta): `EventLog`, `Database` y el notificador;
@@ -60,7 +62,9 @@ Partir `AlertProcessor` en:
 **Hecho cuando:** el núcleo se prueba con fixtures sin log, sin base y sin notificador, y `test_integration_alerts.py` produce los mismos avisos.
 
 ### A-5 · Estado que sobrevive a un reinicio
-**Matías · A · 2 d · depende de: A-4**
+**Matías · A · 2 d · hecho** (junto con A-4, como P1)
+Hecho así: la foto (`alerts/persist.py`) va a la tabla `estado_servicio` y se recupera con `resume` (solo cámara en vivo) si tiene menos de `RESUME_MAX_AGE_S`. Además de al abrir o cerrar un aviso, se guarda al instante cuando cambia algo que usan las reglas: un corte brusco solo pierde lecturas iguales a la anterior. El test es `tests/test_alert_crash.py` (corta antes de cada lectura de cada fixture).
+
 Guardar en `servio.db` los platos abiertos, desde cuándo están en cada estado y los avisos abiertos (con su `message_id`), y recuperarlos al arrancar. Si el último guardado es muy viejo, se arranca de cero.
 
 **Hecho cuando:** un test corta el proceso a mitad de un fixture, lo relanza y los avisos son los mismos que sin corte.

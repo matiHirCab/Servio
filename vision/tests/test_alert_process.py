@@ -8,8 +8,8 @@ import pytest
 
 from servio_vision import alerts
 from servio_vision.alerts.config import AlertConfig, load_config
+from servio_vision.alerts.messages import resolved_text
 from servio_vision.alerts.models import TableObservation
-from servio_vision.alerts.notify import resolved_text
 from servio_vision.alerts.processor import AlertProcessor
 from tests.test_alert_engine import FIXTURES, PROD, SCENARIOS, load, obs
 
@@ -132,7 +132,7 @@ def test_no_close_note_is_kept_for_an_alert_without_a_telegram_message(tmp_path)
     assert [a.type for a in p.open_alerts.values()] == ["mesa_terminada"]
     p.process(obs(90))  # retiran todo
     assert not p.open_alerts
-    assert p._close_notes == {}
+    assert p.telegram.close_notes == {}
 
 
 def test_closing_the_processor_closes_the_notifier(tmp_path):
@@ -217,7 +217,25 @@ def test_telegram_down_keeps_alert_open_and_skips_edit(tmp_path):
     assert p.notifier.edits == []
     resolved = log_lines(p)[-1]
     assert (resolved["event"], resolved["text"]) == ("alert_resolved", None)
-    assert p._resolved_ids == set()
+    assert p.telegram.resolved_ids == set()
+
+
+def test_a_failing_output_does_not_stop_the_others(tmp_path, caplog):
+    """El núcleo ya cerró el aviso: si el canal se rompe al editar, el cierre
+    igual llega al log (y a la base) en vez de perderse."""
+
+    class BrokenEdit(RecordingNotifier):
+        def edit(self, message_id, text):
+            raise RuntimeError("edit roto")
+
+    p = AlertProcessor(PROD, BrokenEdit(), tmp_path / "eventos.jsonl")
+    _created.append(p)
+    for s in (0, 30, 60):
+        p.process(obs(s, VACIO, COMIENDO))
+    p.process(obs(90))  # retiran todo: se cierra el aviso
+    assert p.open_alerts == {}
+    assert log_lines(p)[-1]["event"] == "alert_resolved"
+    assert "TelegramOutput falló con AlertsResolved" in caplog.text
 
 
 def test_rejected_observation_is_still_logged(tmp_path):
