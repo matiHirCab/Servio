@@ -48,6 +48,12 @@ RESUME_MAX_AGE_S = 600.0
 SAVE_STATE_EVERY_S = 5.0
 # Una base caída falla en cada lectura: el traceback se loguea una vez por minuto.
 DB_LOG_EVERY_S = 60.0
+# Un plato que dejó de estar en su mesa conserva su fila de `platos_servidos`
+# (`_served_rows`) tantas lecturas más, por si el mismo id vuelve (lo taparon): si no,
+# se lo insertaría de nuevo. Pasado esto el id ya no vuelve (`IdCounter` solo recuerda
+# unas pocas lecturas y los ids solo suben) y se olvida: la foto que se guarda en cada
+# guardado no puede crecer con cada plato que se sirvió en semanas.
+PRUNE_SERVED_AFTER_READINGS = 30
 
 
 class EventLog:
@@ -96,6 +102,9 @@ class AlertProcessor:
         self._plate_states: dict[str, str] = {}  # track_id → último estado guardado
         self._on_table: dict[str, set[str]] = {}  # mesa → track_ids en la base
         self._alert_plate: dict[str, str] = {}  # aviso → track_id del plato
+        # track_id → lecturas seguidas de su mesa sin él (no se guarda: al reanudar
+        # vuelve a contar, y solo se olvida más tarde)
+        self._absent: dict[str, int] = {}
         if db is not None and restaurant is not None:
             db.load_restaurant(restaurant)
         self.feedback: FeedbackDesk | None = None
@@ -226,7 +235,9 @@ class AlertProcessor:
         before = self._on_table.get(obs.table_id, set())
         gone = before - set(table.plates) - inherited
         self.db.plate_readings(
-            readings, [self._served_rows[t] for t in sorted(gone)], ts
+            readings,
+            [self._served_rows[t] for t in sorted(gone) if t in self._served_rows],
+            ts,
         )
         # Recién con la base al día: si la escritura falló, la próxima lectura
         # repite estos cambios de estado y estos platos retirados en vez de perderlos.
@@ -235,10 +246,25 @@ class AlertProcessor:
             self._plate_states.pop(track_id, None)
         self._on_table[obs.table_id] = {p.track_id for p in active}
 
+    def _prune_served(self, table_id: str, table: TableState) -> None:
+        """Olvida las filas de los platos que llevan `PRUNE_SERVED_AFTER_READINGS`
+        lecturas seguidas fuera de su mesa. Solo memoria: anda aunque la base esté
+        caída."""
+        prefix = f"{table_id}-"
+        for track_id in [t for t in self._served_rows if t.startswith(prefix)]:
+            if track_id in table.plates:
+                self._absent.pop(track_id, None)
+                continue
+            absent = self._absent[track_id] = self._absent.get(track_id, 0) + 1
+            if absent >= PRUNE_SERVED_AFTER_READINGS:
+                del self._served_rows[track_id]
+                del self._absent[track_id]
+
     def _record_opened(self, alert: Alert, ts: datetime) -> None:
+        # el plato del aviso se usa una sola vez, ahora: después nadie lo lee
+        track_id = self._alert_plate.pop(alert.id, None)
         if self.db is None:
             return
-        track_id = self._alert_plate.get(alert.id)
         served_id = self._served_rows.get(track_id) if track_id else None
         self._db_write(
             "el aviso abierto",
@@ -318,6 +344,7 @@ class AlertProcessor:
                 obs.table_id, [p.track_id for p in table.active_plates()]
             )
         self._db_write("las lecturas", self._record_plates, obs, table, obs.ts)
+        self._prune_served(obs.table_id, table)
 
         result = evaluate(table, obs.ts, self.config, self.open_alerts.values())
         opened_all = [self._with_context(a, table, obs.ts) for a in result.opened]
