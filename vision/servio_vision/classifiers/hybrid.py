@@ -22,11 +22,13 @@ estima cuánta comida queda en cada uno.
 
 import io
 import logging
+import threading
 from dataclasses import dataclass
 
+import numpy as np
 from PIL import Image
 
-from servio_vision import people
+from servio_vision import people, settings
 from servio_vision.classifiers import claude_plates
 from servio_vision.classifiers.yolo import (
     FoundPlate,
@@ -66,6 +68,35 @@ LOST_EMPTY_FILL = 0.3
 # adopta como «lleno» un plato medio comido. Si Claude dice que la referencia es de otra
 # comida (`same_plate=False`, ids cambiados), se descarta.
 REFERENCE_READINGS = 3
+# Una mesa que no cambió no se vuelve a mandar al modelo (la mayor parte del costo es
+# preguntar lo mismo): se reutiliza su última respuesta mientras cada plato se vea casi
+# igual al recorte que se mandó (diferencia media de brillo en una miniatura de
+# THUMB×THUMB, de 0 a 255; el ruido de la cámara da ~1) y, aun así, cada `MAX_REUSES`
+# lecturas seguidas se pregunta de nuevo, por si un cambio chico no pasó el umbral.
+# Un plato que cambia, llega o se va, o gente que entra o sale, siempre se pregunta.
+MAX_REUSES = 3
+REUSE_MAX_DIFF = 5.0
+THUMB = 24
+
+
+def _thumb(jpeg: bytes) -> np.ndarray:
+    """Miniatura en gris del recorte: promedia el ruido de la cámara y deja lo que
+    cambió de verdad (una porción menos, una mano)."""
+    img = Image.open(io.BytesIO(jpeg)).convert("L")
+    return np.asarray(
+        img.resize((THUMB, THUMB), Image.Resampling.BOX), dtype=np.float32
+    )
+
+
+@dataclass
+class _Asked:
+    """Lo que se le preguntó al modelo por última vez en una mesa."""
+
+    ids: tuple[str, ...]
+    thumbs: list[np.ndarray]
+    people_present: bool | None
+    report: claude_plates.PlatesReport
+    reused: int = 0  # lecturas seguidas que se reutilizó esta respuesta
 
 
 def _jpeg(img: Image.Image, side: int) -> bytes:
@@ -134,9 +165,19 @@ class HybridClassifier:
         model: str | None = None,
         timeout_s: float | None = None,
         person_detector: people.PersonDetector | None = None,
+        reuse_unchanged: bool | None = None,
         **detector_kwargs,
     ):
+        """`reuse_unchanged`: no volver a preguntar por una mesa que no cambió (ver
+        `MAX_REUSES`); sin valor, el de la configuración (`CLAUDE_REUSE_UNCHANGED`)."""
         self.detector = detector or PlateDetector(**detector_kwargs)
+        self.reuse_unchanged = (
+            settings.current().claude_reuse_unchanged
+            if reuse_unchanged is None
+            else reuse_unchanged
+        )
+        self._asked: dict[str, _Asked] = {}  # por mesa; cada mesa en su hilo
+        self._asked_lock = threading.Lock()
         # personas en la mesa: para pixelarlas en los recortes y saber si hay gente
         # sin mandar la mesa al modelo (C-3)
         self.people = person_detector or people.load_detector()
@@ -196,12 +237,65 @@ class HybridClassifier:
         toca el estado del clasificador."""
         if not prepared.plates:
             return claude_plates.PlatesReport(plates=[], people_present=True)
-        return claude_plates.estimate_plates(
+        if self.reuse_unchanged:
+            reused = self._reusable(prepared)
+            if reused is not None:
+                logger.debug(
+                    "Mesa %s sin cambios: se reutiliza la lectura", prepared.table_id
+                )
+                return reused
+        report = claude_plates.estimate_plates(
             prepared.plate_jpegs,
             prepared.table_id,
             references=prepared.references,
             **self.claude_kwargs,
         )
+        if self.reuse_unchanged:
+            self._remember(prepared, report)
+        return report
+
+    def _reusable(self, prepared: Prepared) -> claude_plates.PlatesReport | None:
+        """La última respuesta del modelo para esta mesa, si nada cambió; `None` si hay
+        que volver a preguntar. Conservador: ante cualquier duda, se pregunta."""
+        with self._asked_lock:
+            asked = self._asked.get(prepared.table_id)
+        ids = tuple(p.id for p in prepared.plates)
+        if (
+            asked is None
+            or asked.reused >= MAX_REUSES
+            or prepared.lost  # un plato que YOLO perdió: caso delicado, se pregunta
+            or asked.ids != ids
+            or asked.people_present != prepared.people_present
+            # un plato nuevo todavía arma su referencia con las primeras lecturas
+            or any(
+                self.readings.get((prepared.table_id, i), 0) < REFERENCE_READINGS
+                for i in ids
+            )
+        ):
+            return None
+        thumbs = [_thumb(jpeg) for jpeg in prepared.plate_jpegs]
+        if any(
+            float(np.abs(old - new).mean()) > REUSE_MAX_DIFF
+            for old, new in zip(asked.thumbs, thumbs, strict=True)
+        ):
+            return None
+        asked.reused += 1
+        return asked.report
+
+    def _remember(
+        self, prepared: Prepared, report: claude_plates.PlatesReport | None
+    ) -> None:
+        """Guarda lo que se preguntó; sin respuesta no queda nada que reutilizar."""
+        with self._asked_lock:
+            if report is None:
+                self._asked.pop(prepared.table_id, None)
+                return
+            self._asked[prepared.table_id] = _Asked(
+                ids=tuple(p.id for p in prepared.plates),
+                thumbs=[_thumb(jpeg) for jpeg in prepared.plate_jpegs],
+                people_present=prepared.people_present,
+                report=report,
+            )
 
     def finish(
         self,
