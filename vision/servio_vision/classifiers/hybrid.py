@@ -88,6 +88,13 @@ def _thumb(jpeg: bytes) -> np.ndarray:
     )
 
 
+class ReusedReport(claude_plates.PlatesReport):
+    """La respuesta de una lectura anterior, reutilizada porque la mesa no cambió.
+    No es evidencia nueva: `finish` no la cuenta como una lectura más (ver
+    `HybridClassifier._carry_over`), si no una sola respuesta, quizá equivocada,
+    bastaría para que el suavizado acepte un cambio de estado."""
+
+
 @dataclass
 class _Asked:
     """Lo que se le preguntó al modelo por última vez en una mesa."""
@@ -280,7 +287,9 @@ class HybridClassifier:
         ):
             return None
         asked.reused += 1
-        return asked.report
+        return ReusedReport(
+            plates=asked.report.plates, people_present=asked.report.people_present
+        )
 
     def _remember(
         self, prepared: Prepared, report: claude_plates.PlatesReport | None
@@ -306,6 +315,10 @@ class HybridClassifier:
         table_id = prepared.table_id
         if not prepared.plates:
             return TableReport(items=[])
+        if isinstance(report, ReusedReport):
+            carried = self._carry_over(prepared, previous_items)
+            if carried is not None:
+                return carried
         # Lo que vio el detector local **o** lo que infiere el modelo de los recortes
         # (manos, cubiertos en uso): desde arriba, los comensales quedan casi fuera
         # del recorte de la mesa y el detector solo diría "nadie" con gente sentada,
@@ -373,6 +386,32 @@ class HybridClassifier:
                 )
             )
         return TableReport(items=items, people_present=self.people_present[table_id])
+
+    def _carry_over(
+        self, prepared: Prepared, previous_items: list[Item]
+    ) -> TableReport | None:
+        """La mesa tal como estaba, sin lectura nueva: cada plato con su último estado
+        y `visible=False`, que el suavizado no cuenta (como un plato tapado). No toca
+        la memoria del clasificador (referencias, lecturas, `hidden`). `None` si algún
+        plato no tiene todavía un estado: entonces va como lectura normal."""
+        last = {i.id: i for i in previous_items if i.state is not None}
+        if any(p.id not in last for p in prepared.plates):
+            return None
+        return TableReport(
+            items=[
+                Item(
+                    id=p.id,
+                    position=position_label(p.bbox),
+                    bbox=p.bbox,
+                    fill_ratio=last[p.id].fill_ratio,
+                    state=last[p.id].state,
+                    confidence=last[p.id].confidence,
+                    visible=False,
+                )
+                for p in prepared.plates
+            ],
+            people_present=self.people_present.get(prepared.table_id, True),
+        )
 
     def _update_reference(
         self, key, est: claude_plates.PlateEstimate, crop: bytes, sent: bool

@@ -64,8 +64,17 @@ class CircuitBreaker:
         with self._lock:
             self._failures += 1
             was_open = self._opened_at is not None
-            if was_open:  # falló la prueba: el doble de espera, hasta el tope
+            if was_open and permanent:
+                # una clave inválida que recién se supo, de una llamada que venía en
+                # vuelo: a la espera más larga
+                self._wait = self.max_cooldown_s
+            elif was_open and self._probing:
+                # falló la prueba: el doble de espera, hasta el tope
                 self._wait = min(self._wait * 2, self.max_cooldown_s)
+            elif was_open:
+                # una llamada que ya venía en vuelo cuando se abrió: no es una prueba
+                # y no prolonga la pausa
+                return
             elif permanent:
                 self._wait = self.max_cooldown_s
             elif self._failures < self.failures_to_open:
