@@ -45,7 +45,7 @@ Mover `Pipeline` a `servio_vision/pipeline.py` y el armado de las piezas (`build
 
 ### A-3 · Un proveedor de modelo por archivo
 **Tomás · A · 2 d · hecho** (no dependía de A-1: los proveedores siguen leyendo `settings.current()`; con A-1 se les pasa `Settings`)
-Partir `claude_plates.py` en un paquete `servio_vision/llm/` con una interfaz `PlateEstimator` (`estimate(request) -> PlatesReport`) y un archivo por proveedor (`claude_cli.py`, `anthropic_api.py`, `openai_api.py`). El parseo y la validación quedan en un módulo común. `hybrid.py` recibe un `PlateEstimator` y no sabe cuál es.
+Se partió el antiguo `claude_plates.py` en el paquete `servio_vision/llm/`: la interfaz `PlateEstimator` (`estimate(request) -> PlatesReport`) en `base.py`, un archivo por proveedor (`claude_cli.py`, `anthropic_api.py`, `openai_api.py`), el registro en `registry.py`, el parseo y la validación en `parsing.py` y lo común de llamar (cortacircuito, tope, reintento) en `runtime.py`. `hybrid.py` recibe un `PlateEstimator` y no sabe cuál es.
 
 **Hecho cuando:** sumar un proveedor nuevo es un archivo nuevo más una línea en el registro, y `test_claude_plates.py` y `test_hybrid.py` pasan.
 
