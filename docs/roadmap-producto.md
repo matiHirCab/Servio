@@ -63,7 +63,7 @@ Partir `AlertProcessor` en:
 
 ### A-5 · Estado que sobrevive a un reinicio
 **Matías · A · 2 d · hecho** (junto con A-4, como P1)
-Hecho así: la foto (`alerts/persist.py`) va a la tabla `estado_servicio` y se recupera con `resume` (solo cámara en vivo) si tiene menos de `RESUME_MAX_AGE_S`. Además de al abrir o cerrar un aviso, se guarda cuando cambia algo que usan las reglas, a lo sumo una vez por segundo (`SAVE_RULES_EVERY_S`, para no escribir en cada lectura con Postgres remoto): un corte brusco pierde como mucho ese último segundo. El test es `tests/test_alert_crash.py` (corta antes de cada lectura de cada fixture, con ese tope en 0).
+Hecho así: la foto (`alerts/persist.py`) va a la tabla `estado_servicio` y se recupera con `resume` (solo cámara en vivo) si tiene menos de `RESUME_MAX_AGE_S`. Además de al abrir o cerrar un aviso, se guarda cuando cambia algo que usan las reglas, a lo sumo una vez por segundo (`SAVE_RULES_EVERY_S`, para no escribir en cada lectura con Postgres remoto), en la primera lectura que llega pasado ese tiempo: un corte brusco pierde como mucho los cambios que esperaban esa lectura. El test es `tests/test_alert_crash.py` (corta antes de cada lectura de cada fixture, con ese tope en 0).
 
 Guardar en `servio.db` los platos abiertos, desde cuándo están en cada estado y los avisos abiertos (con su `message_id`), y recuperarlos al arrancar. Si el último guardado es muy viejo, se arranca de cero.
 

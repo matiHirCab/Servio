@@ -28,6 +28,8 @@ logger = logging.getLogger(__name__)
 # Al arrancar sin red, un mensaje de más de esto antes del arranque es de una
 # corrida anterior (margen por si el reloj de esta máquina va adelantado).
 OLD_MESSAGE_S = 600.0
+# Cuántos updates trae como mucho un `getUpdates` (el tope de Telegram).
+TELEGRAM_BATCH = 100
 
 
 @runtime_checkable
@@ -107,7 +109,8 @@ class Bot:
         offset = self._start_offset()
         logger.info("Escuchando respuestas de los mozos en Telegram")
         while not self._stop.is_set():
-            updates = self.channel.get_updates(offset) or []  # None: falló, sigue
+            result = self.channel.get_updates(offset)
+            updates = result or []  # None: falló, sigue
             for update in updates:
                 with self._busy:
                     if self._stop.is_set():
@@ -121,6 +124,11 @@ class Bot:
                         logger.exception(
                             "No se pudo procesar una respuesta de Telegram"
                         )
+            if result is not None and len(result) < TELEGRAM_BATCH:
+                # un lote que no vino lleno: lo pendiente ya pasó; desde acá todo
+                # es nuevo y no se filtra (así un reloj que se desfasa después no
+                # tira respuestas)
+                self._catching_up = False
             if not updates:
                 self._stop.wait(0.5)
 

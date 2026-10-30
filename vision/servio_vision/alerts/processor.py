@@ -50,13 +50,15 @@ RESUME_MAX_AGE_S = 600.0
 # El estado se guarda cada tanto y no en cada lectura (una vuelta por mesa, con la
 # base remota son idas y vueltas del loop). Se guarda al instante si se abre o cierra
 # un aviso o si aparece un plato. Si cambia algo que usan las reglas (el estado de un
-# plato, si hay gente), a lo sumo una vez por `SAVE_RULES_EVERY_S`: un corte brusco
-# pierde como mucho ese último segundo de cambios, y una sala llena no escribe en cada
+# plato, si hay gente), a lo sumo una vez por `SAVE_RULES_EVERY_S`, en la primera
+# lectura (de cualquier mesa) que llega pasado ese tiempo: un corte brusco pierde como
+# mucho los cambios que esperaban esa lectura, y una sala llena no escribe en cada
 # lectura. Si no, cada `SAVE_STATE_EVERY_S`. `close()` guarda lo último.
 SAVE_STATE_EVERY_S = 5.0
 SAVE_RULES_EVERY_S = 1.0
-# Al cerrar, cuánto se espera a que el hilo del bot termine lo que está haciendo.
-BOT_STOP_WAIT_S = 2.0
+# Al cerrar, cuánto se espera al bot si está manejando algo (un `/metricas` arma la
+# imagen y la manda, con hasta 8 s de envío). Si solo espera al canal, no se espera.
+BOT_STOP_WAIT_S = 15.0
 
 
 class AlertProcessor:
@@ -144,15 +146,16 @@ class AlertProcessor:
             assert isinstance(update, TableUpdated)
             self._rules_dirty = self._rules_dirty or update.rules_changed
             since = self._clock() - self._saved_at
-            # con la base caída, un cambio de reglas espera al guardado de cada 5 s:
-            # no una espera de conexión por segundo hasta que vuelva
-            rules_every = (
-                SAVE_STATE_EVERY_S if self._save_failed else SAVE_RULES_EVERY_S
-            )
             if (
                 len(events) > 1  # se abrió, recordó o cerró un aviso
                 or self.db_output.save_now
-                or (self._rules_dirty and since >= rules_every)
+                # con la base fallando, un cambio de reglas espera al de cada 5 s:
+                # no una espera de conexión por segundo hasta que vuelva
+                or (
+                    self._rules_dirty
+                    and not self._save_failed
+                    and since >= SAVE_RULES_EVERY_S
+                )
                 or since >= SAVE_STATE_EVERY_S
             ):
                 self._flush_state()

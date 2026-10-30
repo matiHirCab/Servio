@@ -157,3 +157,11 @@ def test_a_new_message_is_not_skipped_if_this_clock_is_ahead():
     ahead = time.time() - 90  # Telegram dice que llegó "90 s antes" del arranque
     channel = Channel([[], [metrics_update(5, ahead)]])
     assert run(channel) == ["metricas"]
+
+
+def test_the_old_message_filter_turns_off_once_caught_up():
+    """Arrancó sin red: el filtro de mensajes viejos vale solo hasta ponerse al
+    día. Después, un mensaje con fecha "vieja" (el reloj se desfasó) se maneja."""
+    old = time.time() - 86400
+    channel = Channel([None, [metrics_update(1, old)], [metrics_update(2, old)]])
+    assert run(channel) == ["metricas"]  # el primero se saltea, el segundo no

@@ -6,7 +6,8 @@ fixture. Los avisos, sus mensajes y sus ediciones tienen que ser los mismos que 
 una corrida sin corte, corte donde se corte.
 
 En producción un cambio de reglas se guarda a lo sumo una vez por segundo
-(`SAVE_RULES_EVERY_S`): un corte puede perder ese último segundo, y eso se acepta.
+(`SAVE_RULES_EVERY_S`): un corte puede perder los cambios que esperaban la lectura
+siguiente, y eso se acepta.
 Acá ese tope va en 0 y el guardado periódico se apaga: lo que se prueba es que los
 guardados por evento (avisos, platos nuevos, cambios de reglas) alcanzan.
 """
