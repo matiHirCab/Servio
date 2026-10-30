@@ -1,5 +1,6 @@
 """Datos del restaurante y respuestas de los mozos (Telegram falso)."""
 
+import threading
 from datetime import UTC, datetime
 
 from servio_vision.alerts.feedback import FeedbackDesk, Question
@@ -7,7 +8,9 @@ from servio_vision.restaurant import Restaurant
 
 
 class FakeTelegram:
-    """Registra lo que se manda; `get_updates` existe pero no se usa (no se escucha)."""
+    """Registra lo que se manda. Sin `get_updates`: no es un canal que se escuche,
+    así un `AlertProcessor` con él no arranca el hilo del bot (los tests llaman a
+    `bot.handle` a mano, con `Listening`)."""
 
     def __init__(self):
         self.sent, self.edits, self.prompts, self.answers, self.deleted = (
@@ -38,6 +41,14 @@ class FakeTelegram:
 
     def is_group(self, chat_id):
         return chat_id == -1
+
+
+class Listening(FakeTelegram):
+    """Un canal que se escucha (arma el bot), pero que nunca trae nada."""
+
+    def get_updates(self, offset, timeout=20):
+        threading.Event().wait(0.05)  # el hilo del bot no gira en vacío
+        return []
 
 
 def question():
@@ -225,6 +236,7 @@ def test_second_tap_does_not_count_twice():
 
 def test_message_format_is_emoji_waiter_table_message(tmp_path):
     from servio_vision.alerts.config import AlertConfig
+    from servio_vision.alerts.messages import mention_waiter
     from servio_vision.alerts.notify import ConsoleNotifier
     from servio_vision.alerts.processor import AlertProcessor
 
@@ -235,9 +247,9 @@ def test_message_format_is_emoji_waiter_table_message(tmp_path):
         Restaurant.load(),
     )
     try:
-        assert p._mention_waiter("🍽️ Mesa 1: terminó.", "T1") == (
-            "🍽️ Juan · Mesa 1: terminó."
-        )
+        assert mention_waiter(
+            "🍽️ Mesa 1: terminó.", "T1", p.restaurant.waiter("T1")
+        ) == ("🍽️ Juan · Mesa 1: terminó.")
     finally:
         p.close()
 
@@ -249,7 +261,7 @@ def test_metrics_command_sends_the_image(tmp_path):
 
     sent = []
 
-    class Photos(FakeTelegram):
+    class Photos(Listening):
         def send_photo(self, path, caption=""):
             sent.append((path, caption))
             return 1
@@ -262,7 +274,7 @@ def test_metrics_command_sends_the_image(tmp_path):
         Database(tmp_path / "servio.db"),
     )
     try:
-        p.feedback.handle(
+        p.bot.handle(
             {"message": {"chat": {"id": -1}, "text": "/metricas@servio_mozos_bot"}}
         )
     finally:
@@ -307,3 +319,10 @@ def test_picking_up_the_plates_says_who_and_how_long(tmp_path):
         text.endswith(" después de que terminó la mesa.") and "ya resuelto" not in text
     )
     assert row["motivo_cierre"] == "retirados"
+
+
+def test_reply_prompt_names_the_table_like_the_alert():
+    from servio_vision.alerts.messages import reply_prompt, table_name
+
+    assert reply_prompt("Donas", "T1").endswith("con Donas (Mesa 1).")
+    assert reply_prompt(None, "A3").endswith(f"({table_name('A3')}).")  # no "Mesa 3"

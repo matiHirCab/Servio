@@ -1,10 +1,14 @@
 """La foto del estado de los avisos, para seguir después de un reinicio (A-5).
 
-`Snapshot` junta lo que `AlertProcessor` guarda en memoria y que un reinicio
-perdería: los tiempos de cada plato (`TableState`), los avisos abiertos con el
-`message_id` de su mensaje de Telegram, y lo que lo conecta con la base (qué fila de
-`platos_servidos` es cada plato). `dumps`/`loads` lo pasan a JSON para la tabla
+`Snapshot` junta lo que el núcleo y sus salidas guardan en memoria y que un
+reinicio perdería: los tiempos de cada plato (`TableState`) y los avisos abiertos
+(`core.py`), los mensajes de cada aviso con su `message_id` (`TelegramOutput`), y lo
+que lo conecta con la base, qué fila de `platos_servidos` es cada plato
+(`DatabaseOutput`). Lo arma `processor.py`. `dumps`/`loads` lo pasan a JSON para la tabla
 `estado_servicio` (`db.py`).
+
+Una foto vieja puede traer `alert_plate` (el plato de cada aviso, antes de A-4): se
+ignora, porque ahora ese plato viaja en el evento del aviso y no queda en memoria.
 
 No se guardan las preguntas de «¿qué pasó?» de `feedback.py`: tras un reinicio los
 botones de un mensaje viejo ya no responden, pero el aviso se edita y se cierra igual.
@@ -29,7 +33,6 @@ class Snapshot:
     messages: dict[int, list[Alert]] = field(default_factory=dict)
     resolved_ids: set[str] = field(default_factory=set)
     close_notes: dict[str, str] = field(default_factory=dict)
-    alert_plate: dict[str, str] = field(default_factory=dict)
     served_rows: dict[str, int] = field(default_factory=dict)
     plate_states: dict[str, str] = field(default_factory=dict)
     on_table: dict[str, set[str]] = field(default_factory=dict)
@@ -49,7 +52,6 @@ def dumps(snapshot: Snapshot) -> str:
             },
             "resolved_ids": sorted(snapshot.resolved_ids),
             "close_notes": snapshot.close_notes,
-            "alert_plate": snapshot.alert_plate,
             "served_rows": snapshot.served_rows,
             "plate_states": snapshot.plate_states,
             "on_table": {k: sorted(v) for k, v in snapshot.on_table.items()},
@@ -73,7 +75,6 @@ def loads(text: str) -> Snapshot:
             },
             resolved_ids=set(data["resolved_ids"]),
             close_notes=dict(data["close_notes"]),
-            alert_plate=dict(data["alert_plate"]),
             served_rows={k: int(v) for k, v in data["served_rows"].items()},
             plate_states=dict(data["plate_states"]),
             on_table={k: set(v) for k, v in data["on_table"].items()},

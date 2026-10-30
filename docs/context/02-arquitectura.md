@@ -26,7 +26,7 @@ No hay backend web ni dashboard. El estado vive en memoria; se guarda un log en 
 | Configuración y armado | `servio_vision/{settings,cli,app}.py`, `vision/main.py`, `vision/config/servio.example.toml` | Un `Settings` por casa (flags > toml > `.env`), y el armado del pipeline a partir de él | Jessica |
 | Pipeline | `servio_vision/{pipeline,capture,privacy,zones,smoothing,recording}.py` | Lee la fuente, difumina caras, recorta cada mesa, clasifica, suaviza, graba si se pidió | Jessica |
 | Clasificador | `servio_vision/classifiers/` y `servio_vision/llm/` (el modelo, un archivo por proveedor) | YOLO encuentra los platos; Claude estima cuánta comida queda | Tomás |
-| Reglas y avisos | `servio_vision/alerts/` | Estado de cada mesa, reglas, envío a Telegram, log | Matías |
+| Reglas y avisos | `servio_vision/alerts/` | Núcleo (`core.py`: estado de cada mesa, reglas, avisos abiertos, sin E/S) y sus suscriptores (`outputs.py`: Telegram, log, base); textos en `messages.py`; bot de Telegram en `bot.py` | Matías |
 
 Dueños por carpeta en [09-convenciones.md](09-convenciones.md).
 
@@ -44,8 +44,8 @@ Dueños por carpeta en [09-convenciones.md](09-convenciones.md).
 3. Si el recorte cambió (o pasó el refresco forzado), llama a `classifier.classify(recorte, table_id, items_anteriores)`, que devuelve un `TableReport` con los platos, su estado y su posición.
 4. El suavizado acepta un cambio de estado solo si se repite (ver [04-vision.md](04-vision.md)).
 5. Con la lectura suavizada se arma una **observación** de la mesa (formato en [03-contratos.md](03-contratos.md)) y se pasa a `alerts`.
-6. `alerts` actualiza el estado de la mesa (desde cuándo cada plato está en cada estado), corre las reglas y manda o edita mensajes de Telegram.
-7. Cada observación y cada aviso se escriben en `vision/out/eventos.jsonl`.
+6. El núcleo de `alerts` actualiza el estado de la mesa (desde cuándo cada plato está en cada estado), corre las reglas y devuelve eventos (aviso abierto, recordado, cerrado).
+7. Los suscriptores de esos eventos mandan o editan los mensajes de Telegram, escriben cada observación y cada aviso en `vision/out/eventos.jsonl` y guardan en la base. Con base, el estado se guarda para seguir tras un reinicio (A-5).
 
 ## Recursos
 

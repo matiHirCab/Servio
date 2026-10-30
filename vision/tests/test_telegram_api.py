@@ -78,9 +78,10 @@ def test_get_updates_without_offset_omits_it():
     assert "offset" not in body(requests[0])
 
 
-def test_get_updates_returns_empty_when_telegram_fails():
+def test_get_updates_returns_none_when_telegram_fails():
+    """None, no []: el bot distingue "falló" de "no hay nada nuevo"."""
     tg, _ = notifier(lambda r: httpx.Response(500, json={"ok": False}))
-    assert tg.get_updates(offset=None, timeout=1) == []
+    assert tg.get_updates(offset=None, timeout=1) is None
 
 
 def test_is_group_compares_as_strings():

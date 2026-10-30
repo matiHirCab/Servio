@@ -138,6 +138,145 @@ def test_state_is_not_saved_on_every_reading(tmp_path):
     assert db.saves == 2  # al cerrar se guarda lo último
 
 
+def test_a_rules_change_is_saved_at_most_once_per_second(tmp_path):
+    """Cambia el estado de un plato en cada lectura (sin avisos): se guarda la
+    primera, después espera `SAVE_RULES_EVERY_S`, y lo que quedó pendiente se
+    guarda en la próxima lectura pasado ese tiempo."""
+    from servio_vision.alerts.processor import SAVE_RULES_EVERY_S
+
+    db = RecordingDb()
+    p = recording(tmp_path, db)
+    now = [100.0]
+    p._clock = lambda: now[0]
+    lleno, comiendo = (
+        ("T1-p9", "lleno", "izquierda"),
+        ("T1-p9", "comiendo", "izquierda"),
+    )
+    p.process(obs(0, lleno))  # plato nuevo: se guarda
+    assert db.saves == 1
+    now[0] += SAVE_RULES_EVERY_S / 4
+    p.process(obs(5, comiendo))  # cambio de reglas, pero hace menos de 1 s
+    now[0] += SAVE_RULES_EVERY_S / 4
+    p.process(obs(10, comiendo))  # nada nuevo
+    assert db.saves == 1
+    now[0] += SAVE_RULES_EVERY_S
+    p.process(obs(15, comiendo))  # nada nuevo, pero quedó un cambio sin guardar
+    assert db.saves == 2
+    now[0] += SAVE_RULES_EVERY_S
+    p.process(obs(20, comiendo))  # nada pendiente: no se guarda
+    assert db.saves == 2
+    p.close()
+
+
+def test_with_the_db_down_a_reading_does_not_force_a_save_every_time(tmp_path):
+    """Un plato que no se pudo insertar no fuerza un guardado en cada lectura (con
+    la base caída cada intento es otra espera de conexión): sin cambios de
+    reglas, se reintenta con el guardado de cada `SAVE_STATE_EVERY_S`."""
+    from servio_vision.alerts.processor import SAVE_STATE_EVERY_S
+
+    class CountingBrokenDb(BrokenDb):
+        def __init__(self) -> None:
+            self.save_attempts = 0
+
+        def save_state(self, state, at) -> None:
+            self.save_attempts += 1
+            raise RuntimeError("base caída")
+
+    db = CountingBrokenDb()
+    p = make(tmp_path, Restaurant.load())
+    p.db = p.db_output.db = db  # type: ignore[assignment,union-attr]
+    now = [100.0]
+    p._clock = lambda: now[0]
+    plate = ("T1-p9", "comiendo", "izquierda")
+    p.process(obs(0, plate))  # plato nuevo: intenta guardar y falla
+    now[0] += 0.1
+    p.process(obs(5, plate))  # deja de ser reciente: cambio de reglas, < 1 s
+    for s in range(10, 30, 5):  # lecturas iguales, cada una 1 s después
+        now[0] += 1
+        p.process(obs(s, plate))
+    # solo el primero: con la base fallando, el cambio de reglas espera a los 5 s
+    assert db.save_attempts == 1
+    now[0] += SAVE_STATE_EVERY_S
+    p.process(obs(40, plate))
+    assert db.save_attempts == 2  # el periódico
+    p.close()
+
+
+def test_when_the_db_comes_back_the_caught_up_readings_are_saved(tmp_path):
+    """Las lecturas que no se pudieron escribir se escriben cuando la base vuelve:
+    el estado se guarda ya, así un corte no las repite al relanzar."""
+    db = RecordingDb()
+    p = recording(tmp_path, db, Restaurant.load())
+    p._clock = lambda: 100.0  # sin guardados periódicos
+    plate = ("T1-p9", "comiendo", "izquierda")
+    p.process(obs(0, plate))
+    p.process(obs(5, plate))  # deja de ser reciente
+    saves = db.saves
+    db.fail_readings = 1
+    p.process(obs(10, plate))  # la escritura de lecturas falla
+    assert db.saves == saves
+    p.process(obs(15, plate))  # vuelve: se pone al día y se guarda
+    assert db.saves == saves + 1
+    p.process(obs(20, plate))  # al día: nada que guardar
+    assert db.saves == saves + 1
+    p.close()
+
+
+def test_a_failed_save_keeps_the_rules_change_pending_until_one_works(tmp_path):
+    """La base falla justo al guardar un cambio de reglas: el cambio sigue
+    pendiente, pero con la base fallando espera al guardado de cada 5 s (no una
+    espera de conexión por segundo); cuando anda, se guarda."""
+    from servio_vision.alerts.processor import SAVE_RULES_EVERY_S, SAVE_STATE_EVERY_S
+
+    class FlakyDb(RecordingDb):
+        def __init__(self) -> None:
+            super().__init__()
+            self.fail_saves = 0
+
+        def save_state(self, state, at) -> None:
+            if self.fail_saves:
+                self.fail_saves -= 1
+                raise RuntimeError("base caída")
+            super().save_state(state, at)
+
+    db = FlakyDb()
+    p = recording(tmp_path, db)
+    now = [100.0]
+    p._clock = lambda: now[0]
+    plate = ("T1-p9", "lleno", "izquierda")
+    p.process(obs(0, plate))
+    assert db.saves == 1
+    db.fail_saves = 1
+    now[0] += SAVE_RULES_EVERY_S
+    p.process(obs(5, ("T1-p9", "comiendo", "izquierda")))  # el guardado falla
+    assert db.saves == 1
+    now[0] += SAVE_RULES_EVERY_S
+    p.process(obs(10, ("T1-p9", "por_terminar", "izquierda")))  # otro: espera
+    assert db.saves == 1
+    now[0] += SAVE_STATE_EVERY_S
+    p.process(obs(15, ("T1-p9", "por_terminar", "izquierda")))  # a los 5 s
+    assert db.saves == 2
+    now[0] += SAVE_RULES_EVERY_S
+    p.process(obs(20, ("T1-p9", "comiendo", "izquierda")))  # anda: vuelve a 1 s
+    assert db.saves == 3
+    p.close()
+
+
+def test_a_waiters_answer_reaches_the_db_even_if_the_log_fails(tmp_path):
+    db = RecordingDb()
+    answers = []
+    db.feedback = answers.append  # type: ignore[method-assign]
+    p = recording(tmp_path, db)
+
+    def broken(event):
+        raise OSError("disco lleno")
+
+    p.log.write = broken  # type: ignore[method-assign]
+    p._on_feedback({"event": "alert_feedback", "answer": "No le gustó"})
+    assert answers == [{"event": "alert_feedback", "answer": "No le gustó"}]
+    p.close()
+
+
 def test_state_is_saved_right_away_when_an_alert_opens(tmp_path):
     db = RecordingDb()
     p = recording(tmp_path, db)
@@ -193,8 +332,10 @@ def test_a_down_database_does_not_flood_the_log(tmp_path, caplog):
     try:
         with caplog.at_level(logging.ERROR):
             for _ in range(20):  # veinte lecturas con la base caída
-                p._db_write("el estado", boom)
-            p._db_write("el aviso abierto", boom)  # otra escritura: se loguea aparte
+                p.db_output.write("el estado", boom)
+            p.db_output.write(
+                "el aviso abierto", boom
+            )  # otra escritura: se loguea aparte
         messages = [r.getMessage() for r in caplog.records]
         assert len([m for m in messages if "el estado" in m]) == 1
         assert len([m for m in messages if "el aviso abierto" in m]) == 1
@@ -204,14 +345,14 @@ def test_a_down_database_does_not_flood_the_log(tmp_path, caplog):
             raise ValueError("no existe la columna")
 
         with caplog.at_level(logging.ERROR):
-            p._db_write("el estado", schema_error)
+            p.db_output.write("el estado", schema_error)
         assert "No se pudo guardar el estado" in caplog.records[-1].getMessage()
         assert caplog.records[-1].exc_info[0] is ValueError
 
         # pasado el minuto vuelve a loguear y cuenta los que se callaron
-        p._db_logged[("el estado", "RuntimeError")] -= 61
+        p.db_output._logged[("el estado", "RuntimeError")] -= 61
         with caplog.at_level(logging.ERROR):
-            p._db_write("el estado", boom)
+            p.db_output.write("el estado", boom)
         assert "y 19 fallos más" in caplog.records[-1].getMessage()
     finally:
         p.close()

@@ -17,10 +17,10 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from servio_vision.alerts.messages import resolved_text
 from servio_vision.alerts.notify import (
     ConsoleNotifier,
     TelegramNotifier,
-    resolved_text,
 )
 
 TEST_MESSAGE = "🍽️ Juan · Mesa 1: terminó. (prueba de Servio)"

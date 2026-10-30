@@ -1,81 +1,68 @@
-"""Une estado, motor y Telegram (MAT-5). Ver docs/context/05-reglas-alertas.md.
+"""Arma el núcleo y sus salidas (A-4). Ver docs/context/05-reglas-alertas.md.
 
-`AlertProcessor.process(obs)` actualiza el estado de la mesa (`state.py`), corre el
-motor (`engine.py`) y manda, recuerda o edita con el notifier (`notify.py`). Cada
-observación y cada aviso quedan en el log `out/eventos.jsonl` (03-contratos.md, «Log»),
-después de una línea `run_started` con los umbrales de la corrida.
+`AlertProcessor.process(obs)` pasa la observación al núcleo (`core.py`: estado,
+reglas, avisos abiertos, sin E/S) y reparte cada evento que devuelve a los
+suscriptores (`outputs.py`), en este orden: el canal (`TelegramOutput`, que le pone
+el `message_id` a los avisos), el log `out/eventos.jsonl` y la base. Una salida que
+falla no frena a las demás. Las respuestas
+de los mozos y los comandos los escucha el bot (`bot.py`).
 
-Agrupado por mesa: los avisos que se abren en la misma evaluación van en un solo
-mensaje, y lo mismo los recordatorios. Al cerrar se edita el mensaje en el que se abrió
-el aviso: si todos sus avisos están cerrados, con "✅ ya resuelto" al final; si no, solo
-las líneas cerradas llevan "✅".
+El log empieza con una línea `run_started` con los umbrales de la corrida.
+
+Estado que sobrevive a un reinicio (A-5): con base, lo que el núcleo y las salidas
+tienen en memoria se guarda en `estado_servicio` (`persist.py`) y, con `resume`, se
+recupera al arrancar si es reciente.
 """
 
 import dataclasses
-import json
+import functools
 import logging
-import threading
 import time
-from collections.abc import Callable, Sequence
-from datetime import UTC, datetime, timedelta
+from collections.abc import Callable
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from servio_vision import metrics
 from servio_vision.alerts import persist
+from servio_vision.alerts.bot import Bot, BotChannel, send_metrics
 from servio_vision.alerts.config import AlertConfig
-from servio_vision.alerts.engine import evaluate, table_name
-from servio_vision.alerts.feedback import FeedbackDesk, Question
+from servio_vision.alerts.core import AlertCore, AlertsOpened, TableUpdated
+from servio_vision.alerts.feedback import FeedbackDesk
 from servio_vision.alerts.models import Alert, TableObservation
-from servio_vision.alerts.notify import Notifier, resolved_text
-from servio_vision.alerts.state import (
-    TableState,
-    empty_table,
-    table_status,
-    update_table,
+from servio_vision.alerts.notify import Notifier
+from servio_vision.alerts.outputs import (
+    DatabaseOutput,
+    EventLog,
+    EventLogOutput,
+    ObservationReceived,
+    Subscriber,
+    TelegramOutput,
 )
+from servio_vision.alerts.state import TableState
 from servio_vision.db import Database
 from servio_vision.restaurant import Restaurant
+from servio_vision.timestamps import iso
 
 logger = logging.getLogger(__name__)
 
-RESOLVED_LINE_MARK = " ✅"
 # Un estado guardado hace más que esto ya no describe la sala: se arranca de cero.
 RESUME_MAX_AGE_S = 600.0
 # El estado se guarda cada tanto y no en cada lectura (una vuelta por mesa, con la
-# base remota son idas y vueltas del loop); un aviso que se abre o se cierra lo
-# guarda al instante y `close()` guarda lo último.
+# base remota son idas y vueltas del loop). Se guarda al instante si se abre o cierra
+# un aviso o si aparece un plato. Si cambia algo que usan las reglas (el estado de un
+# plato, si hay gente), a lo sumo una vez por `SAVE_RULES_EVERY_S`, en la primera
+# lectura (de cualquier mesa) que llega pasado ese tiempo: un corte brusco pierde como
+# mucho los cambios que esperaban esa lectura, y una sala llena no escribe en cada
+# lectura. Si no, cada `SAVE_STATE_EVERY_S`. `close()` guarda lo último.
 SAVE_STATE_EVERY_S = 5.0
-# Una base caída falla en cada lectura: el traceback se loguea una vez por minuto.
-DB_LOG_EVERY_S = 60.0
-# Un plato que dejó de estar en su mesa conserva su fila de `platos_servidos`
-# (`_served_rows`) tantas lecturas más, por si el mismo id vuelve (lo taparon): si no,
-# se lo insertaría de nuevo. Pasado esto el id ya no vuelve (`IdCounter` solo recuerda
-# unas pocas lecturas y los ids solo suben) y se olvida: la foto que se guarda en cada
-# guardado no puede crecer con cada plato que se sirvió en semanas.
-PRUNE_SERVED_AFTER_READINGS = 30
-
-
-class EventLog:
-    """Una línea JSON por evento, agregada al final del archivo (no se pisa)."""
-
-    def __init__(self, path: Path) -> None:
-        self.path = path
-        path.parent.mkdir(parents=True, exist_ok=True)
-        # Abierto una sola vez; buffering=1 baja cada línea al disco al escribirla.
-        self._file = path.open("a", encoding="utf-8", buffering=1)
-        self._lock = threading.Lock()  # también escriben las respuestas de los mozos
-
-    def write(self, event: dict[str, Any]) -> None:
-        with self._lock:
-            self._file.write(json.dumps(event, ensure_ascii=False) + "\n")
-
-    def close(self) -> None:
-        self._file.close()
+SAVE_RULES_EVERY_S = 1.0
+# Al cerrar, cuánto se espera al bot si está manejando algo (un `/metricas` arma la
+# imagen y la manda, con hasta 8 s de envío). Si solo espera al canal, no se espera.
+BOT_STOP_WAIT_S = 15.0
 
 
 class AlertProcessor:
-    """Estado en memoria de todas las mesas y de los avisos abiertos."""
+    """El núcleo de los avisos con sus salidas: canal, log, base y bot."""
 
     def __init__(
         self,
@@ -92,51 +79,147 @@ class AlertProcessor:
         o un fixture empiezan siempre de cero."""
         self.config = config
         self.notifier = notifier
-        self.log = EventLog(log_path)
-        # Con los datos del restaurante, los avisos nombran el plato y el mozo, y el de
-        # plato lleno pregunta qué pasó (botones en Telegram, ver feedback.py).
         self.restaurant = restaurant
-        # base relacional (db.py): platos servidos, avisos y respuestas
-        self.db = db
-        self._served_rows: dict[str, int] = {}  # track_id → platos_servidos.id
-        self._plate_states: dict[str, str] = {}  # track_id → último estado guardado
-        self._on_table: dict[str, set[str]] = {}  # mesa → track_ids en la base
-        self._alert_plate: dict[str, str] = {}  # aviso → track_id del plato
-        # track_id → lecturas seguidas de su mesa sin él (no se guarda: al reanudar
-        # vuelve a contar, y solo se olvida más tarde)
-        self._absent: dict[str, int] = {}
+        self.db = db  # base relacional (db.py): platos servidos, avisos y respuestas
+        self.core = AlertCore(config, restaurant)
+        self.log = EventLog(log_path)
+        self.log_output = EventLogOutput(self.log)
+        self.db_output = DatabaseOutput(db, restaurant) if db is not None else None
         if db is not None and restaurant is not None:
             db.load_restaurant(restaurant)
+        # Con los datos del restaurante, el aviso de plato lleno pregunta qué pasó
+        # (botones en Telegram, ver feedback.py) y el bot escucha las respuestas.
         self.feedback: FeedbackDesk | None = None
+        self.bot: Bot | None = None
         if restaurant is not None:
-            commands = {"metricas": self._send_metrics} if db is not None else {}
-            self.feedback = FeedbackDesk(notifier, self._on_feedback, commands)
-            self.feedback.start()
+            self.feedback = FeedbackDesk(notifier, self._on_feedback)
+            # la consola no se escucha: sin canal que escuchar no hay bot
+            if isinstance(notifier, BotChannel):
+                commands: dict[str, Callable[[], None]] = {}
+                if db is not None:
+                    commands["metricas"] = functools.partial(
+                        send_metrics, db, restaurant, notifier
+                    )
+                self.bot = Bot(notifier, self.feedback, commands)
+        self.telegram = TelegramOutput(notifier, self.feedback)
         # Marca dónde empieza la corrida (el log se agrega) y con qué umbrales: replay.py
         # corta el archivo acá y reproduce con la misma config.
         self.log.write(
             {
                 "event": "run_started",
-                "started_at": _iso(datetime.now(UTC)),
+                "started_at": iso(datetime.now(UTC)),
                 "config": dataclasses.asdict(config),
             }
         )
-        self.tables: dict[str, TableState] = {}
-        self.open_alerts: dict[str, Alert] = {}
-        # message_id → avisos de ese mensaje (en orden) y cuáles ya se cerraron.
-        self._messages: dict[int, list[Alert]] = {}
-        self._resolved_ids: set[str] = set()
-        # aviso de mesa terminada cerrado porque retiraron los platos → la línea
-        # que reemplaza al "ya resuelto" (quién y cuánto tardó)
-        self._close_notes: dict[str, str] = {}
         self._state_dirty = False  # hay estado sin guardar
-        self._saved_at = float("-inf")  # time.monotonic() del último intento
-        # (escritura, tipo de error) → cuándo se logueó, y cuántos fallos se callaron
-        self._db_logged: dict[tuple[str, str], float] = {}
-        self._db_muted: dict[tuple[str, str], int] = {}
-        self._save_now = False  # pasó algo que no puede esperar al próximo guardado
+        self._rules_dirty = False  # cambió algo de las reglas desde el último guardado
+        self._save_failed = False  # el último guardado falló
+        self._clock = time.monotonic  # los tests lo adelantan
+        self._saved_at = float("-inf")  # `_clock()` del último intento
         if resume and db is not None:
             self._resume(db, resume_max_age_s)
+        # al final: si algo de arriba falla, no queda un hilo huérfano leyendo Telegram
+        if self.bot is not None:
+            self.bot.start()
+
+    @property
+    def tables(self) -> dict[str, TableState]:
+        return self.core.tables
+
+    @property
+    def open_alerts(self) -> dict[str, Alert]:
+        return self.core.open_alerts
+
+    def process(self, obs: TableObservation) -> list[dict[str, Any]]:
+        """Procesa una observación de mesa; devuelve los eventos que escribió al log.
+
+        La observación va al log antes de aplicarla (queda aunque el núcleo la
+        rechace) y cada aviso apenas se manda o edita.
+        """
+        written = self._dispatch(ObservationReceived(obs))
+        events = self.core.apply(obs)  # ValueError si el ts va hacia atrás
+        for event in events:
+            written += self._dispatch(event)
+        if self.db_output is not None:
+            self._state_dirty = True
+            update = events[0]
+            assert isinstance(update, TableUpdated)
+            self._rules_dirty = self._rules_dirty or update.rules_changed
+            since = self._clock() - self._saved_at
+            if (
+                len(events) > 1  # se abrió, recordó o cerró un aviso
+                or self.db_output.save_now
+                # con la base fallando, un cambio de reglas espera al de cada 5 s:
+                # no una espera de conexión por segundo hasta que vuelva
+                or (
+                    self._rules_dirty
+                    and not self._save_failed
+                    and since >= SAVE_RULES_EVERY_S
+                )
+                or since >= SAVE_STATE_EVERY_S
+            ):
+                self._flush_state()
+        return written
+
+    def _dispatch(self, event: Any) -> list[dict[str, Any]]:
+        """Un evento a las salidas, en orden: el canal, que le pone el `message_id`
+        a los avisos (el núcleo, el log y la base lo tienen que ver ya con él), el log
+        y la base. Devuelve las líneas que llegaron al log.
+
+        Si una salida falla se loguea y siguen las otras: el núcleo ya cambió su
+        estado y un evento que no llega a nadie no se repite (un aviso cerrado
+        quedaría sin editar). Un aviso que el canal no pudo mandar (lanzó) queda
+        abierto sin mensaje, igual que con Telegram caído: no se reintenta, así un
+        error que llega después de mandar no repite el aviso en cada lectura."""
+        event = self._deliver(self.telegram, event)
+        if isinstance(event, AlertsOpened):
+            self.core.attach(event.alerts)  # ya con su message_id, si salió
+        written: list[dict[str, Any]] = []
+        try:
+            written = self.log_output.write(event)
+        except Exception:
+            logger.exception("No se pudo escribir %s en el log", type(event).__name__)
+        if self.db_output is not None:
+            self._deliver(self.db_output, event)
+        return written
+
+    @staticmethod
+    def _deliver(output: Subscriber, event: Any) -> Any:
+        """El evento como lo deja la salida (si falla, como llegó)."""
+        try:
+            return output.handle(event)
+        except Exception:
+            logger.exception(
+                "%s falló con %s", type(output).__name__, type(event).__name__
+            )
+            return event
+
+    def close(self) -> None:
+        if self.db_output is not None and self._state_dirty:
+            self._flush_state()
+        if self.bot is not None:
+            # antes de cerrar lo que usa: una respuesta o un /metricas en curso
+            self.bot.stop(wait_s=BOT_STOP_WAIT_S)
+        # el de Telegram tiene un hilo con la cola de lo que no llegó (notify.py)
+        close_notifier = getattr(self.notifier, "close", None)
+        if close_notifier is not None:
+            close_notifier()
+        self.log.close()
+        if self.db is not None:
+            self.db.close()
+
+    # --- respuestas y comandos (bot.py) ---
+
+    def _on_feedback(self, event: dict[str, Any]) -> None:
+        """Respuesta de un mozo: al log y a la base (si una falla, la otra igual)."""
+        try:
+            self.log.write(event)
+        except Exception:
+            logger.exception("No se pudo escribir la respuesta en el log")
+        if self.db_output is not None:
+            self.db_output.feedback(event)
+
+    # --- estado que sobrevive a un reinicio (A-5) ---
 
     def _resume(self, db: Database, max_age_s: float) -> None:
         """Sigue con las mesas y los avisos abiertos de la corrida anterior: los
@@ -156,430 +239,44 @@ class AlertProcessor:
             # ilegible o la base caída: arrancar de cero es lo que pasaba antes
             logger.exception("No se pudo recuperar el estado guardado: arranco de cero")
             return
-        self.tables = snapshot.tables
-        self.open_alerts = snapshot.open_alerts
-        self._messages = snapshot.messages
-        self._resolved_ids = snapshot.resolved_ids
-        self._close_notes = snapshot.close_notes
-        self._alert_plate = snapshot.alert_plate
-        self._served_rows = snapshot.served_rows
-        self._plate_states = snapshot.plate_states
-        self._on_table = snapshot.on_table
+        self.core.tables = snapshot.tables
+        self.core.open_alerts = snapshot.open_alerts
+        self.telegram.by_message = snapshot.messages
+        self.telegram.resolved_ids = snapshot.resolved_ids
+        self.telegram.close_notes = snapshot.close_notes
+        if self.db_output is not None:
+            self.db_output.served_rows = snapshot.served_rows
+            self.db_output.plate_states = snapshot.plate_states
+            self.db_output.on_table = snapshot.on_table
         logger.info(
             "Sigo donde quedé hace %d s: %d mesas, %d avisos abiertos",
             age,
-            len(self.tables),
-            len(self.open_alerts),
+            len(self.core.tables),
+            len(self.core.open_alerts),
         )
 
     def _save_state(self) -> None:
-        assert self.db is not None
+        assert self.db is not None and self.db_output is not None
         snapshot = persist.Snapshot(
-            self.tables,
-            self.open_alerts,
-            self._messages,
-            self._resolved_ids,
-            self._close_notes,
-            self._alert_plate,
-            self._served_rows,
-            self._plate_states,
-            self._on_table,
+            tables=self.core.tables,
+            open_alerts=self.core.open_alerts,
+            messages=self.telegram.by_message,
+            resolved_ids=self.telegram.resolved_ids,
+            close_notes=self.telegram.close_notes,
+            served_rows=self.db_output.served_rows,
+            plate_states=self.db_output.plate_states,
+            on_table=self.db_output.on_table,
         )
         self.db.save_state(persist.dumps(snapshot), datetime.now(UTC))
         self._state_dirty = False
 
     def _flush_state(self) -> None:
-        self._saved_at = time.monotonic()  # también si falla: no insistir cada lectura
-        self._save_now = False
-        self._db_write("el estado", self._save_state)
-
-    def _record_plates(
-        self, obs: TableObservation, table: TableState, ts: datetime
-    ) -> None:
-        """Cada plato nuevo de la mesa, a la base (con el plato del pedido que es),
-        y la lectura de cada plato: estado, cuánto le queda y si se fue de la
-        mesa (métricas de M-1). Un plato que heredó los tiempos de otro (cambió
-        de id) sigue siendo el mismo plato servido."""
-        if self.db is None or self.restaurant is None:
-            return
-        active = table.active_plates()
-        for plate in active:
-            if plate.track_id in self._served_rows:
-                continue
-            # el id de la fila tiene que llegar al estado guardado ya: si no, tras
-            # un reinicio el plato se insertaría de nuevo
-            self._save_now = True
-            dish = self.restaurant.dish(obs.table_id, plate.track_id)
-            inherited_from = plate.inherited_from
-            same = self._served_rows.get(inherited_from or "")
-            if same is not None and inherited_from is not None:
-                self._served_rows[plate.track_id] = same
-                last = self._plate_states.pop(inherited_from, None)
-                if last is not None:
-                    self._plate_states[plate.track_id] = last
-                continue
-            self._served_rows[plate.track_id] = self.db.served(
-                obs.table_id, dish.dish_id if dish else None, plate.track_id, ts
-            )
-        readings = []
-        states: dict[str, str] = {}
-        for item in obs.items:
-            served_id = self._served_rows.get(item.track_id)
-            if served_id is None:
-                continue
-            changed = self._plate_states.get(item.track_id) != item.state
-            states[item.track_id] = item.state
-            readings.append((served_id, item.state, item.fill_ratio, changed))
-        # los que estaban y ya no están (salvo que otro id haya heredado el plato)
-        inherited = {p.inherited_from for p in table.plates.values()}
-        before = self._on_table.get(obs.table_id, set())
-        gone = before - set(table.plates) - inherited
-        self.db.plate_readings(
-            readings,
-            [self._served_rows[t] for t in sorted(gone) if t in self._served_rows],
-            ts,
-        )
-        # Recién con la base al día: si la escritura falló, la próxima lectura
-        # repite estos cambios de estado y estos platos retirados en vez de perderlos.
-        self._plate_states.update(states)
-        for track_id in gone:
-            self._plate_states.pop(track_id, None)
-        self._on_table[obs.table_id] = {p.track_id for p in active}
-
-    def _prune_served(self, table_id: str, table: TableState) -> None:
-        """Olvida las filas de los platos que llevan `PRUNE_SERVED_AFTER_READINGS`
-        lecturas seguidas fuera de su mesa y cuyo retiro ya llegó a la base.
-
-        Es memoria y anda aunque la base esté caída, pero una fila no se olvida
-        mientras su plato siga en `_on_table`: eso quiere decir que el retiro todavía
-        no se pudo registrar (`_on_table` se actualiza recién cuando la base escribió),
-        y sin la fila se perdería."""
-        awaiting_retirement = self._on_table.get(table_id, set())
-        for track_id in [t for t in self._served_rows if _table_of(t) == table_id]:
-            if track_id in table.plates:
-                self._absent.pop(track_id, None)
-                continue
-            absent = self._absent[track_id] = self._absent.get(track_id, 0) + 1
-            if (
-                absent >= PRUNE_SERVED_AFTER_READINGS
-                and track_id not in awaiting_retirement
-            ):
-                del self._served_rows[track_id]
-                del self._absent[track_id]
-
-    def _record_opened(self, alert: Alert, ts: datetime) -> None:
-        # el plato del aviso se usa una sola vez, ahora: después nadie lo lee
-        track_id = self._alert_plate.pop(alert.id, None)
-        if self.db is None:
-            return
-        served_id = self._served_rows.get(track_id) if track_id else None
-        self._db_write(
-            "el aviso abierto",
-            self.db.alert_opened,
-            alert.id,
-            alert.type,
-            alert.table_id,
-            served_id,
-            ts,
-        )
-
-    def _db_write(self, what: str, write: Callable[..., Any], *args: Any) -> None:
-        """Una escritura a la base. La base es auxiliar (métricas e historial): si
-        falla se loguea y se sigue, así el aviso al mozo sale igual. Con la base
-        caída falla en cada lectura: el traceback sale una vez por `DB_LOG_EVERY_S`
-        y los demás se cuentan."""
-        try:
-            write(*args)
-        except Exception as error:
-            # por escritura y por tipo de error: una causa nueva no se calla
-            key = (what, type(error).__name__)
-            now = time.monotonic()
-            last = self._db_logged.get(key)
-            if last is not None and now - last < DB_LOG_EVERY_S:
-                self._db_muted[key] = self._db_muted.get(key, 0) + 1
-                return
-            self._db_logged[key] = now
-            muted = self._db_muted.pop(key, 0)
-            more = f" (y {muted} fallos más desde el último aviso)" if muted else ""
-            logger.exception("No se pudo guardar %s en la base%s", what, more)
-
-    def _send_metrics(self) -> None:
-        """`/metricas` en el grupo: la imagen de métricas con un resumen corto.
-        Junta el historial simulado (se importa una vez) con lo de hoy."""
-        if self.db is None or self.restaurant is None:
-            return
-        self.db.import_history(metrics.HISTORY, self.restaurant)
-        m = metrics.compute(self.db, operation=False)  # la imagen no las usa
-        if not m["dishes"]:
-            self.notifier.send("📊 Todavía no hay datos para las métricas.")
-            return
-        image = self.db.path.parent / "metricas.png"
-        metrics.render(m, image)
-        self.notifier.send_photo(image, metrics.summary(m))
-        problems = metrics.problems_text(m)  # aparte: en el pie de foto no entra
-        if problems:
-            self.notifier.send(problems)
-
-    def _on_feedback(self, event: dict[str, Any]) -> None:
-        """Respuesta de un mozo: al log y a la base."""
-        self.log.write(event)
-        if self.db is not None:
-            try:
-                self.db.feedback(event)
-            except Exception:
-                logger.exception("No se pudo guardar la respuesta en la base")
-
-    def process(self, obs: TableObservation) -> list[dict[str, Any]]:
-        """Procesa una observación de mesa; devuelve los eventos que escribió al log.
-
-        Cada evento se escribe apenas pasa: la observación antes de aplicarla (queda
-        aunque `update_table` la rechace) y cada aviso apenas se manda o edita.
-        """
-        events: list[dict[str, Any]] = []
-
-        def log(event: dict[str, Any]) -> None:
-            self.log.write(event)
-            events.append(event)
-
-        log({"event": "observation", **obs.model_dump(mode="json")})
-        prev = self.tables.get(obs.table_id) or empty_table(obs.table_id)
-        table = update_table(prev, obs)  # ValueError si el ts va hacia atrás
-        self.tables[obs.table_id] = table
-
-        if self.restaurant is not None:
-            self.restaurant.see_plates(
-                obs.table_id, [p.track_id for p in table.active_plates()]
-            )
-        self._db_write("las lecturas", self._record_plates, obs, table, obs.ts)
-        self._prune_served(obs.table_id, table)
-
-        result = evaluate(table, obs.ts, self.config, self.open_alerts.values())
-        opened_all = [self._with_context(a, table, obs.ts) for a in result.opened]
-        grouped = [a for a, question in opened_all if question is None]
-
-        if grouped:
-            text = "\n".join(a.message for a in grouped)
-            message_id = self.notifier.send(text)
-            opened = [
-                a.model_copy(update={"telegram_message_id": message_id})
-                for a in grouped
-            ]
-            if message_id is not None:
-                self._messages[message_id] = opened
-            for alert in opened:
-                self.open_alerts[alert.id] = alert
-                log(_alert_event("alert_opened", obs.ts, alert, text))
-                self._record_opened(alert, obs.ts)
-
-        for alert, question in opened_all:
-            if question is None:
-                continue
-            # plato lleno: mensaje propio, con los botones de "¿qué pasó?"
-            assert (
-                self.feedback is not None
-            )  # `_with_context` solo arma la pregunta con él
-            message_id = self.feedback.ask(question)
-            alert = alert.model_copy(update={"telegram_message_id": message_id})
-            if message_id is not None:
-                self._messages[message_id] = [alert]
-            self.open_alerts[alert.id] = alert
-            log(_alert_event("alert_opened", obs.ts, alert, alert.message))
-            self._record_opened(alert, obs.ts)
-
-        if result.reminded:
-            text = "\n".join(
-                self._mention_waiter(r.message, obs.table_id) for r in result.reminded
-            )
-            self.notifier.send(text)  # si falla, ya se logueó; el aviso sigue igual
-            for reminder in result.reminded:
-                self.open_alerts[reminder.alert.id] = reminder.alert
-                log(_alert_event("alert_reminder", obs.ts, reminder.alert, text))
-
-        # Primero se marcan todos los cerrados, así un mensaje se edita una sola vez.
-        message_ids: list[int] = []
-        reasons = {a.id: self._close_reason(a, table, obs.ts) for a in result.resolved}
-        for alert in result.resolved:
-            del self.open_alerts[alert.id]
-            message_id = alert.telegram_message_id
-            if message_id is not None:
-                self._resolved_ids.add(alert.id)
-                if message_id not in message_ids:
-                    message_ids.append(message_id)
-        edited = {message_id: self._edit(message_id) for message_id in message_ids}
-        for alert in result.resolved:
-            # Sin mensaje (Telegram falló al abrir) no hubo nada que editar: text None.
-            edited_text = (
-                edited.get(alert.telegram_message_id)
-                if alert.telegram_message_id is not None
-                else None
-            )
-            event = _alert_event("alert_resolved", obs.ts, alert, edited_text)
-            if reasons[alert.id]:
-                event["close_reason"] = reasons[alert.id]
-            log(event)
-            if self.db is not None:
-                self._db_write(
-                    "el aviso cerrado",
-                    self.db.alert_resolved,
-                    alert.id,
-                    obs.ts,
-                    reasons[alert.id],
-                )
-
-        if self.db is not None:
-            self._state_dirty = True
-            alerts_changed = any(e["event"] != "observation" for e in events)
-            due = time.monotonic() - self._saved_at >= SAVE_STATE_EVERY_S
-            if alerts_changed or self._save_now or due:
-                self._flush_state()
-        return events
-
-    def close(self) -> None:
-        if self.db is not None and self._state_dirty:
-            self._flush_state()
-        if self.feedback is not None:
-            self.feedback.stop()
-        # el de Telegram tiene un hilo con la cola de lo que no llegó (notify.py)
-        close_notifier = getattr(self.notifier, "close", None)
-        if close_notifier is not None:
-            close_notifier()
-        self.log.close()
-        if self.db is not None:
-            self.db.close()
-
-    def _with_context(
-        self, alert: Alert, table: TableState, now: datetime
-    ) -> tuple[Alert, Question | None]:
-        """Aviso con el plato y el mozo (si hay datos del restaurante). El de plato
-        lleno vuelve con la pregunta para el mozo."""
-        if self.restaurant is None:
-            return alert, None
-        waiter = self.restaurant.waiter(alert.table_id)
-        if alert.type != "plato_lleno_mucho" or self.feedback is None:
-            message = self._mention_waiter(alert.message, alert.table_id)
-            return alert.model_copy(update={"message": message}), None
-        full = sorted(
-            (p for p in table.active_plates() if p.state == "lleno"),
-            key=lambda p: p.first_seen,
-        )
-        plate = full[0] if full else None
-        if plate is not None:
-            self._alert_plate[alert.id] = plate.track_id
-        dish = self.restaurant.dish(alert.table_id, plate.track_id) if plate else None
-        minutes = (
-            max(1, round((now - plate.first_seen).total_seconds() / 60)) if plate else 1
-        )
-        who = f"{waiter} · " if waiter else ""
-        what = dish.name if dish else "un plato"
-        message = (
-            f"❓ {who}{table_name(alert.table_id)}: {what} sigue lleno hace "
-            f"{minutes} min. ¿Está todo bien? Pasá a preguntar y contanos qué pasó."
-        )
-        alert = alert.model_copy(update={"message": message})
-        question = Question(
-            alert_id=alert.id,
-            table_id=alert.table_id,
-            alert_type=alert.type,
-            dish=dish.name if dish else None,
-            waiter=waiter,
-            text=message,
-            answers=dish.answers if dish else ("Está todo bien", "No le gustó"),
-            asked_at=datetime.now(UTC),
-        )
-        return alert, question
-
-    def _mention_waiter(self, message: str, table_id: str) -> str:
-        """`🍽️ Mesa 1: terminó.` → `🍽️ Juan · Mesa 1: terminó.`"""
-        waiter = self.restaurant.waiter(table_id) if self.restaurant else None
-        if not waiter:
-            return message
-        name = table_name(table_id)
-        return message.replace(name, f"{waiter} · {name}", 1)
-
-    def _close_reason(
-        self, alert: Alert, table: TableState, now: datetime
-    ) -> str | None:
-        """Por qué se cerró un aviso de mesa terminada: "retirados" (la mesa quedó
-        libre) o "servido" (llegó algo nuevo). Con retirados, deja la línea que va en
-        el mensaje: quién retiró y cuánto después de que terminó la mesa."""
-        if alert.type != "mesa_terminada":
-            return None
-        if table_status(p.state for p in table.active_plates()) != "libre":
-            return "servido"
-        waiter = self.restaurant.waiter(alert.table_id) if self.restaurant else None
-        # solo si hay un mensaje de Telegram que editar: `_edit` es quien la usa, y sin
-        # mensaje (Telegram falló al abrir) nadie la sacaría
-        if alert.telegram_message_id is not None:
-            who = f"{waiter} retiró" if waiter else "Retiraron"
-            took = _duration(now - alert.created_at)
-            self._close_notes[alert.id] = (
-                f"✅ {who} los platos {took} después de que terminó la mesa."
-            )
-        return "retirados"
-
-    def _edit(self, message_id: int) -> str:
-        """Reescribe un mensaje con sus avisos cerrados marcados; devuelve el texto."""
-        alerts = self._messages[message_id]
-        done = all(a.id in self._resolved_ids for a in alerts)
-        resolved_ids = set(self._resolved_ids)
-        notes = [
-            self._close_notes.pop(a.id) for a in alerts if a.id in self._close_notes
-        ]
-
-        def build(answers: str) -> str:
-            # las respuestas del mozo quedan en el mensaje (antes del "ya resuelto")
-            text = "\n".join(a.message for a in alerts) + answers
-            if done and notes:
-                # mesa terminada y platos retirados: quién y cuánto tardó
-                return text + "\n\n" + "\n".join(notes)
-            if done:
-                return resolved_text(text)
-            return _partial_text(alerts, resolved_ids) + answers
-
-        if done:
-            del self._messages[message_id]
-            self._resolved_ids -= {a.id for a in alerts}
-        if self.feedback is not None:
-            # con el lock de las respuestas: una que llega a la vez no lo pisa
-            return self.feedback.rewrite(message_id, build, resolved=done)
-        text = build("")
-        self.notifier.edit(message_id, text)  # si falla, ya se logueó
-        return text
-
-
-def _table_of(track_id: str) -> str:
-    """`T1-p3` → `T1`; `mesa-1-p3` → `mesa-1`. El id de un plato es `{mesa}-{id}` y el
-    del plato no lleva guion (`p3`); cortar por el último guion no confunde una mesa
-    con otra que empieza igual (`mesa` y `mesa-1`), a diferencia de un prefijo."""
-    return track_id.rsplit("-", 1)[0]
-
-
-def _duration(elapsed: timedelta) -> str:
-    """`timedelta` → "1 min 20 s" / "45 s"."""
-    seconds = max(0, round(elapsed.total_seconds()))
-    minutes, seconds = divmod(seconds, 60)
-    if not minutes:
-        return f"{seconds} s"
-    return f"{minutes} min {seconds} s" if seconds else f"{minutes} min"
-
-
-def _partial_text(alerts: Sequence[Alert], resolved_ids: set[str]) -> str:
-    return "\n".join(
-        a.message + (RESOLVED_LINE_MARK if a.id in resolved_ids else "") for a in alerts
-    )
-
-
-def _alert_event(
-    name: str, ts: datetime, alert: Alert, text: str | None
-) -> dict[str, Any]:
-    return {
-        "event": name,
-        "ts": _iso(ts),
-        **alert.model_dump(mode="json"),
-        "text": text,
-    }
-
-
-def _iso(ts: datetime) -> str:
-    # Mismo formato que pydantic usa para los demás ts del log (UTC con "Z").
-    return ts.isoformat().replace("+00:00", "Z")
+        assert self.db_output is not None  # hay base
+        self._saved_at = self._clock()  # también si falla: no insistir cada lectura
+        self.db_output.save_now = False
+        # Si falla, el cambio de reglas sigue pendiente pero espera al guardado de
+        # cada 5 s (`process`) hasta que uno ande.
+        saved = self.db_output.write("el estado", self._save_state)
+        if saved:
+            self._rules_dirty = False
+        self._save_failed = not saved

@@ -8,8 +8,9 @@ texto que respondan a ese pedido. Cada respuesta:
   que alimenta las métricas de platos con problemas y de mozos;
 - se agrega al mensaje del aviso ("📝 Juan: No le gustaron") y se sacan los botones.
 
-Telegram se escucha con long polling (`getUpdates`) en un hilo aparte: no hace falta
-servidor ni webhook. Con `--no-telegram` (ConsoleNotifier) no hay nada que escuchar.
+Quien escucha el canal (long polling, comandos como `/metricas`) es el bot
+(`bot.py`): le pasa a `handle` los toques de botón y los mensajes que no son comandos.
+Los textos salen de `messages.py`.
 """
 
 import logging
@@ -21,7 +22,9 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
 
+from servio_vision.alerts import messages
 from servio_vision.restaurant import OTHER_ANSWER
+from servio_vision.timestamps import iso
 
 logger = logging.getLogger(__name__)
 
@@ -58,20 +61,15 @@ class FeedbackDesk:
         self,
         notifier: Any,
         log_event: Callable[[dict], None],
-        commands: dict[str, Callable[[], None]] | None = None,
         clock: Callable[[], float] = time.monotonic,
     ) -> None:
         self.notifier = notifier
         self.log_event = log_event
         self._clock = clock  # los tests lo adelantan
-        # comandos del grupo ("/metricas" → commands["metricas"]())
-        self.commands = commands or {}
         self._questions: dict[str, Question] = {}  # token → pregunta
         self._by_message: dict[int, Question] = {}
         self._prompts: dict[int, str] = {}  # message_id del "escribí qué pasó" → token
         self._lock = threading.Lock()
-        self._stop = threading.Event()
-        self._thread: threading.Thread | None = None
 
     # --- preguntar ---
 
@@ -136,34 +134,7 @@ class FeedbackDesk:
             self.notifier.edit(message_id, text)
         return text
 
-    # --- escuchar ---
-
-    def start(self) -> None:
-        if not hasattr(self.notifier, "get_updates"):
-            return  # consola: no hay respuestas que escuchar
-        self._thread = threading.Thread(
-            target=self._listen, name="feedback", daemon=True
-        )
-        self._thread.start()
-
-    def stop(self) -> None:
-        self._stop.set()
-
-    def _listen(self) -> None:
-        # Arranca después de lo que quedó pendiente de corridas anteriores.
-        pending = self.notifier.get_updates(offset=-1, timeout=0)
-        offset = pending[-1]["update_id"] + 1 if pending else None
-        logger.info("Escuchando respuestas de los mozos en Telegram")
-        while not self._stop.is_set():
-            updates = self.notifier.get_updates(offset)
-            for update in updates:
-                offset = update["update_id"] + 1
-                try:
-                    self.handle(update)
-                except Exception:
-                    logger.exception("No se pudo procesar una respuesta de Telegram")
-            if not updates:
-                self._stop.wait(0.5)
+    # --- respuestas (las trae el bot) ---
 
     def handle(self, update: dict) -> None:
         if "callback_query" in update:
@@ -180,26 +151,23 @@ class FeedbackDesk:
             question = self._questions.get(token)
         who = _name(callback.get("from", {}))
         if question is None:
-            self.notifier.answer_callback(
-                callback["id"], "Este aviso ya no está activo"
-            )
+            self.notifier.answer_callback(callback["id"], messages.BUTTON_EXPIRED)
             return
         if question.answered:
-            self.notifier.answer_callback(callback["id"], "Ya respondieron este aviso")
+            self.notifier.answer_callback(
+                callback["id"], messages.BUTTON_ALREADY_ANSWERED
+            )
             return
         if choice == OTHER:
-            self.notifier.answer_callback(callback["id"], "Escribí qué pasó")
-            prompt = "✏️ Respondé a este mensaje contando qué pasó"
-            if question.dish:
-                prompt += f" con {question.dish}"
-            prompt += f" ({_table_name(question.table_id)})."
+            self.notifier.answer_callback(callback["id"], messages.BUTTON_WRITE)
+            prompt = messages.reply_prompt(question.dish, question.table_id)
             prompt_id = self.notifier.ask_reply(prompt, question.message_id)
             if prompt_id is not None:
                 with self._lock:
                     self._prompts[prompt_id] = token
             return
         answer = question.answers[int(choice)]
-        self.notifier.answer_callback(callback["id"], "¡Gracias! Quedó registrado")
+        self.notifier.answer_callback(callback["id"], messages.BUTTON_THANKS)
         self._record(question, answer, who, free_text=False)
 
     def _on_message(self, message: dict) -> None:
@@ -207,14 +175,6 @@ class FeedbackDesk:
             return
         reply_to = (message.get("reply_to_message") or {}).get("message_id")
         text = (message.get("text") or "").strip()
-        if text.startswith("/"):
-            # "/metricas" o "/metricas@servio_mozos_bot"
-            name = text.split()[0][1:].split("@")[0].lower()
-            command = self.commands.get(name)
-            if command is not None:
-                logger.info("Comando /%s desde Telegram", name)
-                command()
-            return
         with self._lock:
             token = self._prompts.pop(reply_to, None) if reply_to else None
             question = self._questions.get(token) if token else None
@@ -233,7 +193,7 @@ class FeedbackDesk:
             if question.answered:
                 return  # dos toques casi juntos: cuenta el primero
             question.answered = True
-            question.feedback.append(f"📝 {answer}")  # quién respondió queda en la base
+            question.feedback.append(messages.feedback_line(answer))
             answers = self._suffix(question)
             # si el aviso ya se cerró, se mantiene el "ya resuelto"
             if question.final is not None:
@@ -245,7 +205,7 @@ class FeedbackDesk:
         self.log_event(
             {
                 "event": "alert_feedback",
-                "ts": now.isoformat().replace("+00:00", "Z"),
+                "ts": iso(now),
                 "alert_id": question.alert_id,
                 "table_id": question.table_id,
                 "type": question.alert_type,
@@ -262,7 +222,3 @@ class FeedbackDesk:
 
 def _name(user: dict) -> str:
     return user.get("first_name") or user.get("username") or "Mozo"
-
-
-def _table_name(table_id: str) -> str:
-    return f"Mesa {table_id[1:]}" if table_id[1:].isdigit() else table_id

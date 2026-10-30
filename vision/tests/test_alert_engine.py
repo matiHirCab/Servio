@@ -7,7 +7,8 @@ from pathlib import Path
 import pytest
 
 from servio_vision.alerts.config import load_config
-from servio_vision.alerts.engine import EngineResult, evaluate, table_name
+from servio_vision.alerts.engine import EngineResult, evaluate
+from servio_vision.alerts.messages import table_name
 from servio_vision.alerts.models import Alert, TableObservation
 from servio_vision.alerts.state import TableState, empty_table, update_table
 

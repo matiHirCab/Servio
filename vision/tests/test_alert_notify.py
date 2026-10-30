@@ -8,11 +8,11 @@ import sys
 import httpx
 import pytest
 
+from servio_vision.alerts.messages import resolved_text
 from servio_vision.alerts.notify import (
     ConsoleNotifier,
     TelegramNotifier,
     get_notifier,
-    resolved_text,
 )
 
 TOKEN = "123:secreto"
@@ -169,10 +169,10 @@ def test_retry_after_is_capped_so_the_loop_is_not_stuck():
 
 
 def test_get_updates_is_not_retried_inside_the_call():
-    """El long polling ya lo repite el bucle de feedback.py; reintentar acá lo
+    """El long polling ya lo repite el bucle del bot; reintentar acá lo
     trabaría con esperas largas mientras llegan botones."""
     tg, requests, sleeps = retrying(network_error)
-    assert tg.get_updates(None) == []
+    assert tg.get_updates(None) is None
     assert len(requests) == 1
     assert sleeps == []
 
