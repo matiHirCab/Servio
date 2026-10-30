@@ -24,7 +24,7 @@ from servio_vision.capture import (
     open_source,
     retry_waits,
 )
-from servio_vision.classifier import get_classifier
+from servio_vision.classifier import ClassifierUnavailable, get_classifier
 from servio_vision.cli import require_source
 from servio_vision.dish_match import DishMatcher
 from servio_vision.health import STALL_S, HealthMonitor
@@ -80,6 +80,13 @@ def classifier_kwargs(settings: Settings) -> dict:
                 timeout_s=settings.timeout_for(provider),
             )
         return kwargs
+    if settings.classifier == "claude":
+        provider = settings.claude_provider
+        return {
+            "provider": provider,
+            "model": settings.model_for(provider),
+            "timeout_s": settings.timeout_for(provider),
+        }
     if settings.classifier != "fake":
         return {}
     kwargs = {"mode": settings.fake_mode}
@@ -175,7 +182,11 @@ def build_pipeline(settings: Settings) -> Pipeline | None:
         smoothing["hard_readings"],
         smoothing["min_confidence"],
     )
-    classifier = get_classifier(settings.classifier, **classifier_kwargs(settings))
+    try:
+        classifier = get_classifier(settings.classifier, **classifier_kwargs(settings))
+    except (ClassifierUnavailable, NotImplementedError) as e:
+        logger.error("%s", e)  # el mensaje dice qué hacer
+        return None
     restaurant = load_restaurant(settings.restaurante)
     finished_after = finished_after_seconds(settings)
     logger.info("Plato por terminar → vacío a los %gs", finished_after)

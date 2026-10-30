@@ -30,12 +30,12 @@ def call(request: PlatesRequest, model: str, timeout_s: float) -> tuple[dict, di
         resp = client.messages.create(
             model=model,
             max_tokens=2048,
-            system=prompt.system_prompt(),
+            system=request.system or prompt.system_prompt(),
             messages=[{"role": "user", "content": request.content}],
             output_config={
                 "format": {
                     "type": "json_schema",
-                    "schema": prompt.REPORT_PLATES_SCHEMA,
+                    "schema": request.schema or prompt.REPORT_PLATES_SCHEMA,
                 },
                 "effort": "low",
             },

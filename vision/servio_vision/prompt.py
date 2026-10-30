@@ -22,6 +22,7 @@ import json
 from pathlib import Path
 
 from servio_vision import settings
+from servio_vision.tracking import POSITION_LABELS
 
 PROMPTS_DIR = settings.PROMPTS_DIR
 DEFAULT_CLAUDE_PROMPT = PROMPTS_DIR / "claude.txt"
@@ -178,6 +179,47 @@ def decision_questions(has_reference: list[bool]) -> list[dict]:
         }
     )
     return questions
+
+
+# Esquema de la respuesta del clasificador `claude` (la mesa entera): el modelo también
+# ubica cada plato, con la grilla 3×3 de `tracking.position_label`.
+REPORT_TABLE_SCHEMA: dict = {
+    "type": "object",
+    "properties": {
+        "plates": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "position": {"type": "string", "enum": list(POSITION_LABELS)},
+                    "fill_ratio": {"type": "number"},
+                    "confidence": {"type": "number"},
+                    "visible": {"type": "boolean"},
+                },
+                "required": ["position", "fill_ratio", "confidence", "visible"],
+                "additionalProperties": False,
+            },
+        },
+        "people_present": {"type": "boolean"},
+    },
+    "required": ["plates", "people_present"],
+    "additionalProperties": False,
+}
+
+TABLE_PROMPT = PROMPTS_DIR / "claude_table.txt"
+
+
+def table_system_prompt(path: Path | None = None) -> str:
+    """Instrucciones del clasificador `claude` (`claude_table.txt`), más el pedido de
+    JSON. Se leen en cada llamada, como los demás prompts."""
+    return (
+        _read(path or TABLE_PROMPT).strip()
+        + "\nRespondé solo con el JSON pedido, un elemento por plato."
+    )
+
+
+def table_whole_caption(table_id: str) -> str:
+    return f"Mesa {table_id}, vista desde arriba:"
 
 
 def table_caption(table_id: str) -> str:
