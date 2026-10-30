@@ -99,6 +99,30 @@ def test_fixture_log_matches_expected(tmp_path, name):
     assert sum(e["event"] == "observation" for e in log_lines(p)) == len(observations)
 
 
+def test_unattended_table_reminds_twice_with_growing_time_and_closes_with_a_note(
+    tmp_path,
+):
+    """`mesa_terminada_recordatorios`: más allá del tipo y el segundo (lo que compara
+    `fixtures/expected`), los textos, el conteo de recordatorios (máximo 2) y el cierre."""
+    p = processor(tmp_path)
+    for o in load("mesa_terminada_recordatorios"):
+        p.process(o)
+    alert_events = [e for e in log_lines(p) if e["event"] != "observation"]
+    assert [(e["event"], e["reminders_sent"]) for e in alert_events] == [
+        ("alert_opened", 0),
+        ("alert_reminder", 1),
+        ("alert_reminder", 2),
+        ("alert_resolved", 2),  # un tercer recordatorio a los 720 s no sale
+    ]
+    texts = [e["text"] for e in alert_events]
+    assert texts[0] == "🍽️ Mesa 4: terminó."
+    assert texts[1] == "🍽️ Mesa 4: terminó hace 3 min."
+    assert texts[2] == "🍽️ Mesa 4: terminó hace 6 min."
+    # al cerrar: quién retiró y cuánto después de que terminó la mesa (750 − 180 s)
+    assert "Retiraron los platos 9 min 30 s después de que terminó la mesa." in texts[3]
+    assert alert_events[3]["close_reason"] == "retirados"
+
+
 def test_no_close_note_is_kept_for_an_alert_without_a_telegram_message(tmp_path):
     """Si Telegram falló al abrir el aviso no hay mensaje que editar: la línea de
     «retiraron los platos» no tiene a quién llegar y no se guarda."""

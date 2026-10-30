@@ -16,7 +16,7 @@ Con los datos del restaurante (`fixtures/restaurante/`, simulados para la demo; 
 
 ## Recordatorio y cierre
 
-El mozo no responde, así que el antispam es por tiempo:
+Los botones del mozo solo cuentan qué pasó (no cierran ni silencian el aviso), así que el antispam es por tiempo:
 
 - **Un aviso abierto por `(mesa, tipo)`.** Mientras esté abierto no se manda otro igual.
 - **Recordatorio:** si la condición sigue después de R minutos, se manda un recordatorio ("Mesa 3: los platos vacíos siguen sin retirar hace 4 min"). Producción R = 3 min, demo 2 × `interval`. Máximo 2 recordatorios.

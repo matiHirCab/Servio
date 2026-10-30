@@ -136,6 +136,39 @@ def test_crop_has_margin():
     assert crop.size == (240, 120)
 
 
+def test_only_plate_crops_reach_the_provider(monkeypatch):
+    """C-3 (docs/legal-uruguay.md): al proveedor van los recortes de plato y nunca la
+    imagen de la mesa. Se mira en la frontera, con el `estimate_plates` de verdad: lo
+    que llega al proveedor, de punta a punta de una lectura de `hybrid`."""
+    import base64
+
+    from servio_vision.classifiers import claude_plates
+
+    sent = []
+
+    def provider(request, model, timeout_s):
+        sent.append(request)
+        n = len([b for b in request.content if b["type"] == "image"])
+        plates = [
+            {"index": i, "fill_ratio": 0.5, "confidence": 0.9} for i in range(1, n + 1)
+        ]
+        return {"plates": plates, "people_present": False}, {}
+
+    monkeypatch.setitem(claude_plates._BACKENDS, "cli", provider)
+    table = _jpeg(400, 200)
+    HybridClassifier(detector=FakeDetector(PLATES)).classify(table, "T1", [])
+
+    (request,) = sent
+    images = [b for b in request.content if b["type"] == "image"]
+    assert len(images) == len(PLATES)  # un recorte por plato, ni una imagen de más
+    for block in images:
+        data = base64.b64decode(block["source"]["data"])
+        size = Image.open(io.BytesIO(data)).size
+        assert max(size) <= hybrid.CROP_SIDE  # nunca la mesa de 400 px de ancho
+        assert size != (400, 200)
+    assert request.schema is None  # el camino de los platos, no el de la mesa entera
+
+
 def test_yolo_classifier_states_from_labels():
     report = YoloClassifier(detector=FakeDetector(PLATES)).classify(_jpeg(), "T1", [])
     assert [i.state for i in report.items] == ["vacio", "lleno"]
