@@ -294,7 +294,7 @@ def rotation(visits: list[tuple[str, datetime, datetime]]) -> dict | None:
     }
 
 
-def waiter_load(db: Database, visits: list) -> list[tuple[str, float, float]]:
+def waiter_load(db: Database, visits: list) -> list[tuple[str, float, float | None]]:
     """Carga por mozo: mesas atendidas por servicio y minutos promedio hasta
     retirar una mesa terminada (de `SQL_ATTEND`). De la más cargada a la menos."""
     waiter = {r["mesa"]: r["mozo"] for r in db.query(SQL_TABLE_WAITER)}

@@ -201,10 +201,11 @@ class AlertProcessor:
             # un reinicio el plato se insertaría de nuevo
             self._save_now = True
             dish = self.restaurant.dish(obs.table_id, plate.track_id)
-            same = self._served_rows.get(plate.inherited_from or "")
-            if same is not None:
+            inherited_from = plate.inherited_from
+            same = self._served_rows.get(inherited_from or "")
+            if same is not None and inherited_from is not None:
                 self._served_rows[plate.track_id] = same
-                last = self._plate_states.pop(plate.inherited_from, None)
+                last = self._plate_states.pop(inherited_from, None)
                 if last is not None:
                     self._plate_states[plate.track_id] = last
                 continue
@@ -340,6 +341,9 @@ class AlertProcessor:
             if question is None:
                 continue
             # plato lleno: mensaje propio, con los botones de "¿qué pasó?"
+            assert (
+                self.feedback is not None
+            )  # `_with_context` solo arma la pregunta con él
             message_id = self.feedback.ask(question)
             alert = alert.model_copy(update={"telegram_message_id": message_id})
             if message_id is not None:
@@ -370,8 +374,12 @@ class AlertProcessor:
         edited = {message_id: self._edit(message_id) for message_id in message_ids}
         for alert in result.resolved:
             # Sin mensaje (Telegram falló al abrir) no hubo nada que editar: text None.
-            text = edited.get(alert.telegram_message_id)
-            event = _alert_event("alert_resolved", obs.ts, alert, text)
+            edited_text = (
+                edited.get(alert.telegram_message_id)
+                if alert.telegram_message_id is not None
+                else None
+            )
+            event = _alert_event("alert_resolved", obs.ts, alert, edited_text)
             if reasons[alert.id]:
                 event["close_reason"] = reasons[alert.id]
             log(event)

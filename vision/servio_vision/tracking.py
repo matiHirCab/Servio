@@ -2,6 +2,7 @@
 
 import math
 import re
+from typing import cast
 
 from servio_vision.detector import _iou
 from servio_vision.schemas import Item
@@ -153,7 +154,7 @@ def _match(bboxes: list, tiers: list[list[tuple]], first_new: int) -> list[str]:
         if ids[i] is None:
             ids[i] = f"p{n}"
             n += 1
-    return ids
+    return cast("list[str]", ids)  # ya no queda ninguno sin id
 
 
 def match_ids(

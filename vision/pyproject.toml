@@ -5,6 +5,16 @@ target-version = "py311"
 pythonpath = ["."]
 testpaths = ["tests"]
 
+[tool.mypy]
+# Chequeo de tipos gradual: todo `servio_vision/` sin errores en el modo por defecto.
+# Los tests y `tools/` quedan afuera. Para endurecerlo, ir sumando opciones (por
+# ejemplo `disallow_untyped_defs`) módulo por módulo con `[[tool.mypy.overrides]]`.
+python_version = "3.11"
+files = ["servio_vision"]
+# cv2, ultralytics, torch y los SDK de los proveedores no traen tipos (o no se instalan acá)
+ignore_missing_imports = true
+warn_unused_ignores = true
+
 [tool.coverage.run]
 source = ["servio_vision"]
 

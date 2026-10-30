@@ -12,6 +12,7 @@ import logging
 import sys
 import time
 import warnings
+from typing import Any
 
 from servio_vision import alerts, framing, privacy, prompt
 from servio_vision.alerts.config import load_config
@@ -172,7 +173,7 @@ def build_pipeline(settings: Settings) -> Pipeline | None:
             logger.error("%s", e)
             return None
         logger.info("IA: %s · prompt %s", provider, prompt_file)
-    smoothing = {
+    smoothing: dict[str, Any] = {
         "readings": settings.smooth_readings,
         "hard_readings": settings.smooth_hard_readings,
         "min_confidence": settings.smooth_min_confidence,
@@ -196,7 +197,7 @@ def build_pipeline(settings: Settings) -> Pipeline | None:
         "TELEGRAM_GROUP_CHAT_ID": settings.telegram_group_chat_id,
     }
     # una cámara en vivo sigue donde quedó tras un reinicio; un video, no
-    live = bool(settings.source) and is_live_source(settings.source)
+    live = settings.source is not None and is_live_source(settings.source)
     processor = alerts.configure(
         config,
         telegram=settings.telegram,
@@ -256,6 +257,7 @@ def run(settings: Settings, limit: int | None = None) -> int:
     """El loop: abre la fuente, graba si se pidió y procesa cada lectura."""
     if not require_source(settings):
         return 2
+    assert settings.source is not None  # lo garantiza `require_source`
     pipeline = build_pipeline(settings)
     if pipeline is None:
         return 2
@@ -318,11 +320,13 @@ def _open_frames(settings: Settings, anonymize: Anonymizer | None):
     """La fuente de frames. Una cámara que no abre se reintenta con esperas que
     crecen, sin rendirse: tras un corte de luz el router o el celular pueden
     arrancar después que la PC. Cualquier otro error de apertura sale tal cual."""
+    source = settings.source
+    assert source is not None  # `run` ya lo verificó con `require_source`
     waits = retry_waits(CAMERA_RETRY_S, CAMERA_RETRY_MAX_S)
     while True:
         try:
             return open_source(
-                settings.source,
+                source,
                 settings.interval,
                 settings.speed,
                 anonymize=anonymize,

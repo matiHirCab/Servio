@@ -91,12 +91,13 @@ def load_config(
     else:
         defaults = {"t1": PROD_T1, "t2": PROD_T2, "reminder": PROD_REMINDER}
 
-    values = {}
+    values: dict[str, int] = {}
     for key, flag in flags.items():
+        from_config = configured[key]
         if flag is not None:
             values[key] = flag
-        elif configured[key] is not None:
-            values[key] = configured[key]
+        elif from_config is not None:
+            values[key] = from_config
         else:
             values[key] = defaults[key]
     return AlertConfig(interval=interval, **values)

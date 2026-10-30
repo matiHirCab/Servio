@@ -18,6 +18,7 @@ platos en una imagen entera.
 
 import io
 import logging
+from typing import Any
 
 from PIL import Image
 
@@ -54,13 +55,14 @@ class ClaudeClassifier:
                 "recortes de plato. Si el equipo decidió permitirlo, poné "
                 "CLAUDE_ALLOW_TABLE_IMAGES=true; si no, usá --classifier hybrid."
             )
-        self.people = person_detector or people.load_detector()
-        if self.people is None:
+        detector = person_detector or people.load_detector()
+        if detector is None:
             raise ClassifierUnavailable(
                 "Sin el detector de personas no se manda la mesa entera: no hay cómo "
                 "pixelar a los comensales. pip install -r requirements-yolo.txt"
             )
-        self.claude_kwargs = {
+        self.people: people.PersonDetector = detector
+        self.claude_kwargs: dict[str, Any] = {
             "provider": provider,
             "model": model,
             "timeout_s": timeout_s,

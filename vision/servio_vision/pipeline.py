@@ -323,20 +323,22 @@ class Pipeline:
     def _observation(
         self, table_id: str, ts: datetime, report: TableReport, items: list[Item]
     ) -> TableObservation:
-        return TableObservation(
-            schema_version=1,
-            camera_id=self.zones.camera_id,
-            ts=ts,
-            table_id=table_id,
-            people_present=report.people_present,
-            items=[
-                {
-                    "track_id": f"{table_id}-{item.id}",
-                    "state": item.state,
-                    "fill_ratio": item.fill_ratio,
-                    "confidence": item.confidence,
-                    "position": item.position,
-                }
-                for item in items
-            ],
+        return TableObservation.model_validate(
+            {
+                "schema_version": 1,
+                "camera_id": self.zones.camera_id,
+                "ts": ts,
+                "table_id": table_id,
+                "people_present": report.people_present,
+                "items": [
+                    {
+                        "track_id": f"{table_id}-{item.id}",
+                        "state": item.state,
+                        "fill_ratio": item.fill_ratio,
+                        "confidence": item.confidence,
+                        "position": item.position,
+                    }
+                    for item in items
+                ],
+            }
         )

@@ -86,6 +86,10 @@ class TableSmoother:
             min_confidence = (
                 cfg.smooth_min_confidence if min_confidence is None else min_confidence
             )
+        # los tres ya tienen valor: el que faltaba salió de la configuración
+        assert readings is not None
+        assert hard_readings is not None
+        assert min_confidence is not None
         self.neighbor_readings = int(readings)
         self.hard_readings = int(hard_readings)
         self.hard_min_confidence = float(min_confidence)
@@ -201,6 +205,8 @@ class TableSmoother:
         )
         if new != track.candidate:
             track.candidate, track.streak = new, 0
+        # un plato visible siempre trae estado (Item lo exige), y el aceptado también
+        assert current is not None and new is not None
         hard = is_hard_change(current, new)
         if hard and (item.confidence or 0) < self.hard_min_confidence:
             # para un cambio difícil, una lectura dudosa corta la racha
