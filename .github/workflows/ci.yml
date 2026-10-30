@@ -5,10 +5,21 @@ on:
   push:
     branches: [main, develop]
 
+permissions:
+  contents: read
+
+# Un push nuevo al mismo PR cancela la corrida anterior. Los pushes a main y develop
+# van por commit: con un grupo común GitHub descarta la corrida pendiente más vieja.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
+  # El nombre `vision` es el check obligatorio de la regla de rama: no cambiarlo.
   vision:
     # Para usar runners de Tenki, cambiar `runs-on` por la etiqueta que indique su documentación.
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     defaults:
       run:
         working-directory: vision
@@ -17,8 +28,70 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
+          cache: pip
+          cache-dependency-path: vision/requirements*.txt
       # Versiones fijas en requirements-dev.txt: `ruff format --check` cambia entre releases.
       - run: pip install -r requirements-dev.txt
       - run: ruff check .
       - run: ruff format --check .
+      # El piso de cobertura (`fail_under`) está en pyproject.toml.
+      - name: Tests con cobertura
+        run: pytest -q --cov --cov-report=term --cov-report=xml
+      - name: Resumen de cobertura
+        if: always()
+        run: |
+          if [ -f .coverage ]; then
+            { echo "### Cobertura"; coverage report --format=markdown || true; } >> "$GITHUB_STEP_SUMMARY"
+          fi
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: coverage-xml
+          path: vision/coverage.xml
+          if-no-files-found: ignore
+
+  # Que no se rompa con la versión de Python con la que se desarrolla (3.13).
+  compat-py313:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: vision
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: vision/requirements*.txt
+      - run: pip install -r requirements-dev.txt
       - run: pytest -q
+
+  # Reglas de «Privacidad y datos» (docs/context/09-convenciones.md): nada de secretos,
+  # pesos, imágenes ni videos en el repo.
+  higiene:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # para ver también lo que un commit del PR agregó y otro borró
+      - name: Sin secretos, pesos ni medios versionados
+        env:
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          # lo versionado hoy y, en un PR, todo lo que algún commit suyo agregó
+          # (quotePath=false: git entrecomilla los nombres con tildes y el `$` no calzaría)
+          files=$(git -c core.quotePath=false ls-files)
+          if [ -n "$BASE_REF" ]; then
+            files="$files
+          $(git -c core.quotePath=false log --diff-filter=A --name-only --pretty=format: "origin/$BASE_REF..HEAD")"
+          fi
+          bad=$(echo "$files" | sort -u | grep -i -E \
+            '(^|/)\.env(\..+)?$|(^|/)mobileclip[^/]*\.ts$|\.(pt|pth|onnx|engine|tflite|safetensors|ckpt|npz|npy|db|sqlite3?|zip|tar|gz|csv|mp4|mov|avi|mkv|webm|jpg|jpeg|png|gif|webp|bmp|tiff?)$' \
+            | grep -v -E '(^|/)\.env\.example$' || true)
+          if [ -n "$bad" ]; then
+            echo "::error::Archivos que no van al repo (ver «Privacidad y datos»):"
+            echo "$bad"
+            exit 1
+          fi

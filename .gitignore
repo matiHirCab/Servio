@@ -15,3 +15,5 @@ vision/out/
 mobileclip_blt.ts
 # configuración de cada casa (vision/config/servio.example.toml es el modelo)
 vision/config/casa-*.toml
+.coverage
+coverage.xml
