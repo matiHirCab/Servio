@@ -47,7 +47,8 @@ class ClaudeClassifier:
         person_detector: people.PersonDetector | None = None,
         cfg: settings.Settings | None = None,
     ) -> None:
-        if not settings.current().claude_allow_table_images:
+        # la puerta de privacidad se mira en la misma configuración que el resto
+        if not (cfg or settings.current()).claude_allow_table_images:
             raise ClassifierUnavailable(
                 "El clasificador claude manda la imagen de la mesa entera al modelo, y "
                 "por privacidad (C-3, docs/legal-uruguay.md) hoy al modelo solo van "
