@@ -10,6 +10,7 @@ import pytest
 from servio_vision import prompt
 from servio_vision.classifiers import claude_plates
 from servio_vision.classifiers.claude_plates import ClaudeCallError, estimate_plates
+from servio_vision.classifiers.providers import cli
 
 JPEG = b"\xff\xd8fake"
 REQUEST = claude_plates.PlatesRequest(
@@ -159,9 +160,9 @@ def test_cli_reads_structured_output(monkeypatch):
         assert content[1:] == REQUEST.content
         return subprocess.CompletedProcess(args, 0, stdout=stdout, stderr="")
 
-    monkeypatch.setattr(claude_plates, "_find_cli", lambda: "claude")
-    monkeypatch.setattr(claude_plates.subprocess, "run", fake_run)
-    data, usage = claude_plates._call_cli(REQUEST, "haiku", 10)
+    monkeypatch.setattr(cli, "_find_cli", lambda: "claude")
+    monkeypatch.setattr(cli.subprocess, "run", fake_run)
+    data, usage = cli.call(REQUEST, "haiku", 10)
     assert data == _answer(1)
     assert usage["cost_usd"] == 0.001
 
@@ -297,7 +298,7 @@ def test_cli_env_drops_the_secrets_and_keeps_what_the_cli_needs():
     """`claude -p` va con la suscripción: una ANTHROPIC_API_KEY en el entorno la
     cambiaría a facturación por API, y el token de Telegram o la base no tienen por
     qué llegarle a un proceso hijo."""
-    env = claude_plates._cli_env(
+    env = cli._cli_env(
         {
             "PATH": "/bin",
             "USERPROFILE": "C:/Users/x",  # donde el CLI guarda su login
@@ -328,9 +329,9 @@ def test_cli_subprocess_runs_with_the_scrubbed_env(monkeypatch):
             args, 0, stdout=json.dumps(result) + "\n", stderr=""
         )
 
-    monkeypatch.setattr(claude_plates, "_find_cli", lambda: "claude")
-    monkeypatch.setattr(claude_plates.subprocess, "run", fake_run)
-    claude_plates._call_cli(REQUEST, "haiku", 10)
+    monkeypatch.setattr(cli, "_find_cli", lambda: "claude")
+    monkeypatch.setattr(cli.subprocess, "run", fake_run)
+    cli.call(REQUEST, "haiku", 10)
     assert "ANTHROPIC_API_KEY" not in seen and "TELEGRAM_BOT_TOKEN" not in seen
     assert seen["DISABLE_AUTOUPDATER"] == "1"
 
@@ -339,10 +340,10 @@ def test_cli_timeout_is_a_call_error(monkeypatch):
     def fake_run(args, **kwargs):
         raise subprocess.TimeoutExpired(args, 10)
 
-    monkeypatch.setattr(claude_plates, "_find_cli", lambda: "claude")
-    monkeypatch.setattr(claude_plates.subprocess, "run", fake_run)
+    monkeypatch.setattr(cli, "_find_cli", lambda: "claude")
+    monkeypatch.setattr(cli.subprocess, "run", fake_run)
     with pytest.raises(ClaudeCallError):
-        claude_plates._call_cli(REQUEST, "haiku", 10)
+        cli.call(REQUEST, "haiku", 10)
 
 
 @pytest.mark.parametrize(
@@ -354,12 +355,12 @@ def test_cli_timeout_is_a_call_error(monkeypatch):
     ],
 )
 def test_json_from_text(text):
-    assert claude_plates.json_from_text(text) == {"plates": [], "people_present": True}
+    assert cli.json_from_text(text) == {"plates": [], "people_present": True}
 
 
 def test_json_from_text_without_json_shows_the_answer():
     with pytest.raises(ClaudeCallError, match="no puedo ver"):
-        claude_plates.json_from_text("no puedo ver las imágenes")
+        cli.json_from_text("no puedo ver las imágenes")
 
 
 def test_cli_on_windows_cmd_skips_schema_and_parses_text(monkeypatch):
@@ -379,9 +380,9 @@ def test_cli_on_windows_cmd_skips_schema_and_parses_text(monkeypatch):
             args, 0, stdout=json.dumps(result), stderr=""
         )
 
-    monkeypatch.setattr(claude_plates, "_find_cli", lambda: r"C:\npm\claude.cmd")
-    monkeypatch.setattr(claude_plates.subprocess, "run", fake_run)
-    data, _ = claude_plates._call_cli(REQUEST, "haiku", 10)
+    monkeypatch.setattr(cli, "_find_cli", lambda: r"C:\npm\claude.cmd")
+    monkeypatch.setattr(cli.subprocess, "run", fake_run)
+    data, _ = cli.call(REQUEST, "haiku", 10)
     assert data == _answer(1)
 
 
@@ -395,9 +396,9 @@ def test_cli_uses_the_answer_even_if_claude_exits_with_error(monkeypatch):
             args, 1, stdout=json.dumps(result), stderr=""
         )
 
-    monkeypatch.setattr(claude_plates, "_find_cli", lambda: "claude")
-    monkeypatch.setattr(claude_plates.subprocess, "run", fake_run)
-    data, _ = claude_plates._call_cli(REQUEST, "haiku", 10)
+    monkeypatch.setattr(cli, "_find_cli", lambda: "claude")
+    monkeypatch.setattr(cli.subprocess, "run", fake_run)
+    data, _ = cli.call(REQUEST, "haiku", 10)
     assert data == _answer(1)
 
 
@@ -405,10 +406,10 @@ def test_cli_error_without_json_is_a_call_error(monkeypatch):
     def fake_run(args, **kwargs):
         return subprocess.CompletedProcess(args, 1, stdout="", stderr="se cortó")
 
-    monkeypatch.setattr(claude_plates, "_find_cli", lambda: "claude")
-    monkeypatch.setattr(claude_plates.subprocess, "run", fake_run)
+    monkeypatch.setattr(cli, "_find_cli", lambda: "claude")
+    monkeypatch.setattr(cli.subprocess, "run", fake_run)
     with pytest.raises(ClaudeCallError, match="se cortó"):
-        claude_plates._call_cli(REQUEST, "haiku", 10)
+        cli.call(REQUEST, "haiku", 10)
 
 
 class _FakeOpenAI:
