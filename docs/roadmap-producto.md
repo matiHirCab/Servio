@@ -91,6 +91,8 @@ Entry point en `pyproject.toml` con subcomandos: `servio run`, `servio replay`, 
 **Tomás · A · 1 d · depende de: nada**
 Sumar al CI un chequeo de tipos gradual (`pyright` en modo básico, empezando por `schemas.py`, `alerts/` y `llm/`) y el reporte de cobertura. Un test de punta a punta que corre `servio run` con `--classifier fake` sobre una sesión grabada corta (B-1) y compara los avisos.
 
+Hecho así: `pyright` en modo básico corre en el job `vision` sobre `schemas.py`, `alerts/` y `llm/` (la lista, en `[tool.pyright]` de `pyproject.toml`), además de `mypy` en todo `servio_vision/`. La cobertura ya estaba (piso de 90 %, resumen en la corrida y `coverage.xml`). `tests/test_e2e_pipeline.py` corre `main.py` con `--classifier fake --fake-mode replay` sobre cada escenario de `fixtures/observations/` (la fuente es una carpeta de fotos negras que arma el test) y compara los avisos con `fixtures/pipeline/`. Todavía no hay sesiones grabadas (B-1): cuando haya una, se suma a `SESSIONS` en ese test.
+
 **Hecho cuando:** el CI falla si se rompe un tipo en esos módulos o si cambian los avisos de la sesión grabada.
 
 ### A-9 · Docs al día
