@@ -8,7 +8,7 @@ import base64
 import logging
 import threading
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from typing import TypeVar
 
 from pydantic import ValidationError
@@ -88,7 +88,7 @@ def reset_meter() -> None:
 def build_content(
     plate_jpegs: list[bytes],
     table_id: str,
-    references: list[bytes | None] | None = None,
+    references: Sequence[bytes | None] | None = None,
     fmt: Format = ANTHROPIC_FORMAT,
 ) -> list:
     """Bloques del mensaje (texto + imágenes) en el formato `fmt`.
@@ -101,9 +101,9 @@ def build_content(
         return fmt.image(base64.standard_b64encode(jpeg).decode())
 
     content: list[dict] = [fmt.text(prompt.table_caption(table_id))]
-    references = references or [None] * len(plate_jpegs)
+    refs: Sequence[bytes | None] = references or [None] * len(plate_jpegs)
     # strict: un plato sin su lugar en `references` no se manda en silencio
-    for i, (jpeg, ref) in enumerate(zip(plate_jpegs, references, strict=True), start=1):
+    for i, (jpeg, ref) in enumerate(zip(plate_jpegs, refs, strict=True), start=1):
         if ref is None:
             content.append(fmt.text(prompt.plate_caption(i)))
         else:
@@ -257,7 +257,7 @@ class ProviderEstimator:
         # Una sola vez y fuera del loop: las imágenes no se recodifican en cada intento, y
         # un `references` de otro largo es un bug del que llama (ValueError), no un fallo
         # del modelo. Se normaliza acá y lo usan igual las imágenes y las preguntas.
-        references = request.references or [None] * len(jpegs)
+        references: Sequence[bytes | None] = request.references or [None] * len(jpegs)
         content = build_content(jpegs, request.table_id, references, self._format)
         return self._call(
             ProviderRequest(content, [r is not None for r in references]),

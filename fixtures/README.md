@@ -1,6 +1,6 @@
 # fixtures/
 
-Observaciones de mesa de ejemplo y los avisos que tienen que salir, con el formato de [03-contratos.md](../docs/context/03-contratos.md). Sirven para probar las reglas y Telegram sin video ni modelo: tests del motor (MAT-3), `vision/tools/replay.py` (MAT-6) y plan B de la demo. Los valida `vision/tests/test_alert_models.py` contra `servio_vision/alerts/models.py`.
+Observaciones de mesa de ejemplo y los avisos que tienen que salir, con el formato de [03-contratos.md](../docs/context/03-contratos.md). Sirven para probar las reglas y Telegram sin video ni modelo: tests del motor (MAT-3), `vision/tools/replay.py` (MAT-6), el test de punta a punta (`vision/tests/test_e2e_pipeline.py`, A-8) y plan B de la demo. Los valida `vision/tests/test_alert_models.py` contra `servio_vision/alerts/models.py`.
 
 Dueño: Matías (ver [09-convenciones.md](../docs/context/09-convenciones.md)). Si cambiás el contrato, actualizá los fixtures en el mismo PR.
 
@@ -25,3 +25,15 @@ Uno por escenario: los eventos que tiene que producir `alerts` al reproducirlo, 
 ```
 
 `event`: `alert_opened` | `alert_reminder` | `alert_resolved`. `at_seconds` se cuenta desde la primera línea del `.jsonl`.
+
+## `pipeline/<escenario>.alerts.json`
+
+Los avisos del mismo escenario cuando pasa por el **pipeline entero** (`main.py --classifier fake --fake-mode replay`): fuente, recorte, suavizado y alerts. Los compara `vision/tests/test_e2e_pipeline.py`, así que el CI falla si cambian. Mismo formato que `expected/`.
+
+Difieren de `expected/` a propósito: las observaciones ya vienen suavizadas y el pipeline las vuelve a suavizar, así que un cambio de estado se confirma una lectura más tarde (casi todos los avisos se corren 30 s; `mesa_terminada` de T4 abre 60 s después). `plato_lleno_mucho` e `id_cambiado` salen iguales.
+
+Si un cambio mueve los avisos a propósito, regenerarlos desde `vision/` y revisar el diff en el PR:
+
+```bash
+SERVIO_UPDATE_GOLDEN=1 pytest tests/test_e2e_pipeline.py
+```

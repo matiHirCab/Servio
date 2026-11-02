@@ -23,6 +23,15 @@ files = ["servio_vision"]
 ignore_missing_imports = true
 warn_unused_ignores = true
 
+[tool.pyright]
+# Segundo chequeo de tipos, en modo básico y solo en el núcleo: el contrato, las
+# reglas de avisos y los proveedores de modelo. Para sumar un módulo, agregarlo acá.
+pythonVersion = "3.11"
+typeCheckingMode = "basic"
+include = ["servio_vision/schemas.py", "servio_vision/alerts", "servio_vision/llm"]
+# anthropic y openai no se instalan en el CI (como `ignore_missing_imports` de mypy)
+reportMissingImports = "warning"
+
 [tool.coverage.run]
 source = ["servio_vision"]
 
