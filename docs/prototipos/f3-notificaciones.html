@@ -38,7 +38,7 @@ h1,h2,h3{margin:0;text-wrap:balance}
 .watch .app{display:flex;align-items:center;gap:6px;font-size:11px;color:var(--fg-2)}
 .watch .app i{width:14px;height:14px;border-radius:50%;background:var(--tg);display:inline-block}
 .watch .msg{font-size:15px;line-height:1.25;font-weight:500}
-.watch .msg b{display:block;font-size:15px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}  /* la primera línea entra en una línea: 22 caracteres como mucho */
+.watch .msg b{display:block;font-size:15px;font-weight:600}  /* en 41 mm las más largas van en dos líneas: la mesa primero, el qué después */
 .watch .msg small{display:block;color:var(--fg-2);font-size:12px;margin-top:3px}
 .watch .acts{margin-top:auto;display:grid;gap:5px}
 .watch .acts span{display:block;text-align:center;border-radius:12px;padding:7px 6px;background:var(--surface-2);font-size:14px;font-weight:600}
@@ -86,7 +86,7 @@ code{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:.92em;color:var
   <div class="flow">
     <div><b>1</b><span>Llega «🧹 Mesa 2 · retirar platos». El mozo levanta la muñeca y lo lee de reojo: mesa y qué en la primera línea; hace cuánto, el plato y el mozo en la segunda.</span></div>
     <div><b>2</b><span>Toca la respuesta rápida <b>Voy</b> (o lo dicta). En el grupo aparece «Voy» de Sofía, sin cita al aviso.</span></div>
-    <div><b>3</b><span>El bot busca <b>las mesas de Sofía</b> con aviso abierto. Si es una, marca sus avisos «Voy · Sofía»; si son dos (en un local real cada mozo tiene varias), pregunta «¿Mesa 2 o Mesa 5?» y acepta «2» (nunca elige solo); si la mesa tiene dos avisos distintos y la respuesta es «Listo», pregunta «¿los platos o la mesa?».</span></div>
+    <div><b>3</b><span>El bot busca <b>las mesas de Sofía</b> con aviso abierto. Si es una, marca sus avisos «Voy · Sofía»; si son dos (en un local real cada mozo tiene varias), pregunta «¿Mesa 2 o Mesa 3?» y acepta «2» (nunca elige solo); si la mesa tiene dos avisos distintos y la respuesta es «Listo», pregunta «¿los platos vacíos o el plato lleno?».</span></div>
     <div><b>4</b><span>El aviso lo cierra la cámara (mesa libre o plato retirado), como hoy. «Listo» anota que el mozo dice que ya está: si a los 10 min la cámara no lo ve, le avisa una vez más y después escala. «No hacía falta» es el único cierre a mano: falso aviso, y ese plato (o esa mesa) no vuelve a avisar.</span></div>
   </div>
   <div class="twrap" style="margin-top:12px"><table aria-label="Palabras que entiende el bot">
@@ -105,7 +105,7 @@ code{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:.92em;color:var
   <div class="twrap"><table>
     <tr><th>Rol</th><th>Le llega</th><th>Dónde</th><th>Responde</th></tr>
     <tr><td><b>Mozo</b></td><td>Los avisos de <b>sus mesas</b> (plato vacío, mesa terminó, sigue lleno) y sus recordatorios.</td><td>Reloj + celular. Hoy: el grupo de Telegram con mención; con C-7, chat privado por mozo.</td><td>Voy · Listo · No hacía falta · motivo</td></tr>
-    <tr><td><b>Encargado</b></td><td>Los <b>escalados</b>: un aviso sin respuesta después del segundo recordatorio, o una mesa que lleva más del límite sin atender.</td><td>Reloj + celular (grupo o chat del encargado).</td><td>Voy (lo toma él) · Visto. Sus «avisos» son los escalados; el «Voy» del mozo también lo cierra.</td></tr>
+    <tr><td><b>Encargado</b></td><td>Los <b>escalados</b>: un aviso sin respuesta después del segundo recordatorio, o una mesa que lleva más del límite sin atender.</td><td>Reloj + celular (grupo o chat del encargado).</td><td>Voy (lo toma él) · Visto. Sus «avisos» son los escalados (mensajes atados al aviso de la mesa); el «Voy» del mozo también lo toma.</td></tr>
     <tr><td><b>Dueño</b> (y encargado)</td><td>El <b>resumen al cerrar</b> el servicio (D-3, todavía no existe) y nada en el momento.</td><td>Celular.</td><td>No responde.</td></tr>
   </table></div>
 </section>
@@ -131,7 +131,7 @@ const AVISOS = [
    txt:"🍽️ Mesa 1 · terminó\nrecién · 2 platos · Juan", reloj:{acts:["Voy","Listo","No hacía falta"]},
    cel:{reply:"Listo", btns:["Voy","Listo","No hacía falta"], nota:"Los botones son nuevos (C-5): hoy este mensaje llega sin botones.", hora:"21:41"}},
   {id:"lleno", color:"var(--lleno)", titulo:"Sigue lleno", why:"Un plato lleva demasiado sin tocarse: pasar a preguntar. La respuesta es el motivo, que alimenta la métrica de platos con problemas.",
-   txt:"❓ Mesa 3 · sin tocar\nhace 14 min · Milanesa napolitana · Martín · ¿está todo bien?", reloj:{acts:["Voy","Listo","No hacía falta"], dictar:"Tras «Listo» el bot pregunta «¿Qué pasó?» y el motivo se dicta"},
+   txt:"❓ Mesa 3 · sin tocar\nhace 10 min · Milanesa napolitana · Martín · ¿está todo bien?", reloj:{acts:["Voy","Listo","No hacía falta"], dictar:"Tras «Listo» el bot pregunta «¿Qué pasó?» y el motivo se dicta"},
    cel:{nota:"Los motivos del plato ya están (A-4); «Voy» y «No hacía falta» son nuevos (C-5). «Está todo bien» es un motivo (el aviso era real); «No hacía falta» es que no había plato lleno.", btns:["Voy","Está todo bien","Estaba fría","Porción muy grande","No le gustó","✏️ Otra respuesta","No hacía falta"], hora:"21:42"}},  // los de carta.json para la milanesa, como hoy
   {id:"escalado", color:"var(--esc)", titulo:"Escalado al encargado", why:"Nadie respondió después del segundo recordatorio (tres mensajes), o la mesa pasó el límite sin atender. Le llega al encargado, no al mozo.",
    txt:"⚠️ Mesa 2 · sin atender\nhace 9 min · Sofía no respondió a 3 mensajes", reloj:{acts:["Voy","Visto"]},
