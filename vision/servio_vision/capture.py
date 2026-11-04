@@ -69,6 +69,7 @@ def open_source(
     anonymize: Anonymizer | None = None,
     face_model: Path | None = None,
     reconnect_s: float | None = None,
+    protect: privacy.Protector | None = None,
 ) -> Iterator[Frame]:
     """Iterador de `(frame, ts)` según el tipo de `source`.
 
@@ -80,7 +81,8 @@ def open_source(
     `anonymize`: se aplica a cada frame apenas se lee; por defecto, las caras
     difuminadas (`privacy.default_anonymizer()`, con el detector `face_model` de la
     configuración si se pasa). Es el **único** lugar donde se engancha: los lectores
-    devuelven el frame crudo y acá se envuelve.
+    devuelven el frame crudo y acá se envuelve. `protect`: las cajas de los platos,
+    que el anonimizador por defecto no pixela (`privacy.FaceBlur`).
     `reconnect_s`: solo cámaras; cuánto reintenta una cámara que se cortó antes de
     darse por vencida. `None` (lo normal) no se rinde: un corte de Wi-Fi o un reinicio
     del router no tienen que dejar el servicio apagado.
@@ -98,7 +100,9 @@ def open_source(
         raise FileNotFoundError(f"No existe la fuente: {source}")
     # recién con una fuente que existe: un error de tipeo no tiene que terminar en
     # "no se pudo bajar el modelo"
-    anonymize = anonymize or privacy.default_anonymizer(face_model=face_model)
+    anonymize = anonymize or privacy.default_anonymizer(
+        face_model=face_model, protect=protect
+    )
     if is_camera:
         raw = read_camera(
             int(source) if source.isdigit() else source, interval, reconnect_s
