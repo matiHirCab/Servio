@@ -228,8 +228,8 @@ def test_mirror_log_failure_does_not_stop_the_alerts(tmp_path):
     log.write({"event": "b"})  # no explota; sigue sin la copia
     log.write({"event": "c"})
     log.close()
-    assert (tmp_path / "log.jsonl").read_text("utf-8").count("\\n") == 3
-    assert (tmp_path / "copia.jsonl").read_text("utf-8").count("\\n") == 1
+    assert (tmp_path / "log.jsonl").read_text("utf-8").count("\n") == 3
+    assert (tmp_path / "copia.jsonl").read_text("utf-8").count("\n") == 1
 
 
 def test_truncated_recording_is_marked(tmp_path):
