@@ -14,6 +14,7 @@ la base (`handle(event)`); así log y base ya ven lo que puso el canal.
 - `DatabaseOutput`: platos servidos, lecturas, avisos y respuestas en `servio.db`.
 """
 
+import contextlib
 import json
 import logging
 import threading
@@ -233,13 +234,14 @@ class EventLog:
             if self._mirror is not None:
                 try:
                     self._mirror.write(line)
-                except OSError as e:
+                except (OSError, ValueError) as e:  # ValueError: ya cerrado
                     # la copia es auxiliar (la carpeta compartida se puede caer): los
                     # avisos siguen, la sesión queda incompleta y se avisa una vez
                     logger.error(
                         "No se pudo escribir la copia del log, sigo sin ella: %s", e
                     )
-                    self._mirror.close()
+                    with contextlib.suppress(OSError):  # el flush puede fallar igual
+                        self._mirror.close()
                     self._mirror = None
 
     def close(self) -> None:

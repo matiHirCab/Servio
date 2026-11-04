@@ -211,9 +211,41 @@ def test_session_info_hides_camera_credentials():
         == "http://cam/video.cgi?user=admin&pwd=***&res=hd"
     )
     assert (
+        recording.redact_source("http://cam/x?token=ab@cd") == "http://cam/x?token=***"
+    )
+    assert (
         recording.redact_source("http://cam.local:8080/video")
         == "http://cam.local:8080/video"
     )
+
+
+def test_mirror_log_failure_does_not_stop_the_alerts(tmp_path):
+    from servio_vision.alerts.outputs import EventLog
+
+    log = EventLog(tmp_path / "log.jsonl", mirror=tmp_path / "copia.jsonl")
+    log.write({"event": "a"})
+    log._mirror.close()  # como si el share se hubiera caído: escribir va a fallar
+    log.write({"event": "b"})  # no explota; sigue sin la copia
+    log.write({"event": "c"})
+    log.close()
+    assert (tmp_path / "log.jsonl").read_text("utf-8").count("\\n") == 3
+    assert (tmp_path / "copia.jsonl").read_text("utf-8").count("\\n") == 1
+
+
+def test_truncated_recording_is_marked(tmp_path):
+    rec = recording.SessionRecorder(
+        tmp_path / "s",
+        rules={"interval": 5},
+        local_id="x",
+        source="v.mp4",
+        classifier="fake",
+        zones=None,
+        live=False,
+    )
+    rec.save(np.zeros((8, 8, 3), np.uint8), datetime(2026, 11, 4, tzinfo=UTC))
+    rec.finish(truncated=True)
+    info = recording.read_info(tmp_path / "s")
+    assert info["truncated"] is True and info["readings"] == 1
 
 
 def test_a_run_that_never_read_a_frame_leaves_no_session(tmp_path, monkeypatch):

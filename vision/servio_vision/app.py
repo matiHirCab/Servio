@@ -352,7 +352,9 @@ def run(settings: Settings, limit: int | None = None) -> int:
             # antes de abrir la cámara: si no abre, también hay que enterarse
             monitor.start()
         frames = _open_frames(settings, anonymize, protect)
-        if is_session_source(settings):
+        if is_session_source(settings) and recording.frames_anonymized(
+            Path(settings.source)
+        ):
             logger.info(
                 "Privacidad: frames de una sesión grabada, ya sin caras según sesion.json"
             )
@@ -389,8 +391,8 @@ def run(settings: Settings, limit: int | None = None) -> int:
             monitor.stop()
         pipeline.close()
         if session is not None:
-            # con los avisos ya escritos (close los baja al log): la sesión queda
-            # completa, con sus eventos, aunque se haya cortado a mano
+            # cada evento ya bajó al disco al escribirse (EventLog, buffering=1): la
+            # sesión queda completa, con sus eventos, aunque se haya cortado a mano
             try:
                 session.finish(truncated=recorder is None)
             except OSError as e:

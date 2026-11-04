@@ -133,10 +133,13 @@ def redact_source(source: str) -> str:
     if "://" not in source:
         return source
     scheme, rest = source.split("://", 1)
-    if "@" in rest:
-        # todo lo que hay antes de la última `@` es usuario:clave, aunque la clave
-        # tenga `/` o `:` sin escapar (urlsplit se confunde con eso)
-        rest = rest.rsplit("@", 1)[1]
+    # usuario:clave va antes de la última `@` de la autoridad (hasta el primer `/` o
+    # `?`); una `@` en la query no cuenta. Aguanta `/` o `:` sin escapar en la clave
+    # porque la clave no puede tener `?` ni `@`
+    end = min((i for i in (rest.find("?"), len(rest)) if i >= 0), default=len(rest))
+    authority, tail = rest[:end], rest[end:]
+    if "@" in authority:
+        rest = authority.rsplit("@", 1)[1] + tail
     if "?" in rest:  # cámaras que llevan la clave en la query (?user=&pwd=, ?token=)
         path, query = rest.split("?", 1)
         pairs = []
@@ -153,8 +156,9 @@ def redact_source(source: str) -> str:
 def reset_replay(directory: Path) -> None:
     """Lo que dejó la reproducción anterior de la sesión (eventos y base): se borra
     antes de reproducir de nuevo, así no se mezclan."""
-    for name in (REPLAY_EVENTS_FILE, REPLAY_DB):
-        (directory / name).unlink(missing_ok=True)
+    (directory / REPLAY_EVENTS_FILE).unlink(missing_ok=True)
+    for path in directory.glob(REPLAY_DB + "*"):  # también -journal / -wal de SQLite
+        path.unlink(missing_ok=True)
 
 
 def ensure_free(directory: Path, log_path: Path | None = None) -> None:
