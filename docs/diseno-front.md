@@ -6,7 +6,7 @@ Las tres pantallas de Servio, para que el equipo las revise antes de implementar
 |---|---|---|---|
 | F-1 · Reconocimiento (el salón) | Mozo (principal), encargado, dueño | [prototipos/f1-reconocimiento.html](prototipos/f1-reconocimiento.html) · [publicado](https://claude.ai/artifact/ABtN5PdFmwAmZUZnKyWsAw) (es adonde va el botón «Ver el salón» del prototipo F-2 cuando no se abre desde el repo) | `vision/servio_vision/static/salon.html`, `/<local>/salon` (PR #64) |
 | F-2 · Dashboard | Encargado, dueño | [prototipos/f2-dashboard.html](prototipos/f2-dashboard.html) | `vision/servio_vision/static/dashboard.html`, `/<local>/dashboard` (rama `tomas/dashboards`, D-1) |
-| F-3 · Notificaciones | Mozo (reloj), encargado, dueño | pendiente | `vision/servio_vision/alerts/messages.py`, `vision/servio_vision/alerts/bot.py` (Telegram) |
+| F-3 · Notificaciones | Mozo (reloj), encargado, dueño | [prototipos/f3-notificaciones.html](prototipos/f3-notificaciones.html) | `vision/servio_vision/alerts/messages.py`, `vision/servio_vision/alerts/bot.py` (Telegram) |
 
 Los prototipos son documentos HTML completos (abrirlos desde el repo anda, también en un celular); para publicarlos como artifact, `vision/tools/publicar_prototipo.sh` les saca el esqueleto (la plataforma pone su propio `charset` y `viewport` con `viewport-fit=cover`, no se pierde el safe-area). **Ninguna imagen real de un local va al repo**: la «cámara» del prototipo F-1 es un SVG dibujado con las mismas coordenadas que los datos de ejemplo (sin imágenes en el repo, regla 6 de AGENTS.md).
 
@@ -95,3 +95,50 @@ Toda métrica tiene su lugar desde el primer día, pero **no se inventa**: si el
 Lo demás (colores, tipografía, tarjetas, tablas, barras, armado por rol, botón al salón) es lo que ya está en D-1 y el prototipo lo copia tal cual.
 
 **Hecho cuando** (de la tarjeta): diseño con las dos vistas, todas las métricas de M-1 ubicadas y revisado por el equipo. El prototipo cubre las 17 en la vista del dueño (10 en la del encargado); falta la revisión.
+
+## F-3 · Notificaciones: el aviso en la muñeca del mozo
+
+Prototipo: [prototipos/f3-notificaciones.html](prototipos/f3-notificaciones.html): los cuatro avisos como se ven en el reloj y en el celular, cómo se responde y qué le llega a cada rol. Lo que ya corre es C-5 (`vision/servio_vision/alerts/messages.py`, `feedback.py`, `bot.py`): los textos de los avisos y las respuestas con botones en Telegram.
+
+### Canal: Telegram ahora, WhatsApp cuando esté D-6
+
+- **Telegram** es lo que hay y desde junio de 2026 tiene app oficial en Apple Watch y Wear OS (fuentes en el prototipo): la notificación llega al reloj y se contesta desde ahí con las respuestas rápidas del reloj, dictado o teclado. **Los botones del mensaje no aparecen en la notificación del reloj**, solo en el celular: por eso el diseño responde con una palabra.
+- **WhatsApp** llega con D-6 (después del 25/11); sus notificaciones en el reloj se comportan igual (texto y respuesta rápida), así que el diseño no cambia de canal a canal.
+- **App propia con push**: no por ahora. Costaría una app en dos tiendas para resolver lo mismo que ya resuelven las respuestas rápidas.
+
+**Pendiente, a mano**: probar en un reloj real (Apple Watch o Wear OS) que el aviso llega y que la respuesta rápida vuelve al grupo. No se puede verificar sin el reloj; el diseño asume lo que documentan Telegram y las notas de prensa.
+
+### El aviso en el reloj: una línea y dos o tres respuestas
+
+La primera línea tiene que alcanzar leída de reojo: **mesa · qué** («Mesa 2 · retirar platos», «Mesa 1 · terminó», «Mesa 3 · sorrentinos sigue lleno»). Debajo, hace cuánto y el detalle. Las respuestas rápidas del reloj se configuran con las tres palabras: **Voy**, **Listo**, **No hacía falta** (con «sigue lleno», los motivos del plato). En el celular el mismo aviso trae los botones de hoy; el texto es el de `messages.py` (emoji + mozo + mesa), que ya empieza con lo importante.
+
+| Aviso | Reloj (línea 1 · línea 2) | Respuestas | A quién |
+|---|---|---|---|
+| Plato vacío | Mesa 2 · retirar platos · hace 4 min, Lomo con papas | Voy · Listo · No hacía falta | mozo de la mesa |
+| Mesa terminó | Mesa 1 · terminó · hace 1 min, 2 platos | Voy · Listo · No hacía falta | mozo de la mesa |
+| Sigue lleno | Mesa 3 · sorrentinos sigue lleno · hace 14 min, ¿está todo bien? | Voy · motivo (Frío, No le gustó, …) · Otro | mozo de la mesa |
+| Escalado | Mesa 2 · sin atender 9 min · Juan no respondió, 2 avisos | Voy · Visto | encargado |
+
+### Responder con una palabra: lo que le pedimos a C-5
+
+Hoy el bot solo toma un texto si es **respuesta a** su pregunta («Otra respuesta»). Para el reloj hace falta que entienda un mensaje suelto en el grupo:
+
+1. Normalizar (minúsculas, sin tildes ni puntuación) y reconocer: `voy | ya voy | dale | ok | 👍` → **Voy**; `listo | hecho | ya esta | ✅` → **Listo**; `no | no hacia falta | falso | ❌` → **No hacía falta**. Cualquier otro texto, solo si hay un «sigue lleno» abierto, es un **motivo**.
+2. Buscar el **aviso abierto más reciente de las mesas de ese mozo** (quién escribe ↔ mozo: hoy por nombre de Telegram, con R-1 por usuario). Si tiene más de uno abierto, el bot pregunta «¿Mesa 2 o Mesa 3?» y acepta el número. Si no tiene ninguno, contesta «No tenés avisos abiertos».
+3. **Voy** marca el aviso como tomado (`answered_by`, el campo que pide F-1 para el panel) y frena los recordatorios; **Listo** lo cierra y cuenta el tiempo; **No hacía falta** lo cierra como falso aviso (métrica de adopción); el motivo queda en `alert_feedback` como hoy.
+4. Responder citando el mensaje sigue andando igual que ahora.
+
+### Qué le llega a cada rol
+
+- **Mozo**: los avisos de **sus mesas** y sus recordatorios; nada de las mesas de otros. Hoy todos van al grupo con mención («🧹 Juan · Mesa 2: …»); con R-1, un chat privado por mozo, que es lo que hace que al reloj le llegue solo lo suyo.
+- **Encargado**: los **escalados**: un aviso sin respuesta después del segundo recordatorio, o una mesa que pasó el límite sin atender. Puede tomarlo con «Voy».
+- **Dueño**: el **resumen al cerrar** el servicio (lo que ya manda D-1 como `resumen_cierre`) y nada en el momento.
+
+### Qué cambia respecto de lo implementado (C-5)
+
+1. Respuestas con **una palabra suelta** (sin «responder a») y la elección del aviso por mozo (punto anterior).
+2. **Voy** como respuesta en todos los avisos, no solo motivos en «sigue lleno»; `answered_by` en el aviso.
+3. El **escalado al encargado** como aviso propio (hoy el recordatorio se repite al mismo grupo).
+4. Un chat por mozo (necesita R-1); hasta entonces, el grupo con mención.
+
+**Hecho cuando** (de la tarjeta): canal decidido ✔ (Telegram, WhatsApp con D-6), diseño de cada aviso con sus botones ✔, probado en un reloj real: pendiente, a mano.
