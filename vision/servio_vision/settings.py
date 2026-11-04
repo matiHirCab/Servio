@@ -80,6 +80,8 @@ HOUSE_KEYS = (
     "fake_mode",
     "fixture",
     "local_id",
+    "web_port",
+    "web_host",
 )
 
 # Secciones del toml que son de otro módulo y acá se dejan pasar sin mirar:
@@ -140,6 +142,12 @@ class Settings(BaseSettings):
     )
     """con qué nombre escribe esta casa en la base compartida (A-6)"""
     database_url: str | None = None  # Postgres compartido (A-6); sin esto, SQLite
+    web_port: int | None = Field(
+        None, ge=0, le=65535, validation_alias="servio_web_port"
+    )
+    """puerto de la vista del salón en vivo (salon_web.py); sin esto, no se sirve"""
+    web_host: str = Field("127.0.0.1", min_length=1, validation_alias="servio_web_host")
+    """dónde escucha la vista: 0.0.0.0 para abrirla desde otro equipo de la red"""
 
     # --- modelo de platos ---
     claude_provider: Provider = "cli"
