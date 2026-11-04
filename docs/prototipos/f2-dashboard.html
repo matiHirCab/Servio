@@ -78,7 +78,6 @@ tr.hot td{color:var(--tomato);font-weight:700}
 .vs .k{font-size:12px;opacity:.8}
 .vs .arrow{font-size:28px;opacity:.6}
 .empty{color:var(--muted);font-size:14px;margin:0}
-@media (prefers-reduced-motion:no-preference){.tile{transition:transform .2s}}
 </style>
 </head>
 <body>
@@ -142,10 +141,10 @@ function tile(cls,label,metric,...kids){ const t=el("section","tile "+(cls||""))
 // ---- una tarjeta por métrica (data-metric = id de 13-metricas.md) ----
 const respuesta = hero => { if(!M().tiempo_respuesta) return pending("Tiempo de respuesta","tiempo_respuesta"); const [n,u]=fmt.secs(M().tiempo_respuesta.segundos); return tile(hero?"navy":"","Tiempo de respuesta","tiempo_respuesta",num(n,u,hero?"huge":"big"),el("p","sub","del aviso a la respuesta del mozo")); };
 const sinAtender = () => { const v=M().mesa_terminada_sin_atender; if(!v) return pending("Sin atender","mesa_terminada_sin_atender"); return tile("tomato","Sin atender > "+v.limite_min+" min","mesa_terminada_sin_atender",num(fmt.pctNum(v.fuera_de_tiempo),"%"),el("p","sub","esperan "+fmt.dec(v.promedio)+" min en promedio · peor "+fmt.dec(v.peor))); };
-const olvidadas = () => { const v=M().mesas_olvidadas; if(!v) return pending("Mesas olvidadas","mesas_olvidadas"); const w=v.por_mozo.filter(x=>x.olvidadas>0); return tile("butter","Mesas olvidadas","mesas_olvidadas",num(String(v.olvidadas),"/"+v.avisos),el("p","sub",w.length===1?"todas de "+w[0].mozo:"de "+w.length+" mozos")); };
+const olvidadas = () => { const v=M().mesas_olvidadas; if(!v) return pending("Mesas olvidadas","mesas_olvidadas"); const w=v.por_mozo.filter(x=>x.olvidadas>0); return tile("butter","Mesas olvidadas","mesas_olvidadas",num(String(v.olvidadas),"/"+v.avisos),el("p","sub",w.length===0?"ninguna":w.length===1?"todas de "+w[0].mozo:"de "+w.length+" mozos")); };
 const vuelven = () => M().platos_que_vuelven&&M().platos_que_vuelven.total!=null ? tile("mint","Platos que vuelven","platos_que_vuelven",num(fmt.pctNum(M().platos_que_vuelven.total),"%"),el("p","sub","con comida en el plato")) : pending("Platos que vuelven","platos_que_vuelven");
 const rotacion = () => !M().rotacion ? pending("Rotación","rotacion") : tile("mint","Rotación","rotacion",num(fmt.dec(M().rotacion.mesas_por_servicio)),el("p","sub","mesas por servicio · "+M().rotacion.minutos+" min c/u"));
-const siguiente = () => { const v=M().espera_siguiente_plato||[]; const veces=v.reduce((s,r)=>s+r.veces,0); if(!veces) return pending("Siguiente plato","espera_siguiente_plato","Ninguna mesa esperó el siguiente plato todavía."); const min=v.reduce((s,r)=>s+r.minutos*r.veces,0)/veces; return tile("","Siguiente plato","espera_siguiente_plato",num(fmt.dec(min),"min"),el("p","sub","esperaron "+veces+" mesas · en vivo")); };
+const siguiente = () => { const v=M().espera_siguiente_plato||[]; const veces=v.reduce((s,r)=>s+r.veces,0); if(!veces) return pending("Siguiente plato","espera_siguiente_plato","Ninguna mesa esperó el siguiente plato todavía."); const known=v.filter(r=>r.minutos!=null), kv=known.reduce((s,r)=>s+r.veces,0); if(!kv) return pending("Siguiente plato","espera_siguiente_plato","Ninguna mesa esperó el siguiente plato todavía."); const min=known.reduce((s,r)=>s+r.minutos*r.veces,0)/kv; return tile("","Siguiente plato","espera_siguiente_plato",num(fmt.dec(min),"min"),el("p","sub","esperaron "+veces+" mesas · en vivo")); };
 function avisos(){ const list=M().avisos_abiertos||[]; const frag=document.createDocumentFragment(); const head=el("div","row"); head.style.marginTop="8px";
   const pill=el("span","pill",String(list.length)); pill.style.background=list.length?"var(--tomato)":"var(--mint)"; pill.style.color=list.length?"#fff":"var(--ink)";
   add(head,el("h3",null,"Avisos abiertos"),pill); head.dataset.metric="avisos_abiertos"; frag.appendChild(head);
@@ -172,7 +171,7 @@ function pico(){ const v=(M().horas_pico||[]).map(s=>({...s,tarde:s.tarde||0}));
   chart.setAttribute("role","img"); chart.setAttribute("aria-label",v.map(s=>s.franja+" "+fmt.pct(s.tarde)).join(", "));
   v.forEach(s=>{ const b=el("div",s.tarde>=max*.9?"hot":""); b.style.height=Math.round(s.tarde/max*100)+"%"; b.title=s.franja+" · "+s.avisos+" avisos · "+fmt.pct(s.tarde); chart.appendChild(b); ax.appendChild(el("span",null,s.franja)); });
   add(t,chart,ax,el("p","sub muted","Peor franja: "+top.franja+" ("+fmt.pct(top.tarde)+").")); return t; }
-function vuelvenLista(){ const lista=(M().platos_que_vuelven||{}).por_plato||[]; if(!lista.length) return pending("Platos que vuelven","platos_que_vuelven","Ningún plato volvió lleno todavía."); const t=tile("butter","Platos que vuelven","platos_que_vuelven"); lista.slice(0,3).forEach(p=>{ const r=el("div","row"); const txt=el("p","sub"); add(txt,el("b",null,p.plato),el("br"),document.createTextNode("«"+p.motivo+"»")); add(r,txt,num(fmt.pctNum(p.vuelve),"%")); t.appendChild(r); }); return t; }
+function vuelvenLista(){ const lista=(M().platos_que_vuelven||{}).por_plato||[]; if(!lista.length) return pending("Platos que vuelven","platos_que_vuelven","Ningún plato volvió lleno todavía."); const t=tile("butter","Platos que vuelven","platos_que_vuelven"); lista.slice(0,3).forEach(p=>{ const r=el("div","row"); const txt=el("p","sub"); add(txt,el("b",null,p.plato),...(p.motivo&&p.motivo!=="-"?[el("br"),document.createTextNode("«"+p.motivo+"»")]:[])); add(r,txt,num(fmt.pctNum(p.vuelve),"%")); t.appendChild(r); }); return t; }
 const resumen = () => tile("","Resumen al cerrar","resumen_cierre",el("p","sub muted","Te llega por Telegram cuando cierra el servicio: mesas, tiempos, avisos y platos con problemas."));
 function desperdicio(){ const v=M().desperdicio||{}; const top=(v.por_plato||[])[0]; if(!top||!v.total) return pending("Vuelve a la cocina","desperdicio","Se calcula con el ticket promedio cargado en Configuración y platos que volvieron."); const n=num(fmt.pesos(v.total)); n.style.fontSize="34px"; return tile("butter","Vuelve a la cocina","desperdicio",n,el("p","sub",fmt.pesos(v.por_servicio)+" por servicio · "+Math.round(top.pesos/v.total*100)+" % es "+top.plato)); }
 const adopcion = () => { const v=M().adopcion; if(!v||!v.avisos) return pending("Los mozos responden","adopcion","Todavía no hubo avisos."); return tile("","Los mozos responden","adopcion",num(String(Math.round(v.respondidos/v.avisos*100)),"%"),el("p","sub",v.no_hacia_falta+" «no hacía falta»")); };
@@ -187,20 +186,21 @@ function carta(){ const back=M().platos_que_vuelven?M().platos_que_vuelven.por_p
   const w=back[0]; const diag=w?w.plato+" es el que más vuelve ("+fmt.pct(w.vuelve)+")"+(w.motivo?": «"+w.motivo+"» es lo que más responden.":"."):null;  // en producción la escribe el servidor
   add(t,add(wrap,table),diag?el("p","sub muted",diag):null); return t; }
 function antesDespues(){ const v=M().antes_despues; if(!v) return pending("Antes / después con Servio","antes_despues","Necesita servicios en modo sombra (sin avisos) y servicios con avisos."); const t=tile("navy","Antes / después con Servio","antes_despues");
-  const title=el("h3",null,"Tus mesas esperan "+fmt.dec(v.antes-v.despues)+" min menos"); title.style.fontSize="30px"; title.style.lineHeight="1.05";
+  const d=v.antes-v.despues; const title=el("h3",null,d>0?"Tus mesas esperan "+fmt.dec(d)+" min menos":d<0?"Tus mesas esperan "+fmt.dec(-d)+" min más":"Tus mesas esperan lo mismo"); title.style.fontSize="30px"; title.style.lineHeight="1.05";
   const vs=el("div","vs"); add(vs, add(el("div"),num(fmt.dec(v.antes),"min","n"),el("div","k","antes · modo sombra")), el("span","arrow","→"), add(el("div"),num(fmt.dec(v.despues),"min","n"),el("div","k","con avisos")));
   return add(t,title,vs,el("p","sub",v.metrica+" · "+v.servicios+" servicios de cada lado · "+fmt.dec(v.mesas_mas)+" mesas más por servicio")); }
 function historico(){ const v=M().historico; if(!v||v.valores.length<2) return pending("Semana a semana","historico","Se muestra a partir del día 7, cuando hay dos semanas que comparar."); const t=el("section","tile"); t.setAttribute("aria-label","Semana a semana"); t.dataset.metric="historico";
   add(t,add(el("div","row"),el("h3",null,"Semana a semana"),el("span","sub muted",v.metrica)));
   const chart=el("div","chart"), ax=el("div","ax"); const max=Math.max(...v.valores,.01); chart.setAttribute("role","img"); chart.setAttribute("aria-label",v.semanas.map((s,i)=>s+" "+fmt.pct(v.valores[i])).join(", "));
   v.valores.forEach((x,i)=>{ const b=el("div",i===v.valores.length-1?"good":""); b.style.height=Math.round(x/max*100)+"%"; b.title=v.semanas[i]+" · "+fmt.pct(x); chart.appendChild(b); ax.appendChild(el("span",null,v.semanas[i])); });
-  add(t,chart,ax,el("p","sub muted","De "+fmt.pct(v.valores[0])+" a "+fmt.pct(v.valores.at(-1))+" en 8 semanas. Se muestra a partir del día 7.")); return t; }
-function costos(){ const c=M().costos_y_configuracion; if(!c) return pending("Costo de Servio","costos_y_configuracion"); const t=tile("sky","Costo de Servio","costos_y_configuracion",num(fmt.pesos(c.modelo_mes+c.abono_mes),"/mes"));
-  return add(t,el("p","sub","abono "+fmt.pesos(c.abono_mes)+" + modelo "+fmt.pesos(c.modelo_mes)+" ("+fmt.pesos(c.por_mesa_hora)+" por mesa y hora, "+c.horas_mes+" h abiertas)")); }
-function config(){ const c=DATA.configuracion, u=c.umbrales; const frag=document.createDocumentFragment();
+  add(t,chart,ax,el("p","sub muted","De "+fmt.pct(v.valores[0])+" a "+fmt.pct(v.valores[v.valores.length-1])+" en "+v.valores.length+" semanas.")); return t; }
+function costos(){ const c=M().costos_y_configuracion; if(!c||c.abono_mes==null) return pending("Costo de Servio","costos_y_configuracion"); const modelo=c.modelo_mes==null?null:c.modelo_mes; const t=tile("sky","Costo de Servio","costos_y_configuracion",num(fmt.pesos(c.abono_mes+(modelo||0)),"/mes"));
+  const pmh=c.por_mesa_hora==null?null:"$"+c.por_mesa_hora.toLocaleString("es-UY",{maximumFractionDigits:1});
+  return add(t,el("p","sub","abono "+fmt.pesos(c.abono_mes)+(modelo==null?" · el costo del modelo llega con C-2":" + modelo "+fmt.pesos(modelo)+(pmh?" ("+pmh+" por mesa y hora, "+c.horas_mes+" h abiertas)":"")))); }
+function config(){ const c=DATA.configuracion; if(!c) return pending("Configuración","costos_y_configuracion","Solo la ve quien puede abrir Configuración."); const u=c.umbrales; const frag=document.createDocumentFragment();
   const local=el("section","tile"); local.dataset.metric="costos_y_configuracion"; add(local,el("h3",null,"Local · "+DATA.local),
     add(el("div","li"),el("span",null,"Mesa sin atender"),el("span",null,u.mesa_sin_atender_min+" min")),
-    add(el("div","li"),el("span",null,"Plato lleno sin respuesta"),el("span",null,Math.round(u.plato_lleno_sin_respuesta_s/60)+" min")),
+    add(el("div","li"),el("span",null,"Plato lleno sin respuesta"),el("span",null,fmt.dec(u.plato_lleno_sin_respuesta_s/60)+" min")),
     add(el("div","li"),el("span",null,"Franja de horas pico"),el("span",null,u.franja_horas_pico_min+" min")),
     add(el("div","li"),el("span",null,"Ticket promedio (para el ROI)"),el("span","muted","a cargar")));
   const team=el("section","tile"); team.appendChild(el("h3",null,"Roles y usuarios"));
@@ -209,16 +209,16 @@ function config(){ const c=DATA.configuracion, u=c.umbrales; const frag=document
   return add(frag,local,team); }
 
 // ---- armado por rol ----
-function header(rol){ const h=el("header","row"); const left=el("div"); left.style.display="flex"; left.style.flexDirection="column";
+function header(){ const rol=DATA.nombre_rol.toLowerCase(); const h=el("header","row"); const left=el("div"); left.style.display="flex"; left.style.flexDirection="column";
   add(left,el("span","brand","servio"),el("span","sub muted",DATA.local+" · "+rol)); const when=el("span","pill","Actualizado "+DATA.actualizado); return add(h,left,when); }
 function salonButton(){ if(!DATA.vistas.includes("reconocimiento")) return null; const a=el("a","btn"); a.href=location.protocol==="file:"?"f1-reconocimiento.html":"https://claude.ai/artifact/ABtN5PdFmwAmZUZnKyWsAw"; a.title="En producción: /<local>/salon"; a.appendChild(document.createTextNode("Ver el salón en vivo")); const i=el("i"); i.innerHTML='<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6"/></svg>'; return add(a,i); }
 const turno = withTiles => [withTiles?add(el("div","two"),sinAtender(),olvidadas()):null, avisos(), mozos(), add(el("div","two"),rotacion(),siguiente()), pico(), withTiles?vuelvenLista():null, resumen()];
-function renderEncargado(){ add(app,header("encargado"),salonButton(),respuesta(true),...turno(true)); }
+function renderEncargado(){ DATA.nombre_rol="Encargado"; add(app,header(),salonButton(),respuesta(true),...turno(true)); }
 function renderDueno(){
   const tabs=el("nav","tabs"); tabs.setAttribute("aria-label","Secciones");
   [["resultados","Resultados"],["carta","Carta"],["turno","Turno"],["config","Config"]].forEach(([id,label],i)=>{ const a=el("a","tab"+(i===0?" on":""),label); a.href="#"+id; a.addEventListener("click",()=>{tabs.querySelectorAll(".tab").forEach(x=>x.classList.remove("on")); a.classList.add("on");}); tabs.appendChild(a); });
   const h=(id,txt)=>{ const n=el("h2",null,txt); n.id=id; return n; };
-  add(app,header("dueño"),tabs,salonButton(),
+  DATA.nombre_rol="Dueño"; add(app,header(),tabs,salonButton(),
     h("resultados","Resultados"), antesDespues(),
     add(el("div","two"),respuesta(false),sinAtender(),olvidadas(),rotacion(),vuelven()),
     historico(), add(el("div","two"),desperdicio(),adopcion()),
