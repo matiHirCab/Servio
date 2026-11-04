@@ -5,8 +5,9 @@ Una **sesión** es una carpeta con:
 - un JPEG por lectura, con su hora en el nombre (`20261028T203015.250000Z.jpg`), a la
   cadencia del loop y no el video entero. Los frames llegan ya anonimizados de
   `capture.py` (C-3): las grabaciones tampoco tienen caras;
-- `sesion.json`: cuándo empezó, la cadencia, las zonas de las mesas si eran fijas, el
-  local y con qué clasificador se grabó;
+- `sesion.json`: cuándo empezó, las reglas con las que corrió (cadencia, umbrales de
+  los avisos, suavizado), las zonas de las mesas si eran fijas, el local y con qué
+  clasificador se grabó;
 - `eventos.jsonl`: las observaciones y avisos de esa corrida (la parte del log de
   `alerts` que va de su `run_started` al final).
 
@@ -14,8 +15,9 @@ Solo con `--record` queda alguna imagen en disco. Las sesiones van a la carpeta
 compartida del equipo, nunca al repo (`vision/out/` está ignorado).
 
 Reproducir: `main.py --source DIR --classifier hybrid` lee los frames con sus horas
-reales (`capture.read_session`), usa la misma cadencia y las mismas zonas, y los
-avisos se comparan con los grabados con `tools/comparar_sesion.py DIR`.
+reales (`capture.read_session`), usa las mismas reglas y las mismas zonas
+(`app.session_settings`), y los avisos se comparan con los grabados con
+`tools/comparar_sesion.py DIR`.
 """
 
 import json
@@ -25,6 +27,7 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
+from pydantic import ValidationError
 
 from servio_vision.zones import Zones, to_jpeg
 
@@ -60,17 +63,26 @@ class SessionRecorder(FrameRecorder):
         self,
         directory: Path,
         *,
-        interval: float,
+        rules: dict[str, Any],
         local_id: str,
         source: str,
         classifier: str,
         zones: Zones | None,
     ) -> None:
+        """`rules`: la configuración que decide los avisos (cadencia, umbrales,
+        suavizado), para reproducir con la misma. `OSError` si la carpeta ya tiene
+        una sesión: dos grabaciones mezcladas no se pueden reproducir."""
         super().__init__(directory)
+        if (directory / SESSION_FILE).exists() or any(directory.glob("*.jpg")):
+            raise FileExistsError(
+                f"{directory} ya tiene una sesión grabada: usá otra carpeta para no"
+                " mezclar dos grabaciones"
+            )
         self.info: dict[str, Any] = {
             "version": 1,
             "started_at": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
-            "interval": interval,
+            "interval": rules.get("interval"),
+            "rules": rules,
             "local_id": local_id,
             "source": source,
             "classifier": classifier,
@@ -128,7 +140,12 @@ def read_info(directory: Path) -> dict[str, Any]:
 def session_zones(directory: Path) -> Zones | None:
     """Las zonas fijas con las que se grabó, o `None` si se detectaban solas."""
     raw = read_info(directory).get("zones")
-    return Zones.model_validate(raw) if raw else None
+    if not raw:
+        return None
+    try:
+        return Zones.model_validate(raw)
+    except ValidationError as e:
+        raise OSError(f"{directory / SESSION_FILE}: zonas inválidas: {e}") from e
 
 
 def session_frames(directory: Path) -> list[tuple[Path, datetime]]:
@@ -152,9 +169,17 @@ def last_run_lines(log_path: Path) -> list[str]:
     lines = log_path.read_text(encoding="utf-8").splitlines()
     start = 0
     for i, line in enumerate(lines):
-        if line.startswith('{"event": "run_started"'):
+        if '"run_started"' in line and _event(line) == "run_started":
             start = i
     return [line for line in lines[start:] if line.strip()]
+
+
+def _event(line: str) -> str | None:
+    try:
+        data = json.loads(line)
+    except ValueError:
+        return None
+    return data.get("event") if isinstance(data, dict) else None
 
 
 def alert_signature(lines: list[str]) -> list[tuple[str, str, str, str]]:

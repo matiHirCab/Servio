@@ -12,6 +12,7 @@ Sale con 0 si coinciden, 1 si no, 2 si falta algo.
 
 import argparse
 import sys
+from collections import Counter
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -26,10 +27,11 @@ def compare(recorded: list[str], replayed: list[str]) -> list[str]:
     if a == b:
         return []
     found = []
-    for event in [x for x in a if x not in b]:
-        found.append(f"grabado y no reproducido: {' · '.join(event)}")
-    for event in [x for x in b if x not in a]:
-        found.append(f"reproducido y no grabado: {' · '.join(event)}")
+    ca, cb = Counter(a), Counter(b)  # con repetidos: uno de más también es diferencia
+    for event, n in sorted((ca - cb).items()):
+        found.extend([f"grabado y no reproducido: {' · '.join(event)}"] * n)
+    for event, n in sorted((cb - ca).items()):
+        found.extend([f"reproducido y no grabado: {' · '.join(event)}"] * n)
     if not found:  # mismos avisos en otro orden
         found.append("los mismos avisos, en otro orden")
     return found

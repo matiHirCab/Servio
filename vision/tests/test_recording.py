@@ -1,9 +1,9 @@
 """Grabar y reproducir sesiones (B-1): --record deja una sesión completa y
---source DIR la reproduce con las mismas horas, la misma cadencia y los mismos avisos."""
+--source DIR la reproduce con las mismas horas, las mismas reglas y los mismos avisos."""
 
 import json
 import sys
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta, timezone
 from pathlib import Path
 
 import cv2
@@ -11,8 +11,9 @@ import numpy as np
 import pytest
 
 import main as loop
-from servio_vision import alerts, recording
+from servio_vision import alerts, app, cli, recording
 from servio_vision.capture import open_source
+from servio_vision.recording import FrameRecorder, frame_name
 from servio_vision.zones import TableZone, Zones, save_zones
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
@@ -43,7 +44,7 @@ def _run(tmp_path, monkeypatch, log: Path, *args) -> int:
     monkeypatch.delenv("DEMO_MODE", raising=False)
     monkeypatch.setattr(alerts, "DEFAULT_LOG", log)
     monkeypatch.setattr(alerts, "_processor", None)
-    code = loop.main(["--no-telegram", "--demo", *args])
+    code = loop.main(["--no-telegram", *args])
     if alerts._processor is not None:
         alerts._processor.close()
     return code
@@ -70,6 +71,7 @@ def test_record_leaves_a_complete_session_and_replay_gives_the_same_alerts(
         "fake",
         "--interval",
         "30",
+        "--demo",
         "--record",
         str(session),
     )
@@ -80,12 +82,14 @@ def test_record_leaves_a_complete_session_and_replay_gives_the_same_alerts(
     assert all(ts.tzinfo is UTC for _, ts in frames)
     info = recording.read_info(session)
     assert info["interval"] == 30 and info["readings"] == 14
+    assert info["rules"]["demo"] is True and info["rules"]["finished_after"] > 0
     assert info["zones"]["tables"][0]["table_id"] == "T1" and "ended_at" in info
     recorded = (session / recording.EVENTS_FILE).read_text("utf-8").splitlines()
     assert recorded[0].startswith('{"event": "run_started"')
     assert recording.alert_signature(recorded)  # con --demo el fake dispara avisos
 
-    # reproducir: sin --zones ni --interval, salen de la sesión
+    # reproducir: sin --zones, --interval ni --demo, salen de la sesión (con los
+    # umbrales de producción los avisos no coincidirían)
     replay_log = tmp_path / "replay.jsonl"
     code = _run(
         tmp_path,
@@ -99,6 +103,63 @@ def test_record_leaves_a_complete_session_and_replay_gives_the_same_alerts(
     assert code == 0
     assert comparar_sesion.compare(recorded, recording.last_run_lines(replay_log)) == []
     assert comparar_sesion.main([str(session), "--log", str(replay_log)]) == 0
+    # la misma carpeta no se graba dos veces: quedarían dos sesiones mezcladas
+    code = _run(
+        tmp_path,
+        monkeypatch,
+        replay_log,
+        "--source",
+        str(session),
+        "--record",
+        str(session),
+    )
+    assert code == 2 and recording.read_info(session)["readings"] == 14
+
+
+def _settings(*flags):
+    return cli.settings_from_args(cli.build_parser().parse_args(list(flags)))
+
+
+def test_session_settings_restore_the_recorded_rules(tmp_path):
+    session = tmp_path / "s"
+    session.mkdir()
+    (session / recording.SESSION_FILE).write_text(
+        json.dumps(
+            {"rules": {"interval": 20, "demo": True, "finished_after": 90, "otra": 1}}
+        ),
+        "utf-8",
+    )
+    settings = _settings("--source", str(session), "--interval", "5")
+    restored = app.session_settings(settings)
+    assert (restored.interval, restored.demo, restored.finished_after) == (
+        20.0,
+        True,
+        90,
+    )
+    assert (
+        app.session_settings(_settings("--source", "v.mp4", "--interval", "5")).interval
+        == 5
+    )
+    (session / recording.SESSION_FILE).write_text('{"rules": {"demo": true}}', "utf-8")
+    with pytest.raises(OSError, match="sin cadencia"):
+        app.session_settings(settings)
+    (session / recording.SESSION_FILE).write_text(
+        '{"interval": 10, "zones": {"x": 1}}', "utf-8"
+    )
+    with pytest.raises(OSError, match="zonas inválidas"):
+        recording.session_zones(session)
+
+
+def test_last_run_lines_parse_the_events(tmp_path):
+    log = tmp_path / "eventos.jsonl"
+    old = json.dumps({"event": "run_started", "n": 1})
+    # un formato distinto (claves en otro orden, sin espacios) sigue marcando la corrida
+    new = json.dumps({"n": 2, "event": "run_started"}, separators=(",", ":"))
+    obs = json.dumps({"event": "observation", "table_id": "T1"})
+    lines = [old, obs, "{ roto", new, obs]
+    log.write_text("".join(line + "\n" for line in lines), "utf-8")
+    assert recording.last_run_lines(log) == [new, obs]
+    assert recording.last_run_lines(tmp_path / "no-existe.jsonl") == []
 
 
 def test_session_frames_keep_their_real_times(tmp_path):
@@ -131,6 +192,10 @@ def test_compare_explains_differences():
     assert comparar_sesion.compare([a, b], [b, a]) == [
         "los mismos avisos, en otro orden"
     ]
+    # uno de más de un lado no es "otro orden"
+    assert comparar_sesion.compare([a, a, b], [a, b]) == [
+        "grabado y no reproducido: alert_opened · mesa_terminada · T1 · t"
+    ]
 
 
 def test_session_without_frames_or_info_explains(tmp_path):
@@ -142,3 +207,49 @@ def test_session_without_frames_or_info_explains(tmp_path):
     (empty / recording.SESSION_FILE).write_text("{ roto", "utf-8")
     with pytest.raises(OSError, match="no se puede leer"):
         recording.read_info(empty)
+
+
+# ---- FrameRecorder, la base de la sesión ----
+
+
+def test_frame_name_is_utc_with_microseconds():
+    ts = datetime(2026, 10, 28, 20, 30, 15, 250000, tzinfo=UTC)
+    assert frame_name(ts) == "20261028T203015.250000Z.jpg"
+    assert recording.frame_time(Path(frame_name(ts))) == ts
+
+
+def test_frame_name_converts_other_timezones_to_utc():
+    ts = datetime(2026, 10, 28, 17, 30, 15, tzinfo=timezone(timedelta(hours=-3)))
+    assert frame_name(ts) == "20261028T203015.000000Z.jpg"
+
+
+def test_frame_names_sort_chronologically():
+    a = datetime(2026, 1, 1, 0, 0, 1, tzinfo=UTC)
+    b = a + timedelta(microseconds=1)
+    assert frame_name(a) < frame_name(b)
+
+
+def test_recorder_creates_the_directory_and_saves_jpegs(tmp_path):
+    directory = tmp_path / "grabación" / "sesión"  # tildes y eñes en la ruta (Windows)
+    recorder = FrameRecorder(directory)
+    frame = np.zeros((8, 8, 3), dtype=np.uint8)
+
+    path = recorder.save(frame, datetime(2026, 10, 28, tzinfo=UTC))
+
+    assert directory.is_dir()
+    assert path.parent == directory
+    assert path.read_bytes()[:2] == b"\xff\xd8"  # cabecera JPEG
+    assert recorder.saved == 1
+
+
+def test_two_readings_do_not_share_a_file(tmp_path):
+    recorder = FrameRecorder(tmp_path)
+    frame = np.zeros((8, 8, 3), dtype=np.uint8)
+    t = datetime(2026, 10, 28, tzinfo=UTC)
+
+    first = recorder.save(frame, t)
+    second = recorder.save(frame, t + timedelta(seconds=30))
+
+    assert first != second
+    assert recorder.saved == 2
+    assert len(list(tmp_path.glob("*.jpg"))) == 2

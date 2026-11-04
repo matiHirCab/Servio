@@ -282,20 +282,27 @@ def run(settings: Settings, limit: int | None = None) -> int:
     if not require_source(settings):
         return 2
     assert settings.source is not None  # lo garantiza `require_source`
-    settings = session_settings(settings)  # una sesión grabada: su cadencia
+    try:
+        settings = session_settings(settings)  # una sesión grabada: sus reglas
+    except OSError as e:
+        logger.error("%s", e)
+        return 2
     pipeline = build_pipeline(settings)
     if pipeline is None:
         return 2
     readings = 0
     monitor = build_health_monitor(settings)
+    # `session` no se suelta aunque falle un frame: la sesión se cierra igual, con lo
+    # que haya; `recorder` es el que graba y se apaga al primer error de disco
+    session: SessionRecorder | None = None
     try:
         # La carpeta de grabación primero: si no se puede crear, la cámara todavía
         # no se abrió. Después la fuente, que sale de open_source con las caras
         # difuminadas (C-3): nada de lo que sigue, tampoco la grabación, ve una cara.
-        recorder = (
+        recorder = session = (
             SessionRecorder(
                 settings.record,
-                interval=settings.interval,
+                rules=session_rules(settings),
                 local_id=settings.local_id,
                 source=settings.source,
                 classifier=settings.classifier,
@@ -351,10 +358,13 @@ def run(settings: Settings, limit: int | None = None) -> int:
         if monitor is not None:
             monitor.stop()
         pipeline.close()
-        if isinstance(recorder, SessionRecorder):
+        if session is not None:
             # con los avisos ya escritos (close los baja al log): la sesión queda
             # completa, con sus eventos, aunque se haya cortado a mano
-            recorder.finish(alerts.DEFAULT_LOG)
+            try:
+                session.finish(alerts.DEFAULT_LOG)
+            except OSError as e:
+                logger.error("No se pudo cerrar la sesión grabada: %s", e)
     logger.info("%d lecturas", readings)
     return 0 if readings else 1
 
@@ -404,16 +414,50 @@ def _open_frames(
             time.sleep(wait)
 
 
+# Lo que decide los avisos y va a `sesion.json` para reproducir con lo mismo.
+SESSION_RULES = (
+    "interval",
+    "demo",
+    "alert_t1",
+    "alert_t2",
+    "alert_reminder",
+    "finished_after",
+    "smooth_readings",
+    "smooth_hard_readings",
+    "smooth_min_confidence",
+)
+
+
+def session_rules(settings: Settings) -> dict[str, Any]:
+    """Las reglas de esta corrida, resueltas (`finished_after` ya en segundos)."""
+    rules = {name: getattr(settings, name) for name in SESSION_RULES}
+    rules["finished_after"] = finished_after_seconds(settings)
+    return rules
+
+
 def session_settings(settings: Settings) -> Settings:
-    """Si la fuente es una sesión grabada (B-1), la cadencia es la grabada: con otra,
-    los umbrales de los avisos no coinciden y la reproducción no reproduce nada."""
+    """Si la fuente es una sesión grabada (B-1), se reproduce con las reglas grabadas
+    (cadencia, umbrales, suavizado): con otras, los avisos no coinciden y la
+    reproducción no reproduce nada. Para probar otras reglas, editar `sesion.json`.
+    `OSError` si la sesión no se puede leer."""
     if settings.source is None or not recording.is_session(Path(settings.source)):
         return settings
     info = recording.read_info(Path(settings.source))
-    interval = float(info.get("interval", settings.interval))
-    if interval != settings.interval:
-        logger.info("Sesión grabada cada %g s: se reproduce con esa cadencia", interval)
-    return settings.model_copy(update={"interval": interval})
+    rules = info.get("rules") or {"interval": info.get("interval")}
+    if not isinstance(rules, dict):
+        raise OSError(f"{settings.source}: `rules` de sesion.json no es un objeto")
+    update = {k: v for k, v in rules.items() if k in SESSION_RULES and v is not None}
+    try:
+        update["interval"] = float(update["interval"])
+    except (KeyError, TypeError, ValueError) as e:
+        raise OSError(f"{settings.source}: sesion.json sin cadencia válida") from e
+    changed = {k: v for k, v in update.items() if getattr(settings, k) != v}
+    if changed:
+        logger.info(
+            "Sesión grabada: se reproduce con sus reglas (%s)",
+            ", ".join(f"{k}={v}" for k, v in changed.items()),
+        )
+    return settings.model_copy(update=update)
 
 
 def _record(recorder: FrameRecorder, frame, ts) -> FrameRecorder | None:
