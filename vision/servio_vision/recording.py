@@ -25,6 +25,7 @@ import logging
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit, urlunsplit
 
 import numpy as np
 from pydantic import ValidationError
@@ -37,6 +38,7 @@ logger = logging.getLogger(__name__)
 JPEG_QUALITY = 90  # más que los recortes (85): es lo que se guarda para reproducir
 SESSION_FILE = "sesion.json"
 EVENTS_FILE = "eventos.jsonl"
+REPLAY_EVENTS_FILE = "reproduccion.jsonl"  # los eventos de la última reproducción
 FRAME_FORMAT = "%Y%m%dT%H%M%S.%fZ"
 ALERT_EVENTS = ("alert_opened", "alert_reminder", "alert_resolved")
 
@@ -78,15 +80,14 @@ class SessionRecorder(FrameRecorder):
         retomar avisos abiertos de la base; la reproducción arranca de cero).
         `OSError` si la carpeta ya tiene una sesión: dos grabaciones mezcladas no se
         pueden reproducir."""
-        ensure_free(directory)
-        super().__init__(directory)
+        super().__init__(directory)  # `run` ya verificó la carpeta (ensure_free)
         self.info: dict[str, Any] = {
             "version": 1,
             "started_at": iso(datetime.now(UTC)),
             "rules": rules,
             "live": live,
             "local_id": local_id,
-            "source": source,
+            "source": redact_source(source),  # sin usuario ni clave de la cámara
             "classifier": classifier,
             "anonymized": True,  # los frames llegan de capture.py ya sin caras (C-3)
             "zones": zones.model_dump(mode="json") if zones is not None else None,
@@ -127,8 +128,26 @@ class SessionRecorder(FrameRecorder):
         return self.saved
 
 
-def ensure_free(directory: Path) -> None:
-    """`FileExistsError` si la carpeta ya tiene una sesión grabada."""
+def redact_source(source: str) -> str:
+    """`rtsp://user:clave@cam/...` → `rtsp://cam/...`: la sesión va a la carpeta
+    compartida; la clave de la cámara no."""
+    if "://" not in source:
+        return source
+    parts = urlsplit(source)
+    if "@" not in parts.netloc:
+        return source
+    host = parts.netloc.rsplit("@", 1)[1]
+    return urlunsplit(parts._replace(netloc=host))
+
+
+def ensure_free(directory: Path, log_path: Path | None = None) -> None:
+    """`FileExistsError` si la carpeta ya tiene una sesión grabada, o es la del log
+    de `alerts` (la copia de los eventos pisaría el log compartido)."""
+    if log_path is not None and directory.resolve() == log_path.parent.resolve():
+        raise FileExistsError(
+            f"{directory} es la carpeta del log de avisos: grabá en otra"
+            " (por ejemplo out/sesiones/<nombre>)"
+        )
     if directory.is_dir() and (
         (directory / SESSION_FILE).exists() or any(directory.glob("*.jpg"))
     ):
@@ -156,9 +175,12 @@ def is_session(path: Path) -> bool:
 def read_info(directory: Path) -> dict[str, Any]:
     """`sesion.json` de una sesión grabada."""
     try:
-        return json.loads((directory / SESSION_FILE).read_text(encoding="utf-8"))
+        info = json.loads((directory / SESSION_FILE).read_text(encoding="utf-8"))
     except (OSError, ValueError) as e:
         raise OSError(f"{directory / SESSION_FILE} no se puede leer: {e}") from e
+    if not isinstance(info, dict):
+        raise OSError(f"{directory / SESSION_FILE} no es un objeto JSON")
+    return info
 
 
 def frames_anonymized(directory: Path) -> bool:
@@ -225,6 +247,10 @@ def alert_signature(lines: list[str]) -> list[tuple[str, str, str, str]]:
             data = json.loads(line)
         except ValueError:
             continue
-        if data.get("event") in ALERT_EVENTS:
+        if not isinstance(data, dict) or data.get("event") not in ALERT_EVENTS:
+            continue
+        try:
             found.append((data["event"], data["type"], data["table_id"], data["ts"]))
+        except KeyError as e:
+            logger.warning("Aviso sin %s en el log, lo salteo: %s", e, line[:80])
     return found

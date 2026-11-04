@@ -1,8 +1,9 @@
 """¿La reproducción de una sesión dio los mismos avisos que la corrida en vivo? (B-1)
 
-Compara los avisos grabados en `DIR/eventos.jsonl` con los de la última corrida del
-log de `alerts` (`out/eventos.jsonl`, la reproducción recién hecha). Un aviso es
-(evento, tipo, mesa, ts); coinciden si la lista es la misma.
+Compara los avisos grabados en `DIR/eventos.jsonl` con los de la reproducción
+(`DIR/reproduccion.jsonl`, que deja `main.py --source DIR`; con `--log` se compara
+contra la última corrida de otro log). Un aviso es (evento, tipo, mesa, ts);
+coinciden si la lista es la misma.
 
     python main.py --source out/sesiones/cena-jueves --classifier hybrid --no-telegram
     python tools/comparar_sesion.py out/sesiones/cena-jueves
@@ -18,7 +19,6 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from servio_vision import recording
-from servio_vision.alerts import DEFAULT_LOG
 
 Signature = tuple[str, str, str, str]
 
@@ -48,15 +48,23 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("session", type=Path, help="carpeta de la sesión grabada")
     parser.add_argument(
-        "--log", type=Path, default=DEFAULT_LOG, help="log de la reproducción"
+        "--log",
+        type=Path,
+        default=None,
+        help="otro log de alerts: se toma su última corrida (sin esto, DIR/reproduccion.jsonl)",
     )
     args = parser.parse_args(argv)
     events = args.session / recording.EVENTS_FILE
     if not events.exists():
         print(f"No existe {events}: ¿la sesión se grabó con --record?", file=sys.stderr)
         return 2
-    if not args.log.exists():
-        print(f"No existe {args.log}: ¿ya reprodujiste la sesión?", file=sys.stderr)
+    log = (
+        args.log
+        if args.log is not None
+        else args.session / recording.REPLAY_EVENTS_FILE
+    )
+    if not log.exists():
+        print(f"No existe {log}: ¿ya reprodujiste la sesión?", file=sys.stderr)
         return 2
     try:
         info = recording.read_info(args.session)
@@ -77,7 +85,7 @@ def main(argv: list[str] | None = None) -> int:
     recorded = recording.alert_signature(
         [line for line in events.read_text("utf-8").splitlines() if line.strip()]
     )
-    replayed = recording.alert_signature(recording.last_run_lines(args.log))
+    replayed = recording.alert_signature(recording.last_run_lines(log))
     diffs = compare_signatures(recorded, replayed)
     total = len(recorded)
     if not diffs:

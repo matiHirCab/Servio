@@ -103,7 +103,7 @@ Rutas: `/<local>/salon` (página), `/<local>/salon/estado` (la última foto en J
 ```bash
 python main.py --config config/casa-jessica.toml --record out/sesiones/cena-jueves   # graba
 python main.py --source out/sesiones/cena-jueves --classifier hybrid --no-telegram      # reproduce
-python tools/comparar_sesion.py out/sesiones/cena-jueves                                # ¿mismos avisos?
+python tools/comparar_sesion.py out/sesiones/cena-jueves                                # ¿mismos avisos? (lee DIR/reproduccion.jsonl)
 ```
 
 `--record DIR` deja una **sesión**: un JPEG por lectura con su hora en el nombre (ya con las caras difuminadas, C-3), `sesion.json` (las reglas de la corrida: cadencia, umbrales, suavizado; zonas si eran fijas; local; clasificador) y `eventos.jsonl` con las observaciones y avisos de esa corrida. Sin `--record` no queda ninguna imagen. Cada grabación va a una carpeta nueva (una que ya tiene sesión se rechaza). Las sesiones van a la carpeta compartida del equipo, **nunca al repo** (`out/` está ignorado).

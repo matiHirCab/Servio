@@ -222,8 +222,7 @@ def build_pipeline(settings: Settings) -> Pipeline | None:
         database_url=settings.database_url,
         local_id=settings.local_id,
         resume=live,
-        # grabando (B-1): la sesión se queda con una copia de los eventos de esta corrida
-        mirror_log=settings.record / recording.EVENTS_FILE if settings.record else None,
+        mirror_log=mirror_log(settings),
     )
     feed = (
         SalonFeed(settings.local_id, processor, restaurant, settings.interval)
@@ -300,11 +299,15 @@ def run(settings: Settings, limit: int | None = None) -> int:
     try:
         settings = session_settings(settings)  # una sesión grabada: sus reglas
         if settings.record:
-            recording.ensure_free(settings.record)  # antes de escribir nada ahí
+            recording.ensure_free(
+                settings.record, alerts.DEFAULT_LOG
+            )  # antes de escribir ahí
+        # la carpeta de grabación la crea `build_pipeline` (la copia del log va ahí): si
+        # no se puede, la cámara todavía no se abrió
+        pipeline = build_pipeline(settings)
     except OSError as e:
         logger.error("%s", e)
         return 2
-    pipeline = build_pipeline(settings)
     if pipeline is None:
         return 2
     readings = 0
@@ -313,8 +316,7 @@ def run(settings: Settings, limit: int | None = None) -> int:
     # que haya; `recorder` es el que graba y se apaga al primer error de disco
     session: SessionRecorder | None = None
     try:
-        # La carpeta de grabación primero: si no se puede crear, la cámara todavía
-        # no se abrió. Después la fuente, que sale de open_source con las caras
+        # La grabación antes que la fuente, que sale de open_source con las caras
         # difuminadas (C-3): nada de lo que sigue, tampoco la grabación, ve una cara.
         recorder = session = (
             SessionRecorder(
@@ -445,6 +447,8 @@ SESSION_RULES = (
     "smooth_readings",
     "smooth_hard_readings",
     "smooth_min_confidence",
+    "restaurante",  # la comanda: filtra qué es un plato y qué pedido es
+    "yolo_conf",
 )
 
 
@@ -452,7 +456,19 @@ def session_rules(settings: Settings) -> dict[str, Any]:
     """Las reglas de esta corrida, resueltas (`finished_after` ya en segundos)."""
     rules = {name: getattr(settings, name) for name in SESSION_RULES}
     rules["finished_after"] = finished_after_seconds(settings)
-    return rules
+    return {k: str(v) if isinstance(v, Path) else v for k, v in rules.items()}
+
+
+def mirror_log(settings: Settings) -> Path | None:
+    """Dónde va la copia del log de esta corrida: grabando, a la sesión
+    (`eventos.jsonl`); reproduciendo, también a la sesión (`reproduccion.jsonl`,
+    lo que compara `tools/comparar_sesion.py`); si no, a ningún lado."""
+    if settings.record:
+        return settings.record / recording.EVENTS_FILE
+    if is_session_source(settings):
+        assert settings.source is not None
+        return Path(settings.source) / recording.REPLAY_EVENTS_FILE
+    return None
 
 
 def is_session_source(settings: Settings) -> bool:

@@ -103,6 +103,9 @@ def test_record_leaves_a_complete_session_and_replay_gives_the_same_alerts(
     )
     assert code == 0
     assert comparar_sesion.compare(recorded, recording.last_run_lines(replay_log)) == []
+    # la reproducción deja sus eventos en la sesión: es lo que compara la herramienta
+    assert (session / recording.REPLAY_EVENTS_FILE).exists()
+    assert comparar_sesion.main([str(session)]) == 0
     assert comparar_sesion.main([str(session), "--log", str(replay_log)]) == 0
     # la misma carpeta no se graba dos veces: quedarían dos sesiones mezcladas
     code = _run(
@@ -165,6 +168,27 @@ def test_session_settings_restore_the_recorded_rules(tmp_path):
     )
     with pytest.raises(OSError, match="zonas inválidas"):
         recording.session_zones(session)
+
+
+def test_recording_into_the_log_folder_is_refused(tmp_path, monkeypatch):
+    log = tmp_path / "vivo.jsonl"  # grabar en tmp_path pisaría este log con la copia
+    code = _run(
+        tmp_path, monkeypatch, log, "--source", "no.mp4", "--record", str(tmp_path)
+    )
+    assert code == 2
+    assert not (tmp_path / recording.EVENTS_FILE).exists()
+
+
+def test_session_info_hides_camera_credentials():
+    assert (
+        recording.redact_source("rtsp://admin:S3cret@192.168.1.10/stream")
+        == "rtsp://192.168.1.10/stream"
+    )
+    assert recording.redact_source("video.mp4") == "video.mp4"
+    assert (
+        recording.redact_source("http://cam.local:8080/video")
+        == "http://cam.local:8080/video"
+    )
 
 
 def test_a_run_that_never_read_a_frame_leaves_no_session(tmp_path, monkeypatch):
@@ -239,6 +263,12 @@ def test_session_without_frames_or_info_explains(tmp_path):
     (empty / recording.SESSION_FILE).write_text("{ roto", "utf-8")
     with pytest.raises(OSError, match="no se puede leer"):
         recording.read_info(empty)
+    (empty / recording.SESSION_FILE).write_text("[1, 2]", "utf-8")
+    with pytest.raises(OSError, match="no es un objeto"):
+        recording.read_info(empty)
+    # un aviso al que le falta un campo se saltea, no rompe la comparación
+    bad = json.dumps({"event": "alert_opened", "type": "plato_vacio", "ts": "t"})
+    assert recording.alert_signature([bad]) == []
 
 
 # ---- FrameRecorder, la base de la sesión ----

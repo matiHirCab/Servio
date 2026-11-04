@@ -209,13 +209,21 @@ class EventLog:
         """`mirror`: una copia de esta corrida sola (se pisa), para una sesión grabada
         (B-1): así sus eventos no hay que recortarlos del log compartido."""
         self.path = path
+        if mirror is not None and mirror.resolve() == path.resolve():
+            raise ValueError(f"la copia del log no puede ser el log mismo ({path})")
         path.parent.mkdir(parents=True, exist_ok=True)
         # Abierto una sola vez; buffering=1 baja cada línea al disco al escribirla.
-        self._file = path.open("a", encoding="utf-8", buffering=1)
+        # El espejo primero: si no se puede abrir, el log principal no queda abierto.
         self._mirror = None
         if mirror is not None:
             mirror.parent.mkdir(parents=True, exist_ok=True)
             self._mirror = mirror.open("w", encoding="utf-8", buffering=1)
+        try:
+            self._file = path.open("a", encoding="utf-8", buffering=1)
+        except OSError:
+            if self._mirror is not None:
+                self._mirror.close()
+            raise
         self._lock = threading.Lock()  # también escriben las respuestas de los mozos
 
     def write(self, event: dict[str, Any]) -> None:
@@ -226,9 +234,11 @@ class EventLog:
                 self._mirror.write(line)
 
     def close(self) -> None:
-        self._file.close()
-        if self._mirror is not None:
-            self._mirror.close()
+        try:
+            self._file.close()
+        finally:
+            if self._mirror is not None:
+                self._mirror.close()
 
 
 class EventLogOutput:
