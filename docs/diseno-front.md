@@ -102,43 +102,43 @@ Prototipo: [prototipos/f3-notificaciones.html](prototipos/f3-notificaciones.html
 
 ### Canal: Telegram ahora, WhatsApp cuando esté D-6
 
-- **Telegram** es lo que hay y desde junio de 2026 tiene app oficial en Apple Watch y Wear OS (fuentes en el prototipo): la notificación llega al reloj y se contesta desde ahí con las respuestas rápidas del reloj, dictado o teclado. **Los botones del mensaje no aparecen en la notificación del reloj**, solo en el celular: por eso el diseño responde con una palabra.
+- **Telegram** es lo que hay y desde junio de 2026 tiene app oficial en Apple Watch y Wear OS (fuentes en el prototipo): las notas dicen que la app del reloj muestra los chats y contesta con texto o voz. Lo que **no** dicen, y el diseño asume hasta probarlo: que la notificación se puede contestar sin abrir la app (respuestas rápidas del sistema o dictado) y que **los botones del mensaje no aparecen en la notificación del reloj**. Con cualquiera de las dos, responder con una palabra es lo que anda seguro: por eso el diseño responde así, y los botones quedan para el celular.
 - **WhatsApp** llega con D-6 (después del 25/11); sus notificaciones en el reloj se comportan igual (texto y respuesta rápida), así que el diseño no cambia de canal a canal.
 - **App propia con push**: no por ahora. Costaría una app en dos tiendas para resolver lo mismo que ya resuelven las respuestas rápidas.
 
-**Pendiente, a mano**: probar en un reloj real (Apple Watch o Wear OS) que el aviso llega y que la respuesta rápida vuelve al grupo. No se puede verificar sin el reloj; el diseño asume lo que documentan Telegram y las notas de prensa.
+**Pendiente, a mano**, exactamente las dos suposiciones de arriba: en un reloj real (Apple Watch o Wear OS), (1) ¿la notificación del grupo se contesta desde el reloj sin abrir la app, y con qué (respuesta rápida, dictado, teclado)? (2) ¿se ven o no los botones del mensaje? Si se ven y se pueden tocar, el diseño mantiene la palabra suelta igual (sirve para dictado) y suma el botón.
 
 ### El aviso en el reloj: una línea y dos o tres respuestas
 
-La primera línea tiene que alcanzar leída de reojo: **mesa · qué** («Mesa 2 · retirar platos», «Mesa 1 · terminó», «Mesa 3 · sorrentinos sigue lleno»). Debajo, hace cuánto y el detalle. Las respuestas rápidas del reloj se configuran con las tres palabras: **Voy**, **Listo**, **No hacía falta** (con «sigue lleno», los motivos del plato). En el celular el mismo aviso trae los botones de hoy; el texto es el de `messages.py` (emoji + mozo + mesa), que ya empieza con lo importante.
+La primera línea tiene que alcanzar leída de reojo: **mesa · qué** («Mesa 2 · retirar platos», «Mesa 1 · terminó», «Mesa 3 · sorrentinos sigue lleno»). Debajo, hace cuánto y el detalle. Las respuestas rápidas del reloj (una lista fija por usuario, no por mensaje) se configuran con las tres palabras: **Voy**, **Listo**, **No hacía falta**; el motivo de un «sigue lleno» se dicta o se escribe. En el celular el aviso trae botones: hoy solo los tiene «sigue lleno» (los motivos del plato); plato vacío y mesa terminó ganan **Voy / Listo / No hacía falta** con C-5. El texto es el de `messages.py` (emoji + mozo + mesa), que ya empieza con lo importante.
 
 | Aviso | Reloj (línea 1 · línea 2) | Respuestas | A quién |
 |---|---|---|---|
 | Plato vacío | Mesa 2 · retirar platos · hace 4 min, Lomo con papas | Voy · Listo · No hacía falta | mozo de la mesa |
 | Mesa terminó | Mesa 1 · terminó · hace 1 min, 2 platos | Voy · Listo · No hacía falta | mozo de la mesa |
-| Sigue lleno | Mesa 3 · sorrentinos sigue lleno · hace 14 min, ¿está todo bien? | Voy · motivo (Frío, No le gustó, …) · Otro | mozo de la mesa |
+| Sigue lleno | Mesa 3 · plato sin tocar · hace 14 min, sorrentinos, ¿está todo bien? | Voy · motivo dictado o escrito (en el celular, los botones del plato: «Está todo bien», «Estaban fríos», …) | mozo de la mesa |
 | Escalado | Mesa 2 · sin atender 9 min · Juan no respondió, 2 avisos | Voy · Visto | encargado |
 
 ### Responder con una palabra: lo que le pedimos a C-5
 
 Hoy el bot solo toma un texto si es **respuesta a** su pregunta («Otra respuesta»). Para el reloj hace falta que entienda un mensaje suelto en el grupo:
 
-1. Normalizar (minúsculas, sin tildes ni puntuación) y reconocer: `voy | ya voy | dale | ok | 👍` → **Voy**; `listo | hecho | ya esta | ✅` → **Listo**; `no | no hacia falta | falso | ❌` → **No hacía falta**. Cualquier otro texto, solo si hay un «sigue lleno» abierto, es un **motivo**.
+1. Normalizar (minúsculas, sin tildes ni puntuación) y comparar **el mensaje entero** con la lista, nunca por prefijo: `voy | ya voy | dale | ok | 👍` → **Voy**; `listo | hecho | ya esta | ✅` → **Listo**; `no | no hacia falta | falso | ❌` → **No hacía falta**. «No le gustaron» no es «no»: es un motivo. Cualquier otro texto, solo si hay un «sigue lleno» abierto del mozo, es un **motivo**; si no, se ignora en silencio (el grupo también se usa para charlar). Un mensaje de alguien que no es un mozo mapeado se ignora sin contestar.
 2. Buscar el **aviso abierto más reciente de las mesas de ese mozo** (quién escribe ↔ mozo: hoy por nombre de Telegram, con R-1 por usuario). Si tiene más de uno abierto, el bot pregunta «¿Mesa 2 o Mesa 3?» y acepta el número. Si no tiene ninguno, contesta «No tenés avisos abiertos».
-3. **Voy** marca el aviso como tomado (`answered_by`, el campo que pide F-1 para el panel) y frena los recordatorios; **Listo** lo cierra y cuenta el tiempo; **No hacía falta** lo cierra como falso aviso (métrica de adopción); el motivo queda en `alert_feedback` como hoy.
+3. **Voy** marca el aviso como tomado (`answered_by`, el campo que pide F-1 para el panel) y frena los recordatorios; el aviso se sigue cerrando solo cuando la cámara ve resuelta la mesa, como hoy. **Listo** y **No hacía falta** son cierres a mano: el aviso se cierra con un `close_reason` nuevo (`listo` / `no_hacia_falta`) y, para que no se vuelva a abrir al segundo siguiente, esa (mesa, tipo) queda **silenciada hasta que la cámara vea la condición resuelta** (si a los 10 min sigue igual, vuelve a avisar). «Listo» cuenta el tiempo de respuesta; «No hacía falta» cuenta como falso aviso (métrica de adopción) y no entra en los tiempos. El motivo queda en `alert_feedback` como hoy. Esto toca el contrato del aviso (`answered_by`, los dos `close_reason`): hay que actualizar `03-contratos.md` al implementarlo.
 4. Responder citando el mensaje sigue andando igual que ahora.
 
 ### Qué le llega a cada rol
 
 - **Mozo**: los avisos de **sus mesas** y sus recordatorios; nada de las mesas de otros. Hoy todos van al grupo con mención («🧹 Juan · Mesa 2: …»); con R-1, un chat privado por mozo, que es lo que hace que al reloj le llegue solo lo suyo.
-- **Encargado**: los **escalados**: un aviso sin respuesta después del segundo recordatorio, o una mesa que pasó el límite sin atender. Puede tomarlo con «Voy».
-- **Dueño**: el **resumen al cerrar** el servicio (lo que ya manda D-1 como `resumen_cierre`) y nada en el momento.
+- **Encargado**: los **escalados**: un aviso sin respuesta después del segundo recordatorio, o una mesa que pasó el límite sin atender. Puede tomarlo con «Voy». Hoy `12-roles.md` solo tiene `avisos: suyas | todas | ninguno`: hace falta el valor **`escalados`** para el encargado (y actualizar esa tabla y `roles.py` al implementarlo).
+- **Dueño y encargado**: el **resumen al cerrar** el servicio (`resumen_cierre`, tarea D-3, todavía no implementada; `12-roles.md` se lo da a los dos) y, el dueño, nada en el momento.
 
 ### Qué cambia respecto de lo implementado (C-5)
 
 1. Respuestas con **una palabra suelta** (sin «responder a») y la elección del aviso por mozo (punto anterior).
-2. **Voy** como respuesta en todos los avisos, no solo motivos en «sigue lleno»; `answered_by` en el aviso.
-3. El **escalado al encargado** como aviso propio (hoy el recordatorio se repite al mismo grupo).
+2. Botones **Voy / Listo / No hacía falta** en plato vacío y mesa terminó (hoy solo «sigue lleno» tiene botones, los motivos); `answered_by` y los dos cierres a mano en el aviso, con la regla de silencio.
+3. El **escalado al encargado** como aviso propio (hoy el recordatorio se repite al mismo grupo) y el valor `escalados` en la config de roles.
 4. Un chat por mozo (necesita R-1); hasta entonces, el grupo con mención.
 
 **Hecho cuando** (de la tarjeta): canal decidido ✔ (Telegram, WhatsApp con D-6), diseño de cada aviso con sus botones ✔, probado en un reloj real: pendiente, a mano.

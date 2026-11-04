@@ -12,7 +12,6 @@
 <style>
 /* El reloj manda: una línea que se lee de reojo, dos o tres respuestas de una palabra.
    Tema único oscuro: así se ven las notificaciones en un reloj. */
-[hidden]{display:none!important}
 :root{
   --bg:#0b0c0e; --surface:#15171b; --surface-2:#1e2126; --line:rgba(255,255,255,.09);
   --fg:#f2f4f7; --fg-2:#aab2bd; --fg-3:#6f7883;
@@ -81,7 +80,7 @@ th{color:var(--fg-3);font-weight:500;font-family:var(--f-label);letter-spacing:.
 
 <section class="card" aria-label="Cómo se responde desde el reloj">
   <h2>Responder desde el reloj: una palabra</h2>
-  <p class="why">En el reloj la notificación de Telegram no muestra los botones del mensaje: muestra el texto y deja contestar con las respuestas rápidas del reloj, dictado o teclado. Por eso el bot tiene que entender <b>una palabra suelta</b>, sin tocar «responder a». Es lo que le pedimos a C-5.</p>
+  <p class="why">Suposición a probar en un reloj real: la notificación de Telegram no muestra los botones del mensaje, muestra el texto y deja contestar con las respuestas rápidas del reloj, dictado o teclado. Con eso, el bot tiene que entender <b>una palabra suelta</b> (el mensaje entero, no un prefijo), sin tocar «responder a». Es lo que le pedimos a C-5.</p>
   <div class="flow">
     <div><b>1</b><span>Llega «🧹 Mesa 2 · retirar platos». El mozo levanta la muñeca y lo lee de reojo: mesa, qué y hace cuánto, en una línea.</span></div>
     <div><b>2</b><span>Toca la respuesta rápida <b>Voy</b> (o lo dicta). En el grupo aparece «Voy» de Juan, sin cita al aviso.</span></div>
@@ -91,8 +90,8 @@ th{color:var(--fg-3);font-weight:500;font-family:var(--f-label);letter-spacing:.
   <div class="twrap" style="margin-top:12px"><table aria-label="Palabras que entiende el bot">
     <tr><th>Escriben</th><th>Vale como</th><th>Qué pasa con el aviso</th></tr>
     <tr><td>voy · ya voy · dale · ok · 👍</td><td><span class="pill" style="background:var(--lleno);color:#06240f">Voy</span></td><td>Queda tomado por ese mozo (`answered_by`); no se repite el recordatorio.</td></tr>
-    <tr><td>listo · hecho · ya está · ✅</td><td><span class="pill" style="background:var(--tg);color:#06202b">Listo</span></td><td>Se cierra; cuenta el tiempo hasta acá.</td></tr>
-    <tr><td>no · no hacía falta · falso · ❌</td><td><span class="pill" style="background:var(--surface-2);color:var(--fg)">No hacía falta</span></td><td>Se cierra como falso aviso (métrica de adopción).</td></tr>
+    <tr><td>listo · hecho · ya está · ✅</td><td><span class="pill" style="background:var(--tg);color:#06202b">Listo</span></td><td>Se cierra a mano (`close_reason: listo`), cuenta el tiempo hasta acá y la mesa queda en silencio hasta que la cámara la vea resuelta.</td></tr>
+    <tr><td>no · no hacía falta · falso · ❌</td><td><span class="pill" style="background:var(--surface-2);color:var(--fg)">No hacía falta</span></td><td>Se cierra como falso aviso (`close_reason: no_hacia_falta`, métrica de adopción), con el mismo silencio. «No le gustaron» no es «no»: es un motivo.</td></tr>
     <tr><td>frío · duro · no le gustó · (texto)</td><td><span class="pill" style="background:var(--por_terminar);color:#2b1200">Motivo</span></td><td>Solo con «sigue lleno»: queda como respuesta del plato (`alert_feedback`).</td></tr>
   </table></div>
   <p class="note">Mayúsculas, tildes y puntos no importan. Si no hay ningún aviso abierto de sus mesas, el bot contesta «No tenés avisos abiertos». Responder citando el mensaje sigue andando como hoy.</p>
@@ -104,7 +103,7 @@ th{color:var(--fg-3);font-weight:500;font-family:var(--f-label);letter-spacing:.
     <tr><th>Rol</th><th>Le llega</th><th>Dónde</th><th>Responde</th></tr>
     <tr><td><b>Mozo</b></td><td>Los avisos de <b>sus mesas</b> (plato vacío, mesa terminó, sigue lleno) y sus recordatorios.</td><td>Reloj + celular. Hoy: el grupo de Telegram con mención; con R-1, chat privado por mozo.</td><td>Voy · Listo · No hacía falta · motivo</td></tr>
     <tr><td><b>Encargado</b></td><td>Los <b>escalados</b>: un aviso sin respuesta después del segundo recordatorio, o una mesa que lleva más del límite sin atender.</td><td>Celular (grupo o chat del encargado).</td><td>Voy (lo toma él) o nada.</td></tr>
-    <tr><td><b>Dueño</b></td><td>El <b>resumen al cerrar</b> el servicio y nada en el momento.</td><td>Celular.</td><td>No responde.</td></tr>
+    <tr><td><b>Dueño</b> (y encargado)</td><td>El <b>resumen al cerrar</b> el servicio (D-3, todavía no existe) y nada en el momento.</td><td>Celular.</td><td>No responde.</td></tr>
   </table></div>
 </section>
 
@@ -122,22 +121,22 @@ th{color:var(--fg-3);font-weight:500;font-family:var(--f-label);letter-spacing:.
 const AVISOS = [
   {id:"vacio", color:"var(--por_terminar)", titulo:"Plato vacío", why:"Hay platos vacíos sobre la mesa: retirarlos. Es el aviso más frecuente; una palabra alcanza.",
    reloj:{b:"Mesa 2 · retirar platos", s:"hace 4 min · Lomo con papas", acts:["Voy","Listo","No hacía falta"]},
-   cel:{txt:"🧹 Juan · Mesa 2: hay platos vacíos para retirar.", btns:["Voy","Listo","No hacía falta"], hora:"21:38"}},
+   cel:{txt:"🧹 Juan · Mesa 2: hay platos vacíos para retirar.", btns:["Voy","Listo","No hacía falta"], nuevo:true, hora:"21:38"}},
   {id:"terminada", color:"var(--vacio)", titulo:"Mesa terminó", why:"Todos los platos vacíos y la gente sigue sentada: la mesa espera que la atiendan (cuenta, café, postre).",
    reloj:{b:"Mesa 1 · terminó", s:"hace 1 min · 2 platos", acts:["Voy","Listo","No hacía falta"]},
-   cel:{txt:"🍽️ Juan · Mesa 1: terminó.", btns:["Voy","Listo","No hacía falta"], hora:"21:41"}},
+   cel:{txt:"🍽️ Juan · Mesa 1: terminó.", btns:["Voy","Listo","No hacía falta"], nuevo:true, hora:"21:41"}},
   {id:"lleno", color:"var(--lleno)", titulo:"Sigue lleno", why:"Un plato lleva demasiado sin tocarse: pasar a preguntar. La respuesta es el motivo, que alimenta la métrica de platos con problemas.",
-   reloj:{b:"Mesa 3 · sorrentinos sigue lleno", s:"hace 14 min · ¿está todo bien?", acts:["Voy","Frío","Otro motivo"]},
-   cel:{txt:"❓ Sofía · Mesa 3: Sorrentinos con fileto sigue lleno hace 14 min. ¿Está todo bien? Pasá a preguntar y contanos qué pasó.", btns:["Estaba frío","No le gustaron","Pasados de cocción","Comanda equivocada","✏️ Otra respuesta"], hora:"21:42"}},
+   reloj:{b:"Mesa 3 · plato sin tocar", s:"hace 14 min · sorrentinos · ¿está todo bien?", acts:["Voy","Listo","No hacía falta"], dictar:"El motivo se dicta o se escribe"},
+   cel:{txt:"❓ Sofía · Mesa 3: Sorrentinos con fileto sigue lleno hace 14 min. ¿Está todo bien? Pasá a preguntar y contanos qué pasó.", btns:["Está todo bien","Estaban fríos","Pasados de cocción","No le gustaron","✏️ Otra respuesta"], hora:"21:42"}},  // los de carta.json para sorrentinos, como hoy
   {id:"escalado", color:"var(--esc)", titulo:"Escalado al encargado", why:"Nadie respondió después del segundo recordatorio, o la mesa pasó el límite sin atender. Le llega al encargado, no al mozo.",
    reloj:{b:"Mesa 2 · sin atender 9 min", s:"Juan no respondió · 2 avisos", acts:["Voy","Visto"]},
-   cel:{txt:"⚠️ Encargado · Mesa 2: platos vacíos hace 9 min, Juan no respondió a 2 avisos.", btns:["Voy","Visto"], hora:"21:47"}},
+   cel:{txt:"⚠️ Encargado · Mesa 2: platos vacíos hace 9 min, Juan no respondió a 2 avisos.", btns:["Voy","Visto"], nuevo:true, hora:"21:47"}},
 ];
 const esc = s => String(s??"").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 let vista="reloj";
 function card(a){
-  const reloj=`<div class="watch" role="img" aria-label="Reloj: ${esc(a.reloj.b)}, ${esc(a.reloj.s)}"><div class="app"><i></i>Telegram · Servio</div><div class="msg"><b>${esc(a.reloj.b)}</b><small>${esc(a.reloj.s)}</small></div><div class="acts">${a.reloj.acts.map((x,i)=>`<span class="${i===0?"go":i===a.reloj.acts.length-1?"sec":""}">${esc(x)}</span>`).join("")}</div></div>`;
-  const cel=`<div class="phone"><div class="bubble">${esc(a.cel.txt)}<div class="t">${esc(a.cel.hora)}</div><div class="btns">${a.cel.btns.map((x,i)=>`<span class="${a.cel.btns.length%2&&i===a.cel.btns.length-1?"wide":""}">${esc(x)}</span>`).join("")}</div></div><div class="reply"><span>Voy</span></div></div>`;
+  const reloj=`<div class="watch" role="img" aria-label="Reloj: ${esc(a.reloj.b)}, ${esc(a.reloj.s)}"><div class="app"><i></i>Telegram · Servio</div><div class="msg"><b>${esc(a.reloj.b)}</b><small>${esc(a.reloj.s)}</small></div><div class="acts">${a.reloj.acts.map((x,i)=>`<span class="${i===0?"go":i===a.reloj.acts.length-1?"sec":""}">${esc(x)}</span>`).join("")}</div></div>${a.reloj.dictar?`<p class="note" style="text-align:center;margin:-4px 0 8px">${esc(a.reloj.dictar)}: las respuestas rápidas del reloj son una lista fija.</p>`:""}`;
+  const cel=`<div class="phone"><div class="bubble">${esc(a.cel.txt)}<div class="t">${esc(a.cel.hora)}</div><div class="btns">${a.cel.btns.map((x,i)=>`<span class="${a.cel.btns.length%2&&i===a.cel.btns.length-1?"wide":""}">${esc(x)}</span>`).join("")}</div></div><div class="reply"><span>Voy</span></div>${a.cel.nuevo?`<p class="note">Los botones de este aviso son nuevos (C-5): hoy este mensaje llega sin botones.</p>`:""}</div>`;
   return `<article class="card" aria-label="${esc(a.titulo)}"><span class="pill" style="background:${a.color};color:#0b0c0e">${esc(a.titulo)}</span><h2 style="margin-top:8px">${esc(a.reloj.b)}</h2><p class="why">${esc(a.why)}</p>${vista==="reloj"?reloj:cel}</article>`;
 }
 function render(){ document.getElementById("avisos").innerHTML=AVISOS.map(card).join("");
