@@ -141,13 +141,13 @@ const WHY = {
   tiempo_respuesta:"Aparece con el primer aviso respondido.", mesa_terminada_sin_atender:"Aparece con la primera mesa que termina.",
   mesas_olvidadas:"Aparece con los primeros avisos.", rotacion:"Aparece al cerrar el primer servicio.",
   espera_siguiente_plato:"Ninguna mesa esperó el siguiente plato todavía.", horas_pico:"Ninguna franja con esperas todavía.",
-  platos_que_vuelven:"Ningún plato volvió lleno todavía.", desperdicio:"Se calcula con el ticket promedio cargado en Configuración y platos que volvieron.",
+  platos_que_vuelven:"Ningún plato volvió lleno todavía.", desperdicio:"Aparece con el primer plato que vuelve con comida (vale el precio de carta).",
   adopcion:"Todavía no hubo avisos.", carga_por_mozo:"Aparece con el primer servicio con mozos asignados.",
   ritmo_por_plato:"Aparece con los primeros platos servidos.", sobra_por_plato:"Aparece con los primeros platos servidos.",
-  antes_despues:"Necesita servicios en modo sombra (sin avisos) y servicios con avisos.", historico:"Se muestra a partir del día 7, cuando hay dos semanas que comparar.",
+  antes_despues:"Necesita servicios en modo sombra (sin avisos) y servicios con avisos.", historico:"Se muestra a partir del día 14, cuando hay dos semanas que comparar.",
   costos_y_configuracion:"El costo del modelo llega con el consumo del primer mes.",
 };
-function pending(label,metric,why){ const ids=metric.split(" "), srv=DATA.pendientes||{}; if(!ids.some(i=>i in M())) return null;  /* el rol no la ve */ const text=ids.map(i=>srv[i]).find(Boolean)||why||ids.map(i=>WHY[i]).find(Boolean)||"Todavía sin datos."; return tile("pending",label,metric,el("p","empty",text)); }
+function pending(label,metric,why){ const ids=metric.split(" "), srv=DATA.pendientes||{}; if(!ids.some(i=>i in M()||i in (DATA.pendientes||{}))) return null;  /* el rol no la ve */ const text=ids.map(i=>srv[i]).find(Boolean)||why||ids.map(i=>WHY[i]).find(Boolean)||"Todavía sin datos."; return tile("pending",label,metric,el("p","empty",text)); }
 function tile(cls,label,metric,...kids){ const t=el("section","tile "+(cls||"")); t.setAttribute("aria-label",label); if(metric) t.dataset.metric=metric; return add(t,el("span","lb",label),...kids); }
 
 // ---- una tarjeta por métrica (data-metric = id de 13-metricas.md) ----
@@ -169,14 +169,15 @@ function avisos(){ const list=M().avisos_abiertos||[]; const frag=document.creat
 function mozos(){ const load=M().carga_por_mozo||[], resp=M().tiempo_respuesta?M().tiempo_respuesta.por_mozo||[]:[], forg=M().mesas_olvidadas?M().mesas_olvidadas.por_mozo||[]:[];
   const names=[...new Set([...load.map(x=>x.mozo),...resp.map(x=>x.mozo),...forg.map(x=>x.mozo)])]; if(!names.length) return pending("Mozos","carga_por_mozo");
   const worst=(list,key)=>{ const k=list.filter(x=>x[key]!=null); return k.length&&k.some(x=>x[key]>0)?k.reduce((a,b)=>b[key]>a[key]?b:a).mozo:null; };
-  const slow=worst(forg,"olvidadas")||worst(load,"minutos_retiro")||worst(resp,"segundos"), busy=worst(load,"mesas_por_servicio");  /* olvidadas, si no retiro, si no respuesta (13-metricas) */
+  const byForg=worst(forg,"olvidadas"), byPick=byForg?null:worst(load,"minutos_retiro"), byResp=byForg||byPick?null:worst(resp,"segundos");
+  const slow=byForg||byPick||byResp, why=byForg?"el que más mesas olvida":byPick?"el que más tarda en retirar":"el que más tarda en responder", busy=worst(load,"mesas_por_servicio");  /* olvidadas, si no retiro, si no respuesta (13-metricas) */
   const t=el("section","tile"); t.setAttribute("aria-label","Mozos"); t.dataset.metric="carga_por_mozo";
   add(t,add(el("div","row"),el("h3",null,"Mozos"),el("span","sub muted","por servicio")));
   const wrap=el("div","twrap"), table=el("table"), head=el("tr"), body=el("tbody");
   ["Mozo","Mesas","Respuesta","Retiro","Olvidadas"].forEach(h=>head.appendChild(el("th",null,h))); add(table,add(el("thead"),head),body);
   names.forEach(name=>{ const l=load.find(x=>x.mozo===name)||{}, r=resp.find(x=>x.mozo===name)||{}, f=forg.find(x=>x.mozo===name)||{olvidadas:0};
     body.appendChild(add(el("tr",name===slow?"hot":""),el("td",null,name),el("td",null,fmt.dec(l.mesas_por_servicio)),el("td",null,fmt.secs(r.segundos).join(" ").trim()),el("td",null,l.minutos_retiro==null?"–":fmt.dec(l.minutos_retiro)+" min"),el("td",null,String(f.olvidadas)))); });
-  const diag=slow&&slow===busy?slow+" es el que más tarda y el que más mesas tiene: sacale una.":slow?slow+" es el que más tarda.":null;  // la frase sale de los datos (en producción, la escribe el servidor)
+  const diag=slow&&slow===busy?slow+" es "+why+" y el que más mesas tiene: sacale una.":slow?slow+" es "+why+".":null;  // la frase sale de los datos (en producción, la escribe el servidor)
   add(t,add(wrap,table),diag?el("p","sub muted",diag):null);
   return t; }
 function pico(){ const v=(M().horas_pico||[]).map(s=>({...s,tarde:s.tarde||0})); if(!v.length) return pending("Horas pico","horas_pico"); const lim=(M().mesa_terminada_sin_atender||{}).limite_min??((DATA.configuracion||{}).umbrales||{}).mesa_sin_atender_min??5; const t=el("section","tile"); t.setAttribute("aria-label","Horas pico"); t.dataset.metric="horas_pico";
@@ -185,7 +186,7 @@ function pico(){ const v=(M().horas_pico||[]).map(s=>({...s,tarde:s.tarde||0}));
   chart.setAttribute("role","img"); chart.setAttribute("aria-label",v.map(s=>s.franja+" "+fmt.pct(s.tarde)).join(", "));
   v.forEach(s=>{ const b=el("div",s.tarde>=max*.9?"hot":""); b.style.height=Math.round(s.tarde/max*100)+"%"; b.title=s.franja+" · "+s.avisos+" avisos · "+fmt.pct(s.tarde); chart.appendChild(b); ax.appendChild(el("span",null,s.franja)); });
   add(t,chart,ax,el("p","sub muted",top.tarde>0?"Peor franja: "+top.franja+" ("+fmt.pct(top.tarde)+").":"Ninguna mesa esperó más de "+lim+" min: "+v.reduce((n,s)=>n+(s.avisos||0),0)+" avisos, todos a tiempo.")); return t; }
-function vuelvenLista(){ const lista=((M().platos_que_vuelven||{}).por_plato||[]).filter(p=>p.vuelve>0); if(!lista.length) return pending("Platos que vuelven","platos_que_vuelven"); const t=tile("butter","Platos que vuelven","platos_que_vuelven"); lista.slice(0,3).forEach(p=>{ const r=el("div","row"); const txt=el("p","sub"); add(txt,el("b",null,p.plato),...(p.motivo&&p.motivo!=="-"?[el("br"),document.createTextNode("«"+p.motivo+"»")]:[])); add(r,txt,num(fmt.pctNum(p.vuelve),"%")); t.appendChild(r); }); return t; }
+function vuelvenLista(){ const lista=((M().platos_que_vuelven||{}).por_plato||[]).filter(p=>p.vuelve>0); if(!lista.length) return null;  /* la tarjeta «Platos que vuelven» ya dice que no hay */ const t=tile("butter","Platos que vuelven","platos_que_vuelven"); lista.slice(0,3).forEach(p=>{ const r=el("div","row"); const txt=el("p","sub"); add(txt,el("b",null,p.plato),...(p.motivo&&p.motivo!=="-"?[el("br"),document.createTextNode("«"+p.motivo+"»")]:[])); add(r,txt,num(fmt.pctNum(p.vuelve),"%")); t.appendChild(r); }); return t; }
 const resumen = () => tile("","Resumen al cerrar","resumen_cierre",el("p","sub muted","Te llega por Telegram cuando cierra el servicio: mesas, tiempos, avisos y platos con problemas."));
 function desperdicio(){ const v=M().desperdicio||{}; const top=(v.por_plato||[])[0]; if(!top||!v.total) return pending("Vuelve a la cocina","desperdicio"); const n=num(fmt.pesos(v.total)); n.style.fontSize="34px"; return tile("butter","Vuelve a la cocina","desperdicio",n,el("p","sub",fmt.pesos(v.por_servicio)+" por servicio · "+Math.round(top.pesos/v.total*100)+" % es "+top.plato)); }
 const adopcion = () => { const v=M().adopcion; if(!v||!v.avisos) return pending("Los mozos responden","adopcion"); return tile("","Los mozos responden","adopcion",num(String(Math.round(v.respondidos/v.avisos*100)),"%"),el("p","sub",v.no_hacia_falta+" «no hacía falta»")); };
@@ -193,14 +194,13 @@ function carta(){ const back=(M().platos_que_vuelven?M().platos_que_vuelven.por_
   const names=[...new Set([...back.map(p=>p.plato),...pace.map(p=>p.plato),...left.map(p=>p.plato)])];
   if(!names.length) return pending("Por plato","ritmo_por_plato sobra_por_plato");
   const t=el("section","tile"); t.setAttribute("aria-label","Por plato"); t.dataset.metric="ritmo_por_plato sobra_por_plato";
-  const wrap=el("div","twrap"), table=el("table"), head=el("tr"), body=el("tbody"); ["Plato","Vuelve","Ritmo","Sobra"].forEach(h=>head.appendChild(el("th",null,h))); add(table,add(el("thead"),head),body);
+  const wrap=el("div","twrap"), table=el("table"), head=el("tr"), body=el("tbody"); ["Plato","Vuelve","Ritmo · en vivo","Sobra · en vivo"].forEach(h=>head.appendChild(el("th",null,h))); add(table,add(el("thead"),head),body);
   const worst=back[0]?back[0].plato:null;
   names.forEach(name=>{ const b=back.find(x=>x.plato===name)||{}, p=pace.find(x=>x.plato===name)||{}, l=left.find(x=>x.plato===name)||{};
     body.appendChild(add(el("tr",name===worst?"hot":""),el("td",null,name),el("td",null,fmt.pct(b.vuelve)),el("td",null,p.minutos==null?"–":fmt.dec(p.minutos)+"′"),el("td",null,fmt.pct(l.sobra)))); });
   const w=back[0]; const diag=w?w.plato+" es el que más vuelve ("+fmt.pct(w.vuelve)+")"+(w.motivo&&w.motivo!=="-"?": «"+w.motivo+"» es lo que más responden.":"."):null;  // en producción la escribe el servidor
   add(t,add(wrap,table),diag?el("p","sub muted",diag):null); return t; }
-function antesDespues(){ const v=M().antes_despues; if(!v) return pending("Antes / después con Servio","antes_despues"); const t=tile("navy","Antes / después con Servio","antes_despues");
-  if(v.antes==null||v.despues==null) return pending("Antes / después con Servio","antes_despues");
+function antesDespues(){ const v=M().antes_despues; if(!v||v.antes==null||v.despues==null) return pending("Antes / después con Servio","antes_despues"); const t=tile("navy","Antes / después con Servio","antes_despues");
   const d=v.antes-v.despues; const title=el("h3",null,d>0?"Tus mesas esperan "+fmt.dec(d)+" min menos":d<0?"Tus mesas esperan "+fmt.dec(-d)+" min más":"Tus mesas esperan lo mismo"); title.style.fontSize="30px"; title.style.lineHeight="1.05";
   const vs=el("div","vs"); add(vs, add(el("div"),num(fmt.dec(v.antes),"min","n"),el("div","k","antes · modo sombra")), el("span","arrow","→"), add(el("div"),num(fmt.dec(v.despues),"min","n"),el("div","k","con avisos")));
   return add(t,title,vs,el("p","sub",v.metrica+" · "+v.servicios+" servicios de cada lado · "+fmt.dec(v.mesas_mas)+" mesas más por servicio")); }
@@ -248,8 +248,8 @@ function render(rol){ app.replaceChildren(); (rol==="dueno"?renderDueno:renderEn
 let rol="encargado";
 const FULL=JSON.parse(JSON.stringify(DATA));
 function setDatos(con){ const d=con?FULL:{...FULL, actualizado:"20:05",
-    metricas:{avisos_abiertos:[], resumen_cierre:{canal:"Telegram"}, tiempo_respuesta:null, mesa_terminada_sin_atender:null, mesas_olvidadas:null, rotacion:null, espera_siguiente_plato:[], horas_pico:[], platos_que_vuelven:null, desperdicio:null, adopcion:{respondidos:0,avisos:0,no_hacia_falta:0}, carga_por_mozo:[], ritmo_por_plato:[], sobra_por_plato:[], antes_despues:null, historico:null, costos_y_configuracion:FULL.metricas.costos_y_configuracion},
-    pendientes:{historico:"Se muestra a partir del día 7, cuando hay dos semanas que comparar.", antes_despues:"Necesita servicios en modo sombra (sin avisos) y servicios con avisos.", desperdicio:"Se calcula con el ticket promedio cargado en Configuración y platos que volvieron."}};
+    metricas:{avisos_abiertos:[], resumen_cierre:{canal:"Telegram"}, tiempo_respuesta:null, mesa_terminada_sin_atender:null, mesas_olvidadas:null, rotacion:null, espera_siguiente_plato:[], horas_pico:[], platos_que_vuelven:null, desperdicio:null, adopcion:{respondidos:0,avisos:0,no_hacia_falta:0}, carga_por_mozo:[], ritmo_por_plato:[], sobra_por_plato:[], antes_despues:null, historico:null, costos_y_configuracion:{abono_mes:FULL.metricas.costos_y_configuracion.abono_mes, modelo_mes:null, por_mesa_hora:null, horas_mes:null}},
+    pendientes:{historico:"Se muestra a partir del día 14, cuando hay dos semanas que comparar.", antes_despues:"Necesita servicios en modo sombra (sin avisos) y servicios con avisos.", desperdicio:"Aparece con el primer plato que vuelve con comida (vale el precio de carta)."}};
   DATA=JSON.parse(JSON.stringify(d));  // una copia: el fixture completo no se toca
   document.getElementById("datos-si").setAttribute("aria-pressed",String(con)); document.getElementById("datos-no").setAttribute("aria-pressed",String(!con)); render(rol); }
 document.getElementById("rol-enc").onclick=()=>render(rol="encargado"); document.getElementById("rol-due").onclick=()=>render(rol="dueno");

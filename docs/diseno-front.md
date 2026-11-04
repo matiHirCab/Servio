@@ -4,7 +4,7 @@ Las tres pantallas de Servio, para que el equipo las revise antes de implementar
 
 | Pantalla | Quién la ve | Prototipo | Implementación |
 |---|---|---|---|
-| F-1 · Reconocimiento (el salón) | Mozo (principal), encargado, dueño | [prototipos/f1-reconocimiento.html](prototipos/f1-reconocimiento.html) | `vision/servio_vision/static/salon.html`, `/<local>/salon` (PR #64) |
+| F-1 · Reconocimiento (el salón) | Mozo (principal), encargado, dueño | [prototipos/f1-reconocimiento.html](prototipos/f1-reconocimiento.html) · [publicado](https://claude.ai/artifact/ABtN5PdFmwAmZUZnKyWsAw) (es adonde va el botón «Ver el salón» del prototipo F-2 cuando no se abre desde el repo) | `vision/servio_vision/static/salon.html`, `/<local>/salon` (PR #64) |
 | F-2 · Dashboard | Encargado, dueño | [prototipos/f2-dashboard.html](prototipos/f2-dashboard.html) | `vision/servio_vision/static/dashboard.html`, `/<local>/dashboard` (rama `tomas/dashboards`, D-1) |
 | F-3 · Notificaciones | Mozo (reloj), encargado, dueño | pendiente | `vision/servio_vision/alerts/messages.py`, `vision/servio_vision/alerts/bot.py` (Telegram) |
 
@@ -77,13 +77,13 @@ Una sola columna de 480 px como máximo, bloques de color plano, **números enor
 ### Dos roles, dos pizarras
 
 - **Encargado** (lo que pasa en este turno): tiempo de respuesta como héroe, sin atender > 5 min, mesas olvidadas, avisos abiertos con quién respondió, tabla de mozos (mesas, respuesta, retiro, olvidadas), rotación, siguiente plato, horas pico, platos que vuelven, y el resumen al cerrar (llega por Telegram). Botón «Ver el salón en vivo» arriba: la pizarra y el salón son la misma app.
-- **Dueño** (si vale la pena): pestañas **Resultados / Carta / Turno / Config**. Resultados abre con el héroe «**Tus mesas esperan X min menos**» (antes/después del modo sombra), después las cinco cifras del turno (respuesta, sin atender, olvidadas, rotación, platos que vuelven), la serie semana a semana, lo que vuelve a la cocina en pesos y la adopción de los mozos. Carta: tabla por plato (vuelve, ritmo, sobra) con una frase de diagnóstico por plato. Turno: lo mismo que ve el encargado. Config: costo de Servio por mes, umbrales del local, roles y usuarios.
+- **Dueño** (si vale la pena): pestañas **Resultados / Carta / Turno / Config**. Resultados abre con el héroe «**Tus mesas esperan X min menos**» (antes/después del modo sombra), después las cinco cifras del turno (respuesta, sin atender, olvidadas, rotación, platos que vuelven), la serie semana a semana, lo que vuelve a la cocina en pesos y la adopción de los mozos. Carta: tabla por plato (vuelve, ritmo, sobra; ritmo y sobra solo existen con datos en vivo, el historial simulado no los tiene) con una frase de diagnóstico del plato que más vuelve. Turno: lo mismo que ve el encargado. Config: costo de Servio por mes, umbrales del local, roles y usuarios.
 
 Qué ve cada rol sale del servidor (`vistas` y `metricas` en la respuesta de `/datos`: la forma exacta de `dashboard.py`, que el prototipo usa tal cual, con `metricas{…}`, `pendientes{…}` y `configuracion{umbrales, roles}`), no del front: el prototipo tiene el segmento Encargado/Dueño solo para revisar.
 
 ### Cuando todavía no hay datos
 
-Toda métrica tiene su lugar desde el primer día, pero **no se inventa**: si el servidor manda `null`, la tarjeta sale punteada con el porqué («Se muestra a partir del día 7», «Necesita servicios en modo sombra», «Ningún plato volvió lleno todavía»). D-1 ya dibuja la tarjeta punteada y manda `pendientes` con un texto por métrica, pero hoy esos textos dicen qué tarea la trae («Llega con D-5 y M-2»); el diseño pide que digan **qué tiene que pasar en el local** («Se muestra a partir del día 7») y que toda métrica en `null` tenga el suyo (punto 4 de «Qué cambia»). El prototipo agrega el botón «Primer día» para ver cómo queda un local recién instalado: avisos en cero, sin histórico ni antes/después, y el resto con sus textos. Ninguna tarjeta divide por cero ni muestra «NaN».
+Toda métrica tiene su lugar desde el primer día, pero **no se inventa**: si el servidor manda `null`, la tarjeta sale punteada con el porqué («Se muestra a partir del día 14», «Necesita servicios en modo sombra», «Ningún plato volvió lleno todavía»). D-1 ya dibuja la tarjeta punteada y manda `pendientes` con un texto por métrica, pero hoy esos textos dicen qué tarea la trae («Llega con D-5 y M-2»); el diseño pide que digan **qué tiene que pasar en el local** («Se muestra a partir del día 14») y que toda métrica en `null` tenga el suyo (punto 4 de «Qué cambia»). El prototipo agrega el botón «Primer día» para ver cómo queda un local recién instalado: avisos en cero, sin histórico ni antes/después, y el resto con sus textos. Ninguna tarjeta divide por cero ni muestra «NaN».
 
 ### Qué cambia respecto de lo implementado (`dashboard.html`, D-1)
 
