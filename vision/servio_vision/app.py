@@ -112,8 +112,9 @@ def load_tables(settings: Settings) -> tuple[Zones | None, TableTracker | None]:
     mensajes ya dicen qué hacer. Lo usan `build_pipeline` y el chequeo de encuadre.
     Una sesión grabada (B-1) se reproduce con las zonas con las que se grabó, aunque
     la config diga otras: con otras mesas no hay nada que comparar."""
-    if is_session_source(settings):
-        recorded = recording.session_zones(Path(settings.source))
+    session = session_dir(settings)
+    if session is not None:
+        recorded = recording.session_zones(session)
         if recorded is not None:
             if settings.zones is not None:
                 logger.info(
@@ -298,11 +299,13 @@ def run(settings: Settings, limit: int | None = None) -> int:
     """El loop: abre la fuente, graba si se pidió y procesa cada lectura."""
     if not require_source(settings):
         return 2
-    assert settings.source is not None  # lo garantiza `require_source`
+    source = settings.source
+    assert source is not None  # lo garantiza `require_source`
     try:
         settings = session_settings(settings)  # una sesión grabada: sus reglas
-        if is_session_source(settings):
-            recording.reset_replay(Path(settings.source))  # lo de la vez anterior
+        replay_dir = session_dir(settings)
+        if replay_dir is not None:
+            recording.reset_replay(replay_dir)  # lo de la vez anterior
         if settings.record:
             recording.ensure_free(
                 settings.record, alerts.DEFAULT_LOG
@@ -323,19 +326,20 @@ def run(settings: Settings, limit: int | None = None) -> int:
     try:
         # La grabación antes que la fuente, que sale de open_source con las caras
         # difuminadas (C-3): nada de lo que sigue, tampoco la grabación, ve una cara.
-        recorder = session = (
+        session = (
             SessionRecorder(
                 settings.record,
                 rules=session_rules(settings),
                 local_id=settings.local_id,
-                source=settings.source,
+                source=source,
                 classifier=settings.classifier,
                 zones=pipeline.zones if pipeline.tables is None else None,
-                live=is_live_source(settings.source),
+                live=is_live_source(source),
             )
             if settings.record
             else None
         )
+        recorder: FrameRecorder | None = session
         # El detector de caras de una cámara se arma una sola vez y antes del latido:
         # cargarlo (o bajarlo) en cada reintento, o contarlo como tiempo sin lecturas,
         # no tiene sentido. Con un archivo lo arma `open_source` después de ver que
@@ -345,16 +349,14 @@ def run(settings: Settings, limit: int | None = None) -> int:
         protect = plate_protector(pipeline)
         anonymize = (
             privacy.default_anonymizer(face_model=settings.face_model, protect=protect)
-            if is_live_source(settings.source)
+            if is_live_source(source)
             else None
         )
         if monitor is not None:
             # antes de abrir la cámara: si no abre, también hay que enterarse
             monitor.start()
         frames = _open_frames(settings, anonymize, protect)
-        if is_session_source(settings) and recording.frames_anonymized(
-            Path(settings.source)
-        ):
+        if replay_dir is not None and recording.frames_anonymized(replay_dir):
             logger.info(
                 "Privacidad: frames de una sesión grabada, ya sin caras según sesion.json"
             )
@@ -478,14 +480,19 @@ def replay_log(settings: Settings) -> Path | None:
     """Reproduciendo una sesión, el log de `alerts` de esa corrida va a la sesión
     (`reproduccion.jsonl`, lo que compara `tools/comparar_sesion.py`) y no al log
     compartido de `out/`, que es el del servicio de verdad. `None`: el de siempre."""
-    if not is_session_source(settings):
-        return None
-    assert settings.source is not None
-    return Path(settings.source) / recording.REPLAY_EVENTS_FILE
+    session = session_dir(settings)
+    return None if session is None else session / recording.REPLAY_EVENTS_FILE
 
 
 def is_session_source(settings: Settings) -> bool:
-    return settings.source is not None and recording.is_session(Path(settings.source))
+    return session_dir(settings) is not None
+
+
+def session_dir(settings: Settings) -> Path | None:
+    """La carpeta de la sesión grabada si la fuente es una; si no, `None`."""
+    if settings.source is None or not recording.is_session(Path(settings.source)):
+        return None
+    return Path(settings.source)
 
 
 def session_settings(settings: Settings) -> Settings:
@@ -494,10 +501,9 @@ def session_settings(settings: Settings) -> Settings:
     reproducción no reproduce nada. Para probar otras reglas, editar `sesion.json`.
     Y sin tocar nada de verdad: ni Telegram ni la base compartida (los avisos van a
     una SQLite dentro de la sesión). `OSError` si la sesión no se puede leer."""
-    if not is_session_source(settings):
+    session = session_dir(settings)
+    if session is None:
         return settings
-    assert settings.source is not None
-    session = Path(settings.source)
     info = recording.read_info(session)
     rules = info.get("rules")
     if not isinstance(rules, dict):

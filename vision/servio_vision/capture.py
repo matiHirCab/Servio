@@ -219,7 +219,9 @@ def _stamped_frames(
 ) -> Iterator[Frame]:
     """Imágenes sueltas, cada una con su hora; `speed` espera lo que las separa."""
     pacer = _Pacer(speed)
-    first = frames[0][1] if frames else None
+    if not frames:
+        return
+    first = frames[0][1]
     for file, ts in frames:
         frame = cv2.imread(str(file))
         if frame is None:
