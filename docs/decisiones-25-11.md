@@ -1,263 +1,359 @@
-# Decisiones para llegar al corte del 25/11
+# Decisiones de producto y negocio para llegar al 25/11
 
-Lo que hay que decidir **en una reunión** para que las semanas 3 (11/11 → 17/11) y 4 (18/11 → 25/11) se puedan trabajar sin frenarse a preguntar. Cada punto trae el contexto en dos líneas, las opciones, una propuesta para discutir y un renglón «Decisión» para completar en la reunión. Después de la reunión, este archivo es la referencia: si una tarjeta choca con algo de acá, manda esto.
+Lo que el equipo tiene que decidir **en una reunión** para que lo que queda de las semanas 3 y 4 se pueda hacer de corrido, sin frenarse a preguntar. No es un reparto de tareas: la implementación la hace Claude tarjeta por tarjeta, y lo que necesita es que estas preguntas tengan respuesta. Cada punto trae el contexto en dos líneas, las opciones, una propuesta para discutir y un renglón «Decisión» para completar. Después de la reunión, este archivo manda: si una tarjeta choca con algo de acá, gana esto.
 
-Fuentes: [roadmap-producto.md](roadmap-producto.md), el Trello (listas Semana 3, Semana 4 y Después del 25/11), [diseno-front.md](diseno-front.md), [context/12-roles.md](context/12-roles.md), [context/13-metricas.md](context/13-metricas.md) y los PR abiertos.
+Fuentes: [context/01-producto.md](context/01-producto.md), [context/05-reglas-alertas.md](context/05-reglas-alertas.md), [context/12-roles.md](context/12-roles.md), [context/13-metricas.md](context/13-metricas.md), [diseno-front.md](diseno-front.md), [legal-uruguay.md](legal-uruguay.md), [roadmap-producto.md](roadmap-producto.md) y el Trello.
 
 ## Resumen en una pantalla
 
-| # | Decisión | Propuesta | Decide |
-|---|---|---|---|
-| 1 | Quién toma cada tarjeta de las semanas 3 y 4 | Reparto de abajo, por dueño de área | Todos |
-| 2 | Qué se corta si no entra todo | C-2 y D-3 pasan a «Después del 25/11» primero | Todos |
-| 3 | Cámara armada en cada casa: fecha | Antes del 13/11, es lo que destraba B-2 y M-2 | Cada uno |
-| 4 | Qué aviso se espera en cada escenario de B-2 | Tabla de abajo | Matías + Tomás |
-| 5 | Plato compartido: cómo se resuelve | Regla + comportamiento, nada que cargue el restaurante | Tomás |
-| 6 | Detector: seguir con YOLO entrenado o probar YOLO-World | Probar YOLO-World 1 día dentro de C-1 | Tomás |
-| 7 | Escalado y recordatorios: tiempos y a quién | Los del diseño F-3 | Matías |
-| 8 | Dónde vive mozo ↔ Telegram y mesa ↔ mozo | Un solo lugar: `servio.toml` | Matías + Jessica |
-| 9 | Canal al reloj: Telegram, y quién lo prueba en un reloj real | Telegram; probar con el reloj que haya antes del 17/11 | Todos |
-| 10 | `/metricas` y avisos a encargado y dueño | Solo encargado y dueño; escalados al encargado | Matías |
-| 11 | Umbrales por local en `servio.toml` | Sí, los que el dashboard muestra en «configuración» | Matías |
-| 12 | F-1b: sobre qué código se hace y modo video | Sobre `salon.html`, no sobre `vista_demo.py`; video solo con `--web-video` | Jessica |
-| 13 | PR #65 (D-1): cerrar y aplicar F-2 encima | Mergear #65 como está; F-2 se aplica en un PR aparte | Tomás |
-| 14 | PR #29 y #42: qué se hace con cada uno | #29 se cierra o se rebasea en la semana; #42 se mergea el 25/11 | Matías / Tomás |
-| 15 | Base compartida: quién usa cuál y `local_id` | Todos contra el Postgres, cada casa con su `local_id` | Todos |
-| 16 | Comanda por casa | Cada casa con su `restaurante/` en el toml | Jessica |
-| 17 | Sesiones grabadas: carpeta y nombres | Carpeta del equipo, `sesiones/<casa>/<fecha>-<escenario>/` | Matías |
-| 18 | M-2: cuántas comidas por casa y en qué modo | 2 en sombra + 2 con avisos por casa, semana 4 | Todos |
-| 19 | Demo del 25/11: qué se graba y quién | Una comida de verdad con F-1b + dashboard + avisos | Todos |
-| 20 | Reunión fija de la semana | Un día fijo de 30 min | Todos |
-
----
-
-## A · Equipo y reparto
-
-### 1. Quién toma cada tarjeta
-
-**Contexto.** En el Trello, ninguna tarjeta de las semanas 3 y 4 tiene a nadie asignado. Entre las dos semanas hay unos 28 días de trabajo estimados más F-1b (que arranca en la semana 3 y termina el 24/11), para 3 o 4 personas.
-
-**Propuesta** (sigue los dueños de área del roadmap: Tomás modelo, Matías avisos y datos, Jessica pipeline, app y front):
-
-| Semana | Tarjeta | Días | Propuesto |
-|---|---|---|---|
-| 3 | F-1b · Vista de reconocimiento (termina 24/11) | ~5 | Jessica |
-| 3 | C-5 · «Voy», «Listo», «No hacía falta» | 2 | Matías |
-| 3 | C-7 · Avisos por mozo al reloj | 2 | Matías |
-| 3 | B-2 · Escenarios actuados (mínimo 8) | 2 | Matías arma la lista y los esperados; **graban las tres casas** |
-| 3 | B-3 · Etiquetar recortes y tablero de números | 4 | Tomás (si hay cuarta persona: con Tomás) |
-| 3 | A-7 · Un solo comando `servio` | 2 | Jessica |
-| 3 | A-9 · Docs al día | 1 | Cada uno su parte, Tomás junta |
-| 4 | C-1 · Menos avisos falsos | 4 | Tomás |
-| 4 | C-2 · Menos llamadas al modelo | 3 | Tomás (ver punto 2) |
-| 4 | D-4 · Inteligencia de menú | 3 | Tomás o Matías (ver punto 2) |
-| 4 | M-2 · Modo sombra y números antes/después | 3 | Matías (la parte de código); miden las tres casas |
-| 4 | D-3 · Resumen al cerrar el servicio | 2 | Matías (ver punto 2) |
-| 4 | Corte 25/11 | — | Todos |
-
-Con eso Tomás queda con 14 días en dos semanas y Matías con 12. No entra sin cortar algo (punto 2) o sin la cuarta persona.
-
-**Decisión:** ___
-
-### 2. Qué se corta si no entra todo
-
-**Contexto.** Para el corte hacen falta, según la tarjeta «Corte 25/11»: `main` estable, la demo grabada (F-1b + D-1 + avisos) y la hoja de métricas de M-2. Todo lo demás es deseable.
-
-**Opciones.** Definir ahora el orden en que se sacan cosas, para no discutirlo el 20/11.
-
-**Propuesta.** Orden de corte: primero C-2 (ahorra plata, no se ve en la demo), después D-3 (el resumen sale a mano de `/metricas`), después D-4 (se vende con los datos simulados de `generar_historial` que ya están). No se corta: F-1b, C-5, B-2, M-2, C-1.
-
-**Decisión:** ___
-
-### 3. Cámara armada en cada casa
-
-**Contexto.** La tarjeta «Cámara armada en cada casa» de la semana 1 sigue abierta. Sin cámara no hay B-2 (escenarios grabados), ni B-3 (recortes de 3 casas), ni M-2 (comidas medidas en 3 casas). La guía es [montaje-camara.md](montaje-camara.md) y el chequeo `python -m servio_vision.framing --config …`.
-
-**Propuesta.** Fecha límite 13/11 para que las tres casas tengan el pipeline corriendo en vivo con el chequeo de encuadre en verde. Quien no llegue, graba en la casa de otro.
-
-**Decisión:** fecha ___ · Jessica ___ · Matías ___ · Tomás ___
-
----
-
-## B · Producto y reglas
-
-### 4. Qué aviso se espera en cada escenario de B-2
-
-**Contexto.** B-2 pide grabar 8 escenarios «con sus avisos esperados». Los avisos esperados son una decisión de producto, no de código: hay que acordarlos antes de grabar, si no cada uno graba con una idea distinta. Hoy las reglas ([context/05-reglas-alertas.md](context/05-reglas-alertas.md)) son: plato vacío ≥ 1 min mientras la mesa sigue comiendo → «retirar platos»; todos vacíos → «mesa terminó»; plato lleno ≥ 10 min con gente → «sigue lleno».
-
-**Propuesta** (lo que debería pasar; donde dice «hoy falla» es lo que C-1 tiene que arreglar):
-
-| Escenario | Aviso esperado | Hoy |
+| # | Decisión | Propuesta |
 |---|---|---|
-| Comer todo, dos platos | «Mesa terminó» cuando los dos quedan vacíos; nada antes | Anda |
-| Dejar un plato lleno 10 min | «Sigue lleno» a los 10 min, una vez | Anda |
-| Plato compartido (fuente al medio + platitos) | Nada mientras alguien tenga comida en su plato; «retirar» por la fuente vacía es aceptable; «mesa terminó» recién sin comida en ningún plato | Hoy falla: ver punto 5 |
-| Levantarse un rato (plato con comida, silla vacía) | Nada; «sigue lleno» no sale sin gente | Anda si el detector de personas ve la silla vacía |
-| Dejar el pan / la guarnición | No cuenta como plato: nada | Hoy falla: la panera puede detectarse como plato |
-| Retirar un plato y no el otro | «Retirar» por el plato vacío que queda si el otro sigue comiendo | Anda |
-| Mover la mesa | Los mismos avisos que sin moverla | Anda con `--zones` fijas; a probar con mesas automáticas |
-| Poca luz | El chequeo de encuadre avisa; sin avisos falsos | A probar |
+| **Validar los diseños** | | |
+| 1 | F-1, el salón: ¿quién lo mira y dónde? | Pantalla del encargado y de la venta; el mozo mira el reloj |
+| 2 | F-1: ¿modo video con caras difuminadas o solo reconstrucción? | Reconstrucción por defecto; video solo en la demo |
+| 3 | F-2, el dashboard: ¿son estas las 17 métricas? ¿cuál es el titular? | Titular: «tus mesas esperan X min menos»; el resto queda |
+| 4 | F-2: ¿qué se muestra el primer día, sin datos? | Tarjetas punteadas con el porqué, nunca un número inventado |
+| 5 | F-3: ¿respuesta con una palabra o botones? | Palabra suelta en todo; botones de regalo en el celular |
+| 6 | F-3: tiempos de recordatorio y escalado | 3 min, dos recordatorios, escalado a los 9 min |
+| **Casos de la vida real** | | |
+| 7 | Plato compartido o fuente al medio | Nada que cargue el restaurante: regla + comportamiento |
+| 8 | Pan, guarnición, salsas, lo que se deja a propósito | No cuenta como plato |
+| 9 | Alguien se levanta (baño, fumar) con el plato lleno | No avisar sin gente; retomar al volver |
+| 10 | Mesa con platos y sin gente (se fueron sin pagar / ya pagaron) | Avisar «retirar» a los 2 min, es trabajo del mozo igual |
+| 11 | Postre, café, vasos, tazas | Café y vasos no se miran hasta D-7; postre es un plato más |
+| 12 | Mesa grande (8 personas, platos que llegan de a tandas) | Las reglas son por plato: ya funciona; confirmar «mesa terminó» |
+| 13 | Cliente que rechaza el plato (se lo llevan lleno) | «Sigue lleno» se cierra solo; el mozo marca el motivo |
+| 14 | Mesas que se juntan o se mueven | Zonas fijas por local; juntar mesas es un caso de D-2 |
+| **Opciones técnicas con impacto en el negocio** | | |
+| 15 | Detector de platos: seguir con YOLO entrenado, YOLO-World, entrenar más | Probar YOLO-World; entrenar solo con fotos propias (B-3) |
+| 16 | Modelo que mira el plato: Haiku, Sonnet, modelo propio | Haiku; modelo propio (D-8) cuando haya 1.000 recortes etiquetados |
+| 17 | Qué va a la nube: solo recortes de platos, o la mesa entera | Solo recortes; la mesa entera nunca en producción |
+| 18 | Cadencia de lectura y costo por mesa por hora | 30 s; el costo medido en B-3 fija el precio mínimo |
+| **Negocio** | | |
+| 19 | Cliente objetivo del primer piloto | Restaurante de 15 a 40 mesas en Montevideo, con encargado |
+| 20 | Qué se vende: el número de cabecera | Minutos de mesa terminada sin atender, antes vs. después |
+| 21 | Precio y modelo de cobro | Por mes por local, escalonado por mesas; piloto gratis 4 semanas |
+| 22 | Hardware: celular con DroidCam o cámara IP, quién la pone | Cámara IP que ponemos nosotros, el celular solo para probar |
+| 23 | Canal al mozo: Telegram, WhatsApp, app propia | Telegram ahora, WhatsApp cuando haya cliente que lo pida |
+| 24 | Reloj: ¿se vende con reloj o con el celular en el bolsillo? | El celular alcanza para vender; el reloj es el «premium» |
+| 25 | Integración con la comanda (POS) | Sin POS en el piloto: la carta y los mozos se cargan una vez |
+| 26 | Legal: cartel, inscripción en la URCDP, aviso a los mozos, abogado | Paquete mínimo antes del piloto; abogado antes de cobrar |
+| 27 | Datos de los mozos: ¿se muestran por nombre al dueño? | Sí al encargado y dueño; nunca al grupo de mozos |
+| 28 | Piloto: modo sombra primero y cuánto dura | 1 semana en sombra, 3 con avisos, una hoja de resultados |
+| **El 25/11** | | |
+| 29 | Qué muestra la demo | Una comida real: salón + aviso contestado + dashboard |
+| 30 | Qué tiene que decir la hoja de métricas | Un número antes/después, el costo por mesa, el acierto |
 
-**Decisión:** ___ (marcar los que cambian)
+---
 
-### 5. Plato compartido
+## A · Validar los diseños
 
-**Contexto.** Hoy el sistema ve platos, no personas, y empareja cada plato con la comanda por orden de aparición. Con una fuente al medio y platitos, la fuente es el único plato que «cuenta»: cuando se vacía, sale «retirar» (aceptable) y puede salir «mesa terminó» mientras todos siguen comiendo (eso es el problema). Marcar en la carta qué platos son para compartir **queda descartado**: cualquier plato se puede pedir para compartir y si el restaurante no lo carga, anda mal.
+Los tres diseños están en [diseno-front.md](diseno-front.md) con un prototipo cada uno (links en la tabla de arriba del doc; son privados hasta que Jessica los comparta). La reunión los abre y responde esto.
 
-**Opciones.**
-- (a) Regla: «mesa terminó» mira **todos** los platos visibles, contados o no en la comanda. Barato, sin visión nueva.
-- (b) Comportamiento: un plato cuya comida baja de a saltos mientras otros platos de la mesa suben es compartido; no dispara «retirar» mientras los demás tienen comida. Usa números que ya se guardan (`fill_ratio` por lectura).
-- (c) Que el modelo diga en la misma llamada si el recorte parece fuente, tabla o bandeja. Ayuda a acertar desde el primer segundo.
+### 1. F-1, el salón: ¿quién lo mira y dónde?
 
-**Propuesta.** (a) ya en C-1, (b) si el escenario de B-2 sigue fallando con (a), (c) solo si lo anterior no alcanza. Nada que tenga que cargar el restaurante.
+**Contexto.** El diseño F-1 muestra todas las mesas con su estado y los avisos abiertos. [12-roles.md](context/12-roles.md) dice que el mozo lo ve «en la pantalla». Pero un mozo en servicio no mira una pantalla: mira el reloj o el celular. Si la pantalla es para el encargado y para la reunión de venta, cambia lo que importa (que se entienda en 3 segundos desde lejos) y lo que no (que el mozo marque sus mesas).
 
-**Decisión:** ___
+**Opciones.** (a) Pantalla fija en la barra o la cocina para el encargado. (b) Pantalla que el mozo abre en el celular cuando le llega un aviso. (c) Las dos.
 
-### 6. Detector: YOLO entrenado o YOLO-World
-
-**Contexto.** El YOLO del repo (`best.pt`) conoce una sola clase, «plato». No sabemos si detecta una tabla de madera, una fuente o un bowl. YOLO-World viene en la misma librería `ultralytics`, no se entrena, y detecta lo que se le pida por texto («plato, bowl, fuente, tabla, canasta de pan, vaso»). Es GPL, como ya lo es `ultralytics`. Alternativas más precisas (RF-DETR, licencia Apache) necesitan etiquetar fotos de cada tipo.
-
-**Propuesta.** Un día dentro de C-1: correr YOLO-World sobre las sesiones de B-2 y comparar con `best.pt` en el tablero de números. Se adopta solo si no empeora el acierto por estado.
-
-**Decisión:** ___
-
-### 7. Escalado y recordatorios
-
-**Contexto.** El diseño F-3 ([diseno-front.md](diseno-front.md), sección F-3) propone: «Voy» toma el aviso y frena recordatorios; «Listo» lo anota y, si la cámara no lo ve resuelto en 10 min, insiste una vez y escala; «No hacía falta» es la única que cierra a mano (`motivo_cierre = no_hacia_falta`); sin respuesta, escalado al encargado a los 9 min (cuando saldría el tercer recordatorio); el encargado se configura con `encargado_telegram` en `servio.toml`.
-
-**Opciones.** Confirmar esos tiempos, o cambiarlos (por ejemplo escalar a los 5 min).
-
-**Propuesta.** Los del diseño. Son los que C-5 implementa.
-
-**Decisión:** ___
-
-### 8. Dónde vive mozo ↔ Telegram y mesa ↔ mozo
-
-**Contexto.** Hay dos textos que se contradicen. La tarjeta C-7 dice que la asignación mesa → mozo va en `servio.toml`. El diseño F-3 propone un campo `telegram` por mozo en `salon.json` (la comanda). Hay que elegir uno antes de C-5 y C-7.
-
-**Propuesta.** Todo en `servio.toml`: `[mozos.juan] nombre = "Juan", telegram = "@juan", mesas = ["T1", "T2"]`. `salon.json` queda solo con los pedidos (es lo que en un local real viene del sistema de comandas, y ahí no hay usuarios de Telegram). Quien implemente C-7 corrige el doc F-3.
-
-**Decisión:** ___
-
-### 9. Canal al reloj y la prueba en un reloj real
-
-**Contexto.** F-3 eligió Telegram (app de reloj desde junio 2026) condicionado a dos cosas que solo se prueban con un reloj: que la notificación del grupo se contesta sin abrir la app, y si se ven los botones del mensaje. Si falla, el plan es WhatsApp con D-6 (después del 25/11) con la misma mecánica de responder con una palabra.
-
-**Opciones.** Alguien del equipo tiene Apple Watch o Wear OS; se consigue uno prestado; o se asume Telegram sin probar y la demo se hace con el celular.
-
-**Propuesta.** Definir quién tiene reloj y probar antes del 17/11. Si nadie tiene, la demo del 25/11 se hace con el celular y la prueba en reloj pasa a «Después del 25/11» explícitamente.
-
-**Decisión:** reloj: ___ · fecha: ___
-
-### 10. `/metricas` y avisos a encargado y dueño
-
-**Contexto.** [context/12-roles.md](context/12-roles.md) deja pendiente: `/metricas` hoy se responde en el grupo donde están los mozos, y encargado y dueño no reciben ningún aviso. F-3 propone escalados al encargado y D-3 el resumen al encargado y al dueño.
-
-**Propuesta.** Con C-7: `/metricas` se responde solo a encargado y dueño; el mozo recibe solo sus avisos; el encargado recibe los escalados; el resumen de cierre (D-3) va a encargado y dueño.
+**Propuesta.** (a) más la venta: es «lo que ve Servio» en una reunión con un dueño. En el celular del mozo va solo el aviso (F-3). Si se confirma, F-1b prioriza pantalla grande sobre celular.
 
 **Decisión:** ___
 
-### 11. Umbrales por local
+### 2. F-1: ¿modo video o solo reconstrucción?
 
-**Contexto.** [context/13-metricas.md](context/13-metricas.md) deja pendiente si los umbrales (5 min de mesa sin atender, 2 min, etc.) van a `servio.toml`. El prototipo F-2 ya los muestra en «configuración» del dashboard como si vinieran del servidor.
+**Contexto.** F-1 tiene dos modos: el video real con caras difuminadas, y la reconstrucción (mesas, sillas y platos dibujados). El video es lo que más impresiona en una venta y lo que más riesgo legal tiene (es videovigilancia aunque esté difuminado, [legal-uruguay.md](legal-uruguay.md)).
 
-**Propuesta.** Sí: van a `servio.toml` (A-1 ya lee el toml) con los valores de hoy como default. Editarlos desde la web es D-2, después del 25/11.
+**Propuesta.** Reconstrucción por defecto en el local. Video solo con un flag explícito (`--web-video`), para la demo y para calibrar la cámara. En la web pública y el pitch, mostrar la reconstrucción como el producto y el video como «así lo ve».
+
+**Decisión:** ___
+
+### 3. F-2, el dashboard: ¿son estas las métricas? ¿cuál es el titular?
+
+**Contexto.** [13-metricas.md](context/13-metricas.md) cerró 17 métricas; el prototipo F-2 las ubica todas (10 para el encargado). El héroe del dueño es «antes vs. después» en minutos. Un dashboard con 17 números no vende: vende uno.
+
+**Opciones** para el titular: minutos de mesa terminada sin atender; mesas más por noche (rotación); plata recuperada (ROI, necesita el ticket promedio); platos que vuelven llenos (desperdicio).
+
+**Propuesta.** El titular es «tus mesas esperan X minutos menos después de terminar» (es lo que se mide en M-2 y lo que un dueño entiende sin explicación). Rotación y ROI, debajo, como consecuencia. Las 17 quedan, pero se confirma que ninguna sobra ni falta: ¿propinas? ¿reseñas del local?
+
+**Decisión:** titular ___ · sacar ___ · agregar ___
+
+### 4. F-2: qué se muestra el primer día
+
+**Contexto.** Un local nuevo arranca sin historia: nada de antes/después, nada de tendencia. El diseño F-2 propone tarjetas punteadas con el porqué («Se muestra a partir del día 14», «Necesita servicios en modo sombra») y nunca un número inventado o un cero que parezca dato.
+
+**Opciones.** Lo de arriba; o esconder las tarjetas sin datos; o mostrar datos de ejemplo marcados como tales.
+
+**Propuesta.** Lo del diseño. Un dashboard que se va llenando le muestra al dueño qué va a tener, y evita vender un cero.
+
+**Decisión:** ___
+
+### 5. F-3: ¿respuesta con una palabra o botones?
+
+**Contexto.** F-3 diseñó que el mozo contesta con una palabra suelta («Voy», «Listo», «No hacía falta») porque en un reloj la notificación se contesta con respuesta rápida o dictado, y no está probado que los botones de Telegram se vean ahí. Los botones siguen en el celular. El riesgo: dos mozos con avisos abiertos y un «Voy» ambiguo; el diseño lo resuelve preguntando «¿Mesa 2 o Mesa 3?».
+
+**Propuesta.** La del diseño. Y una regla de negocio: contestar es opcional, la cámara cierra los avisos sola cuando ve el plato retirado. El mozo que no contesta nunca no rompe nada; solo no tiene métrica de tiempo de respuesta.
+
+**Decisión:** ___
+
+### 6. F-3: tiempos de recordatorio y escalado
+
+**Contexto.** Hoy: aviso, recordatorio a los 3 min, otro a los 6, nada más. F-3 agrega: «Voy» frena los recordatorios; «Listo» sin que la cámara lo vea resuelto en 10 min insiste una vez y escala; sin respuesta, escalado al encargado a los 9 min. En un restaurante lleno, 9 minutos de una mesa terminada sin atender ya es mucho; en uno tranquilo, escalar a los 5 puede ser molesto.
+
+**Opciones.** 9 min fijo; 5 min; configurable por local con default.
+
+**Propuesta.** Configurable por local en `servio.toml` (junto con los umbrales del punto 18), default 9 min. El piloto dice si bajarlo.
+
+**Decisión:** recordatorio ___ min · escalado ___ min
+
+---
+
+## B · Casos de la vida real
+
+Lo que Servio tiene que hacer cuando pasa algo que no es «dos personas, dos platos, comen y se van». Para cada caso: qué debería pasar (decisión de producto) y qué pasa hoy. Las decisiones de acá son los avisos esperados de los escenarios de B-2 y lo que C-1 tiene que arreglar.
+
+### 7. Plato compartido o fuente al medio
+
+**Contexto.** Servio ve platos, no personas, y empareja cada plato con la comanda por orden de aparición. Con una picada o una fuente al medio y platitos, la fuente es el único plato que cuenta: cuando se vacía sale «retirar» (razonable, el mozo retira la tabla vacía) y puede salir «mesa terminó» mientras todos siguen comiendo de su plato (el problema). **Descartado:** marcar en la carta qué platos son para compartir, porque cualquier plato se puede pedir para compartir y si el restaurante no lo carga, anda mal.
+
+**Opciones.** (a) «Mesa terminó» mira todos los platos visibles, estén o no en la comanda. (b) Un plato cuya comida baja de a saltos mientras otros platos de la mesa suben es compartido, y no dispara «retirar» mientras los demás tienen comida (usa números que ya se guardan). (c) El modelo dice en la misma llamada si el recorte parece fuente, tabla o bandeja.
+
+**Propuesta.** (a) siempre; (b) si el escenario grabado sigue fallando; (c) solo si lo anterior no alcanza. Aviso esperado del escenario: nada mientras alguien tenga comida en su plato; «retirar» por la fuente vacía se acepta; «mesa terminó» recién sin comida en ningún plato.
+
+**Decisión:** ___
+
+### 8. Pan, guarnición, salsas, lo que se deja a propósito
+
+**Contexto.** La panera, el bol de papas, la salsera. Hoy pueden detectarse como «plato» y quedar llenos para siempre («sigue lleno» falso) o vacíos («retirar» falso). Con la comanda, lo que no coincide con un pedido no cuenta, pero si la panera aparece antes que el plato principal, se queda con su lugar (pendiente conocido en [para-tomas.md](para-tomas.md)).
+
+**Opciones.** No contar bowls y canastas (el detector los distingue si se le pide, punto 15); contar solo lo que coincide con la comanda y arreglar el orden; o pedirle al modelo que diga «no es un plato de comida».
+
+**Propuesta.** No cuentan. Aviso esperado del escenario «dejar el pan»: ninguno.
+
+**Decisión:** ___
+
+### 9. Alguien se levanta con el plato lleno
+
+**Contexto.** Baño, fumar, atender el teléfono. Hoy «sigue lleno» no se abre sin gente en la mesa (`people_present`), y se cierra si la gente no está en dos lecturas seguidas. Al volver, el reloj del plato sigue desde que apareció.
+
+**Opciones.** Lo de hoy; o pausar el reloj del plato mientras no hay nadie; o avisar igual porque un plato lleno sin gente también es información.
+
+**Propuesta.** Pausar el reloj mientras no hay nadie: si alguien se fue 8 minutos y vuelve, no le cae «¿está todo bien?» a los 2 minutos de sentarse. Aviso esperado: ninguno mientras no hay nadie; «sigue lleno» solo si el plato sigue lleno 10 minutos **con gente**.
+
+**Decisión:** ___
+
+### 10. Mesa con platos y sin gente
+
+**Contexto.** Se fueron (pagaron en la barra, o se fueron sin pagar). Hoy «retirar» sigue saliendo aunque no haya gente (está decidido así en [05](context/05-reglas-alertas.md)); «mesa terminó» sale solo si todos los platos están vacíos, así que una mesa abandonada con comida no avisa nunca.
+
+**Propuesta.** Mesa sin gente dos lecturas seguidas y con platos: aviso de «retirar» a los 2 minutos, haya o no comida. Es la rotación: esa mesa no se puede volver a ocupar hasta que la limpien.
+
+**Decisión:** ___
+
+### 11. Postre, café, vasos, tazas
+
+**Contexto.** El MVP mira solo platos de comida. Vasos y tazas son D-7 (después del 25/11). Un postre es un plato más y entra en la comanda; un café es una taza y hoy no existe. «Mesa terminó» se abre cuando todos los platos están vacíos y se cierra al retirar o al servir algo nuevo: con el café después, la mesa queda «libre» aunque sigan sentados.
+
+**Opciones.** Dejarlo así hasta D-7; o que la mesa con gente y sin platos sea un estado propio («sobremesa») que no avisa pero cuenta para el tiempo de mesa.
+
+**Propuesta.** Estado «sobremesa» solo para la métrica de tiempo de mesa, sin aviso. Vasos vacíos es el primer aviso nuevo de D-7 (es el que más vende: una bebida más por mesa).
+
+**Decisión:** ___
+
+### 12. Mesa grande, platos que llegan de a tandas
+
+**Contexto.** Ocho personas, los platos llegan en dos tandas, dos terminan rápido. Las reglas son por plato, así que «retirar» por los dos vacíos sale bien. «Mesa terminó» exige todos vacíos: con uno que come lento, la mesa espera. Un plato que se cambia por otro en el mismo lugar (principal → postre) se reconoce como plato nuevo.
+
+**Propuesta.** Confirmar que así está bien. Un posible cambio: «mesa terminó» con el 80 % de los platos vacíos en mesas de 6 o más, para que el mozo vaya con la cuenta antes. Para el piloto, no.
+
+**Decisión:** ___
+
+### 13. Cliente que rechaza el plato
+
+**Contexto.** El plato llega, no le gusta, el mozo se lo lleva lleno. «Sigue lleno» se abre a los 10 minutos si nadie lo retiró; si el mozo lo retira antes, no hay aviso y no queda registro de que ese plato volvió lleno. Y esa es la métrica de D-4 («platos que vuelven con comida»), la más diferencial para vender.
+
+**Opciones.** Registrar como «vuelve lleno» todo plato que desaparece estando `lleno` antes de 10 minutos (puede ser un cambio de plato, no un rechazo); o que el mozo lo marque desde el celular; o las dos (automático, y el mozo pone el motivo si quiere).
+
+**Propuesta.** Las dos. Un plato lleno que desaparece queda como «posible devolución» y el mozo recibe la pregunta de motivo (los mismos botones de hoy). Sin respuesta, cuenta igual pero sin motivo.
+
+**Decisión:** ___
+
+### 14. Mesas que se juntan o se mueven
+
+**Contexto.** Hoy las mesas se detectan solas o se dibujan a mano con `--zones`. Si la mesa se mueve, los platos se siguen; si dos mesas se juntan, son dos zonas con una sola comanda.
+
+**Propuesta.** En el piloto, zonas fijas dibujadas al instalar (más estable que la detección automática) y las mesas que se juntan se tratan como lo que son, dos mesas con el mismo mozo. Juntar y separar desde la web es parte de D-2.
 
 **Decisión:** ___
 
 ---
 
-## C · Front
+## C · Opciones técnicas con impacto en el negocio
 
-### 12. F-1b: sobre qué código y el modo video
+### 15. Detector de platos
 
-**Contexto.** La tarjeta dice «rehacer `vista_demo.py`». Pero desde el PR #64 existe `servio_vision/static/salon.html` servido por `--web`, y el prototipo F-1 es una copia de ese código con los cambios listados en «Qué cambia respecto de lo implementado». Además, el diseño pide del servidor `frame.jpg` (el último frame difuminado) solo con `--web-video`, `answered_by` en cada aviso, y horas en UTC.
+**Contexto.** El YOLO del repo (`best.pt`) sabe una sola cosa, «plato», entrenado en Colab con fotos de datasets públicos. No sabemos si detecta una tabla, una fuente o un bowl (casos 7 y 8). Opciones en la industria hoy:
 
-**Propuesta.** F-1b se hace sobre `salon.html` y `salon_web.py`, no sobre `vista_demo.py` (que queda como herramienta de demo con video). El modo video se sirve solo con `--web-video` y solo frames ya difuminados (lo que C-3 garantiza). `answered_by` lo agrega C-5; hasta entonces el panel no muestra quién respondió.
+| Opción | Qué da | Qué cuesta | Licencia |
+|---|---|---|---|
+| Seguir con `best.pt` y entrenarle más clases | Lo que etiquetemos | Etiquetar cientos de fotos por clase (B-3) | AGPL (ultralytics) |
+| **YOLO-World** (misma librería, sin entrenar) | Detecta lo que se le pide por texto: plato, bowl, fuente, tabla, canasta, vaso | Un día de prueba | GPL |
+| RF-DETR (Roboflow) | Más preciso que YOLO en datasets propios | Etiquetar igual que la primera | Apache 2.0 |
+| Claude mirando la mesa entera | Entiende la escena («picada al medio y tres platitos») | Más caro por lectura y manda la mesa con gente a la nube (punto 17) | — |
 
-**Decisión:** ___
-
-### 13. PR #65 (D-1, dashboard) y los cambios de F-2
-
-**Contexto.** La tarjeta D-1 está en Done pero el PR #65 (`tomas/dashboards`) sigue abierto. El diseño F-2 se hizo sobre ese código y lista 4 cambios (héroe antes/después, serie semanal y costos dibujadas, frases de diagnóstico desde los datos, textos de «sin datos» por métrica).
-
-**Opciones.** Mergear #65 como está y aplicar F-2 en un PR aparte; o aplicar F-2 en la rama antes de mergear.
-
-**Propuesta.** Mergear #65 ya (después de su code review) para que F-1b y D-4 tengan el dashboard en `develop`. Los 4 cambios de F-2 van en un PR chico después, de quien tenga lugar (Jessica, con F-1b).
+**Propuesta.** Probar YOLO-World sobre las sesiones grabadas y adoptarlo si no empeora el acierto por estado. Entrenar solo con fotos de nuestras cámaras cuando B-3 tenga etiquetas. La licencia GPL/AGPL se revisa antes de cobrar (hoy ya es así con `ultralytics`).
 
 **Decisión:** ___
 
-### 14. PR #29 y PR #42
+### 16. Modelo que estima cuánta comida queda
 
-**Contexto.** PR #29 (`matias/yolo-imgsz`, YOLO no agranda recortes chicos) está abierto desde el 17/10 sin movimiento. PR #42 es `develop → main`, la regla de que a `main` solo se mergea desde `develop`; `develop` le lleva 135 commits a `main`.
+**Contexto.** Hoy Claude Haiku mira cada recorte de plato (unos 4 s por lectura). Sonnet y Opus son más precisos y más caros; no se compararon. D-8 propone un modelo propio chico entrenado con las etiquetas de B-3, dejando Claude solo para los casos dudosos (corta el 80 % de las llamadas).
 
-**Propuesta.** #29: Matías decide en la semana si lo rebasea sobre `develop` o lo cierra. #42: se mergea el 25/11 como el acto del corte (`main` congelado), con el CI en verde.
+**Propuesta.** Haiku hasta el 25/11; comparar con Sonnet en el tablero de números (B-3) solo si el acierto por estado queda abajo del 85 %. Modelo propio cuando haya 1.000 recortes etiquetados, no antes.
 
-**Decisión:** #29 ___ · #42 ___
+**Decisión:** modelo ___ · umbral de acierto para cambiar ___
+
+### 17. Qué va a la nube
+
+**Contexto.** Desde C-3, a Anthropic van solo recortes de platos con las personas pixeladas; las caras se difuminan apenas se lee el frame. Mandar la mesa entera existe como modo opt-in. [legal-uruguay.md](legal-uruguay.md): el mayor riesgo jurídico es mandar frames con personas a EE. UU.
+
+**Propuesta.** Solo recortes de platos, siempre, en producción. El modo mesa entera se queda para experimentar en casa y no se vende. Esto es un argumento de venta y va en el cartel: «ninguna imagen de personas sale del local».
+
+**Decisión:** ___
+
+### 18. Cadencia y costo por mesa por hora
+
+**Contexto.** Una lectura cada 30 segundos por mesa; cada lectura con platos que cambiaron llama al modelo. El costo por mesa por hora no está medido todavía (sale del tablero de B-3) y es lo que define el precio mínimo. C-2 lo baja a la mitad (caché por plato, no volver a preguntar por un plato vacío).
+
+**Opciones.** 30 s; 60 s (la mitad del costo, avisos un minuto más tarde); adaptativo (rápido cuando la mesa cambia, lento cuando no).
+
+**Propuesta.** 30 s y C-2. Decidir ahora el tope de costo que aceptamos por mesa por hora (por ejemplo, 2 centavos de dólar), para que el precio del punto 21 cierre.
+
+**Decisión:** cadencia ___ · tope de costo ___ por mesa por hora
 
 ---
 
-## D · Datos e infraestructura
+## D · Negocio
 
-### 15. Base compartida y `local_id`
+### 19. Cliente objetivo del primer piloto
 
-**Contexto.** El Postgres de Supabase existe desde A-6. La URL la tiene Jessica en su `.env` y se pasa **por mensaje directo**, nunca en el grupo ni en el repo. Cada casa tiene que poner su `local_id` en su `servio.toml` para no mezclar datos. Sin `DATABASE_URL` se usa el SQLite local.
+**Contexto.** El problema que se vende sale de 297 reseñas de 14 restaurantes de Montevideo: el 18,5 % se queja del servicio y el 57 % de las de 1 y 2 estrellas. Pero el producto no sirve igual en todos lados: un bar de tapas con platos que van y vienen es el caso 7 todo el tiempo; un restaurante de menú de pasos tiene mesas que se quedan dos horas.
 
-**Propuesta.** En la reunión Jessica pasa la URL por DM a cada uno. `local_id`: `casa-jessica`, `casa-matias`, `casa-tomas`. Las comidas de M-2 van todas al Postgres; los tests y las pruebas sueltas, al SQLite.
+**Opciones.** Restaurante de 15 a 40 mesas con encargado y platos individuales; cadena chica con 2 o 3 locales (más mesas con una sola venta); bar o cervecería (rotación alta, el aviso de vasos vacíos vende más que el de platos).
 
-**Decisión:** ___
-
-### 16. Comanda por casa
-
-**Contexto.** La comanda (`fixtures/restaurante/`: mozos, mesas, pedidos, carta) es la misma para todas las casas. Con la base compartida, las tres casas escriben «Juan · Mesa 1». Para M-2 alcanza (el `local_id` separa), pero cada casa come platos distintos y el aviso de «sigue lleno» nombra el plato de la comanda.
-
-**Propuesta.** Cada casa tiene su carpeta de restaurante (copia de `fixtures/restaurante/` con sus platos y sus nombres) y la apunta desde su `servio.toml`. Lo que es «configurar el local desde la web» sigue siendo D-2, después del 25/11.
+**Propuesta.** Restaurante de 15 a 40 mesas en Montevideo, con encargado en el salón (es quien mira F-1 y recibe los escalados) y platos individuales. Es donde las tres alertas de hoy aciertan más.
 
 **Decisión:** ___
 
-### 17. Sesiones grabadas: carpeta y nombres
+### 20. Qué se vende: el número de cabecera
 
-**Contexto.** B-1 graba sesiones (`--record DIR`: frames difuminados + `sesion.json` + `eventos.jsonl`). Van a la carpeta compartida del equipo, nunca al repo (AGENTS.md). Falta acordar dónde y cómo se nombran para que B-2, B-3 y `servio eval --sessions` las encuentren.
+**Contexto.** Hay tres candidatos medibles en M-2: minutos de mesa terminada sin atender (antes vs. después), mesas más por noche, platos que vuelven llenos. Y uno que no se puede medir sin restaurante: plata recuperada.
 
-**Propuesta.** En la carpeta del equipo: `sesiones/<casa>/<AAAA-MM-DD>-<escenario>/`, con `escenario` uno de los 8 nombres de B-2 en minúsculas (`compartido`, `pan`, `poca-luz`…). Los avisos esperados, en el repo en `fixtures/expected/sesiones/<escenario>.alerts.json`.
+**Propuesta.** «Tus mesas esperan X minutos menos» como número de cabecera, con «eso son Y mesas más por mes» calculado con un ticket promedio que el dueño carga. Platos que vuelven llenos es el segundo argumento, el que ningún competidor tiene.
 
-**Decisión:** carpeta ___ · nombres ___
+**Decisión:** ___
+
+### 21. Precio y modelo de cobro
+
+**Contexto.** No hay precio definido. El costo variable es el modelo (punto 18) más el hardware (punto 22). Lo que se compara: un mozo más cuesta 30.000 a 50.000 pesos por mes.
+
+**Opciones.** Por mes por local escalonado por mesas; por mesa por mes; un fijo chico más variable por aviso; gratis el primer mes.
+
+**Propuesta.** Por mes por local, tres escalones por cantidad de mesas (hasta 15, hasta 40, más), piloto gratis 4 semanas a cambio del caso de éxito con nombre. Precio objetivo: menos que un día de un mozo por semana.
+
+**Decisión:** modelo ___ · precio ___ · piloto ___
+
+### 22. Hardware: qué cámara y quién la pone
+
+**Contexto.** Se probó con celular y DroidCam (720p alcanza para una mesa, 1080p para dos) y con cámaras IP por RTSP. Un restaurante de 30 mesas necesita 2 o 3 cámaras en alto y una computadora que corra Servio en el local (o un servidor nuestro que reciba el stream).
+
+**Opciones.** Cámara IP que ponemos nosotros (instalación incluida); el local pone cámara propia y nosotros la conectamos; usar las cámaras de seguridad que ya tiene (ángulo y calidad no controlados).
+
+**Propuesta.** Cámara IP que ponemos nosotros, con la guía de montaje de B-4, y una mini PC en el local. Las cámaras de seguridad existentes se evalúan caso por caso, nunca se promete.
+
+**Decisión:** ___
+
+### 23. Canal al mozo
+
+**Contexto.** F-3 eligió Telegram (tiene app en Apple Watch y Wear OS desde junio 2026, y es gratis) y WhatsApp con D-6 (API paga por conversación, más conocido por los mozos). App propia: no, costaría dos tiendas para resolver lo mismo.
+
+**Propuesta.** Telegram para el piloto. WhatsApp cuando un cliente lo ponga como condición; su costo por conversación se suma al precio.
+
+**Decisión:** ___
+
+### 24. Reloj o celular
+
+**Contexto.** El diseño F-3 está pensado para reloj (el mozo no saca el celular en el salón). Nadie del equipo probó todavía en un reloj real si la notificación se contesta sin abrir la app. Un reloj por mozo son unos 200 dólares cada uno.
+
+**Opciones.** Vender con reloj incluido; vender para el celular y el reloj como opcional; exigir reloj.
+
+**Propuesta.** El celular en el bolsillo con vibración alcanza para el piloto y para vender. El reloj es el «premium» y se prueba cuando alguien consiga uno. Si nadie del equipo tiene reloj antes del 17/11, la demo del 25/11 va con celular.
+
+**Decisión:** ___ · quién tiene reloj: ___
+
+### 25. Integración con la comanda (POS)
+
+**Contexto.** Hoy la comanda es un archivo (`fixtures/restaurante/`): mozos, mesas, pedidos, carta. Sirve para nombrar el plato en el aviso y para la métrica por plato de la carta. En un local real la comanda vive en el POS (Fudo, Toteat u otros), y no está verificado qué API exponen.
+
+**Opciones.** Sin POS: el encargado carga la carta una vez y los pedidos no se cargan (los avisos dicen «un plato» en vez de «Risotto»); con POS desde el piloto; o una carga mínima por turno desde la web (D-2).
+
+**Propuesta.** Sin POS en el piloto. La carta y los mozos se cargan una vez; el aviso de «sigue lleno» nombra el plato solo si el POS lo da. La métrica por plato de la carta (D-4) se vende como «con tu POS conectado».
+
+**Decisión:** ___
+
+### 26. Legal antes del piloto
+
+**Contexto.** [legal-uruguay.md](legal-uruguay.md): viable con condiciones. Cartel con logo de la URCDP y datos del responsable, inscripción de la base, aviso a los mozos de que se los mide (lo admite la URCDP si se informa), y el envío a EE. UU. solo con recortes sin personas. No es asesoramiento legal.
+
+**Propuesta.** Paquete mínimo antes del primer piloto: cartel, texto de aviso a los mozos firmado, inscripción de la base. Abogado antes de cobrar el primer peso. Esto es un costo y un tiempo que entra en el plan de venta.
+
+**Decisión:** ___
+
+### 27. Datos de los mozos
+
+**Contexto.** Las métricas por mozo (tiempo de respuesta, retiros, mesas olvidadas) son el producto para el encargado y a la vez un dato laboral. Hoy `/metricas` sale en el grupo donde están todos los mozos.
+
+**Propuesta.** Métricas por nombre solo para encargado y dueño; el mozo ve las suyas si las pide; nunca comparativas en el grupo. En el pitch: «para que el encargado sepa a quién ayudar», no «para controlar».
+
+**Decisión:** ___
+
+### 28. Piloto: modo sombra y duración
+
+**Contexto.** M-2 hace modo sombra (observa y guarda los avisos sin mandarlos) y mide antes/después en nuestras casas. En un restaurante, la misma secuencia es el piloto y da el número de venta.
+
+**Propuesta.** 1 semana en sombra (línea de base sin que nadie cambie nada), 3 semanas con avisos, una hoja de una página al final con el antes/después. Gratis, a cambio de poder contarlo.
+
+**Decisión:** sombra ___ · con avisos ___
 
 ---
 
-## E · Corte del 25/11
+## E · El 25/11
 
-### 18. M-2: cuántas comidas por casa
+### 29. Qué muestra la demo
 
-**Contexto.** La hoja de métricas antes/después necesita comidas en modo sombra (sin avisos) y comidas con avisos, en al menos 3 casas, en la semana 4. Es tiempo de calendario de cada uno, no de código.
+**Contexto.** La tarjeta del corte pide la demo grabada con el salón (F-1b), el dashboard (D-1) y los avisos. Se puede grabar sobre el video de siempre o sobre una comida real en una casa.
 
-**Propuesta.** Cada casa: 2 comidas en sombra y 2 con avisos entre el 18/11 y el 23/11, de al menos 2 personas, y cada una anotada en una tabla compartida (fecha, casa, modo, cuántos, qué pasó).
+**Propuesta.** Una comida real en una casa, grabada en pantalla y celular: el salón en reconstrucción, una mesa que termina, el aviso que llega y se contesta «Voy», el «✅ ya resuelto» cuando se retiran los platos, y el dashboard del encargado al final. Tres minutos.
 
-**Decisión:** Jessica ___ · Matías ___ · Tomás ___
+**Decisión:** ___
 
-### 19. Demo del 25/11
+### 30. Qué tiene que decir la hoja de métricas
 
-**Contexto.** La tarjeta del corte pide una demo grabada con la vista de reconocimiento (F-1b), el dashboard (D-1) y los avisos.
+**Contexto.** M-2 termina con una hoja de una página. Sin restaurante, es con comidas en casa.
 
-**Propuesta.** Una comida real en una casa, grabada con pantalla + celular: el salón en vivo en los dos modos, un aviso que llega al celular (o al reloj, punto 9) y se contesta con «Voy», y el dashboard del encargado al final. Quién la graba y qué día se define en la reunión.
+**Propuesta.** Tres números y nada más: minutos de mesa terminada sin atender antes vs. después (al menos 3 casas), costo por mesa por hora, acierto por estado. Con la aclaración de que es en casas, no en un local.
 
-**Decisión:** casa ___ · día ___
-
-### 20. Reunión fija
-
-**Contexto.** Las semanas 3 y 4 tienen dependencias cruzadas (C-5 → D-4, B-2 → C-1, B-3 → C-2, F-1b ↔ #65). Sin un punto de sincronización, lo que se traba se entera tarde.
-
-**Propuesta.** 30 minutos un día fijo por semana, con el Trello abierto: qué se mergeó, qué está trabado, qué se corta.
-
-**Decisión:** día ___ · hora ___
+**Decisión:** ___
 
 ---
 
-## Al salir de la reunión
+## Lo que Claude no puede hacer solo
 
-- [ ] Cada tarjeta de las semanas 3 y 4 tiene una persona asignada en el Trello (punto 1).
-- [ ] Lo que se cortó está en «Después del 25/11» (punto 2).
-- [ ] Este archivo tiene todos los «Decisión» completos y se mergea a `develop`.
-- [ ] Las decisiones que cambian docs se anotan en la tarjeta que corresponde: 4 y 5 en C-1 y B-2, 7 y 8 en C-5 y C-7, 10 en C-7 y D-3, 11 en A-1/A-9, 12 en F-1b, 13 en D-1.
-- [ ] Jessica pasó `DATABASE_URL` por DM a cada uno (punto 15).
-- [ ] Los tres prototipos (F-1, F-2, F-3, links en [diseno-front.md](diseno-front.md)) están compartidos para que el equipo los abra.
+No son decisiones, pero sin esto las tarjetas no cierran:
+
+- Cámara andando en cada casa (B-2, B-3 y M-2 necesitan grabaciones de 3 casas).
+- Comidas en modo sombra y con avisos en la semana 4 (M-2).
+- Probar un aviso en un reloj real, si alguien consigue uno (punto 24).
+- Compartir los tres prototipos (son privados en claude.ai) para que el equipo los abra.
+- Pasar `DATABASE_URL` por mensaje directo a cada uno (nunca en el grupo ni en el repo).
+- Hablar con un abogado y con el primer restaurante.
