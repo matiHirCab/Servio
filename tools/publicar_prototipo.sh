@@ -9,4 +9,4 @@ if [ $# -ne 1 ] || [ ! -f "$1" ]; then
   echo "uso: $0 docs/prototipos/<prototipo>.html" >&2
   exit 2
 fi
-grep -v -i -E '^[[:space:]]*(<!doctype html>|</?html([[:space:]][^>]*)?>|</?head>|</?body>|<meta charset=[^>]*>|<meta name="viewport"[^>]*>)[[:space:]]*$' "$1"
+grep -v -i -E '^[[:space:]]*(<!doctype html>|</?html([[:space:]][^>]*)?>|</?head>|</?body([[:space:]][^>]*)?>|<meta charset=[^>]*>|<meta name="viewport"[^>]*>)[[:space:]]*$' "$1"
