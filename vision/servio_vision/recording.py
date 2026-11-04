@@ -8,8 +8,8 @@ Una **sesión** es una carpeta con:
 - `sesion.json`: cuándo empezó, las reglas con las que corrió (cadencia, umbrales de
   los avisos, suavizado), las zonas de las mesas si eran fijas, el local y con qué
   clasificador se grabó;
-- `eventos.jsonl`: las observaciones y avisos de esa corrida (la parte del log de
-  `alerts` que va de su `run_started` al final).
+- `eventos.jsonl`: las observaciones y avisos de esa corrida (una copia del log de
+  `alerts` de esta corrida sola, que escribe `alerts` mientras graba).
 
 Solo con `--record` queda alguna imagen en disco. Las sesiones van a la carpeta
 compartida del equipo, nunca al repo (`vision/out/` está ignorado).
@@ -58,7 +58,9 @@ class FrameRecorder:
 
 
 class SessionRecorder(FrameRecorder):
-    """Una sesión completa: los frames, `sesion.json` y, al cerrar, los eventos."""
+    """Una sesión completa: los frames y `sesion.json` (que aparece con el primer
+    frame: una corrida que no llegó a leer nada no deja una sesión). Los eventos los
+    escribe `alerts` en la misma carpeta (`mirror_log`)."""
 
     def __init__(
         self,
@@ -76,37 +78,40 @@ class SessionRecorder(FrameRecorder):
         retomar avisos abiertos de la base; la reproducción arranca de cero).
         `OSError` si la carpeta ya tiene una sesión: dos grabaciones mezcladas no se
         pueden reproducir."""
-        if directory.is_dir() and (
-            (directory / SESSION_FILE).exists() or any(directory.glob("*.jpg"))
-        ):
-            raise FileExistsError(
-                f"{directory} ya tiene una sesión grabada: usá otra carpeta para no"
-                " mezclar dos grabaciones"
-            )
+        ensure_free(directory)
         super().__init__(directory)
         self.info: dict[str, Any] = {
             "version": 1,
             "started_at": iso(datetime.now(UTC)),
-            "interval": rules.get("interval"),
             "rules": rules,
             "live": live,
             "local_id": local_id,
             "source": source,
             "classifier": classifier,
+            "anonymized": True,  # los frames llegan de capture.py ya sin caras (C-3)
             "zones": zones.model_dump(mode="json") if zones is not None else None,
         }
-        self._write_info()
+
+    def save(self, frame: np.ndarray, ts: datetime) -> Path:
+        path = super().save(frame, ts)
+        if self.saved == 1:
+            self._write_info()  # recién ahora es una sesión
+        return path
 
     def _write_info(self) -> None:
         (self.directory / SESSION_FILE).write_text(
             json.dumps(self.info, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
         )
 
-    def finish(self, log_path: Path, *, truncated: bool = False) -> int:
-        """Cierra la sesión: cuántas lecturas y los eventos de esta corrida (la parte
-        del log de `alerts` desde su último `run_started`). `truncated`: la grabación
-        se cortó antes que la corrida (error de disco), queda anotado. Devuelve cuántas
-        líneas."""
+    def finish(self, *, truncated: bool = False) -> int:
+        """Cierra la sesión: cuántas lecturas y cuándo terminó. `truncated`: la
+        grabación se cortó antes que la corrida (error de disco), queda anotado. Sin
+        ningún frame no hay sesión: no escribe nada. Devuelve cuántos frames."""
+        if self.saved == 0:
+            logger.warning(
+                "No se grabó ningún frame en %s: no queda sesión", self.directory
+            )
+            return 0
         self.info["readings"] = self.saved
         self.info["ended_at"] = iso(datetime.now(UTC))
         self.info["truncated"] = truncated
@@ -118,17 +123,19 @@ class SessionRecorder(FrameRecorder):
                 self.saved,
             )
         self._write_info()
-        lines = last_run_lines(log_path)
-        (self.directory / EVENTS_FILE).write_text(
-            "".join(line + "\n" for line in lines), encoding="utf-8"
+        logger.info("Sesión guardada en %s: %d frames", self.directory, self.saved)
+        return self.saved
+
+
+def ensure_free(directory: Path) -> None:
+    """`FileExistsError` si la carpeta ya tiene una sesión grabada."""
+    if directory.is_dir() and (
+        (directory / SESSION_FILE).exists() or any(directory.glob("*.jpg"))
+    ):
+        raise FileExistsError(
+            f"{directory} ya tiene una sesión grabada: usá otra carpeta para no"
+            " mezclar dos grabaciones"
         )
-        logger.info(
-            "Sesión guardada en %s: %d frames, %d eventos",
-            self.directory,
-            self.saved,
-            len(lines),
-        )
-        return len(lines)
 
 
 def frame_name(ts: datetime) -> str:
@@ -152,6 +159,14 @@ def read_info(directory: Path) -> dict[str, Any]:
         return json.loads((directory / SESSION_FILE).read_text(encoding="utf-8"))
     except (OSError, ValueError) as e:
         raise OSError(f"{directory / SESSION_FILE} no se puede leer: {e}") from e
+
+
+def frames_anonymized(directory: Path) -> bool:
+    """La sesión dice que sus frames ya salieron sin caras (las graba `--record`)."""
+    try:
+        return bool(read_info(directory).get("anonymized"))
+    except OSError:
+        return False
 
 
 def session_zones(directory: Path) -> Zones | None:
@@ -180,7 +195,9 @@ def session_frames(directory: Path) -> list[tuple[Path, datetime]]:
 
 
 def last_run_lines(log_path: Path) -> list[str]:
-    """Las líneas del log de `alerts` desde su último `run_started` (incluido)."""
+    """Las líneas del log de `alerts` desde su último `run_started` (incluido): la
+    reproducción recién hecha, para compararla. Lee el log entero (crece todo el
+    día); alcanza para una herramienta que se corre a mano."""
     if not log_path.exists():
         return []
     lines = log_path.read_text(encoding="utf-8").splitlines()
@@ -211,10 +228,3 @@ def alert_signature(lines: list[str]) -> list[tuple[str, str, str, str]]:
         if data.get("event") in ALERT_EVENTS:
             found.append((data["event"], data["type"], data["table_id"], data["ts"]))
     return found
-
-
-def session_zones_arg(source: str | None) -> Zones | None:
-    """Zonas de la sesión si `source` es una; `None` si no lo es o se detectaban."""
-    if source is None or not is_session(Path(source)):
-        return None
-    return session_zones(Path(source))

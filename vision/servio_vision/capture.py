@@ -101,11 +101,16 @@ def open_source(
     # recién con una fuente que existe: un error de tipeo no tiene que terminar en
     # "no se pudo bajar el modelo"
     session = not is_camera and recording.is_session(path)
-    if session:
-        # los frames de una sesión ya salieron de acá sin caras (C-3): difuminarlos
-        # otra vez cambiaría los píxeles que vio la corrida en vivo
+    if session and recording.frames_anonymized(path):
+        # los frames de una sesión grabada ya salieron de acá sin caras (C-3):
+        # difuminarlos otra vez cambiaría los píxeles que vio la corrida en vivo
         anonymize = anonymize or (lambda frame: frame)
     else:
+        if session:
+            logger.warning(
+                "La sesión %s no dice que sus frames estén sin caras: se difuminan",
+                path,
+            )
         anonymize = anonymize or privacy.default_anonymizer(
             face_model=face_model, protect=protect
         )

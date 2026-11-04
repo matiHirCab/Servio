@@ -20,10 +20,17 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from servio_vision import recording
 from servio_vision.alerts import DEFAULT_LOG
 
+Signature = tuple[str, str, str, str]
+
 
 def compare(recorded: list[str], replayed: list[str]) -> list[str]:
     """Las diferencias, en palabras; vacío si los avisos coinciden."""
-    a, b = recording.alert_signature(recorded), recording.alert_signature(replayed)
+    return compare_signatures(
+        recording.alert_signature(recorded), recording.alert_signature(replayed)
+    )
+
+
+def compare_signatures(a: list[Signature], b: list[Signature]) -> list[str]:
     if a == b:
         return []
     found = []
@@ -51,7 +58,11 @@ def main(argv: list[str] | None = None) -> int:
     if not args.log.exists():
         print(f"No existe {args.log}: ¿ya reprodujiste la sesión?", file=sys.stderr)
         return 2
-    info = recording.read_info(args.session)
+    try:
+        info = recording.read_info(args.session)
+    except OSError as e:
+        print(e, file=sys.stderr)
+        return 2
     if info.get("truncated"):
         print(
             f"Ojo: la grabación se cortó a los {info.get('readings')} frames (error de"
@@ -63,10 +74,12 @@ def main(argv: list[str] | None = None) -> int:
             " abiertos de la base, la reproducción (que arranca de cero) puede"
             " diferir al principio."
         )
-    recorded = [line for line in events.read_text("utf-8").splitlines() if line.strip()]
-    replayed = recording.last_run_lines(args.log)
-    diffs = compare(recorded, replayed)
-    total = len(recording.alert_signature(recorded))
+    recorded = recording.alert_signature(
+        [line for line in events.read_text("utf-8").splitlines() if line.strip()]
+    )
+    replayed = recording.alert_signature(recording.last_run_lines(args.log))
+    diffs = compare_signatures(recorded, replayed)
+    total = len(recorded)
     if not diffs:
         print(f"Coinciden: {total} eventos de aviso iguales en vivo y reproducidos.")
         return 0

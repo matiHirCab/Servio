@@ -205,19 +205,30 @@ class TelegramOutput:
 class EventLog:
     """Una línea JSON por evento, agregada al final del archivo (no se pisa)."""
 
-    def __init__(self, path: Path) -> None:
+    def __init__(self, path: Path, mirror: Path | None = None) -> None:
+        """`mirror`: una copia de esta corrida sola (se pisa), para una sesión grabada
+        (B-1): así sus eventos no hay que recortarlos del log compartido."""
         self.path = path
         path.parent.mkdir(parents=True, exist_ok=True)
         # Abierto una sola vez; buffering=1 baja cada línea al disco al escribirla.
         self._file = path.open("a", encoding="utf-8", buffering=1)
+        self._mirror = None
+        if mirror is not None:
+            mirror.parent.mkdir(parents=True, exist_ok=True)
+            self._mirror = mirror.open("w", encoding="utf-8", buffering=1)
         self._lock = threading.Lock()  # también escriben las respuestas de los mozos
 
     def write(self, event: dict[str, Any]) -> None:
+        line = json.dumps(event, ensure_ascii=False) + "\n"
         with self._lock:
-            self._file.write(json.dumps(event, ensure_ascii=False) + "\n")
+            self._file.write(line)
+            if self._mirror is not None:
+                self._mirror.write(line)
 
     def close(self) -> None:
         self._file.close()
+        if self._mirror is not None:
+            self._mirror.close()
 
 
 class EventLogOutput:

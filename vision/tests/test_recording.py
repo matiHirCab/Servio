@@ -81,11 +81,12 @@ def test_record_leaves_a_complete_session_and_replay_gives_the_same_alerts(
     assert len(frames) == 14  # 400 s cada 30 s
     assert all(ts.tzinfo is UTC for _, ts in frames)
     info = recording.read_info(session)
-    assert info["interval"] == 30 and info["readings"] == 14
+    assert info["rules"]["interval"] == 30 and info["readings"] == 14
     assert info["rules"]["demo"] is True and info["rules"]["finished_after"] > 0
     assert info["zones"]["tables"][0]["table_id"] == "T1" and "ended_at" in info
     recorded = (session / recording.EVENTS_FILE).read_text("utf-8").splitlines()
     assert recorded[0].startswith('{"event": "run_started"')
+    assert info["anonymized"] is True
     assert recording.alert_signature(recorded)  # con --demo el fake dispara avisos
 
     # reproducir: sin --zones, --interval ni --demo, salen de la sesión (con los
@@ -136,6 +137,10 @@ def test_session_settings_restore_the_recorded_rules(tmp_path):
         True,
         90,
     )
+    # una reproducción no manda a Telegram ni escribe en la base compartida
+    assert restored.telegram is False
+    scratch = (session / app.REPLAY_DB).resolve().as_posix()
+    assert restored.database_url == f"sqlite:///{scratch}"
     assert (
         app.session_settings(_settings("--source", "v.mp4", "--interval", "5")).interval
         == 5
@@ -156,10 +161,21 @@ def test_session_settings_restore_the_recorded_rules(tmp_path):
     with pytest.raises(OSError, match="regla inválida"):
         app.session_settings(settings)
     (session / recording.SESSION_FILE).write_text(
-        '{"interval": 10, "zones": {"x": 1}}', "utf-8"
+        '{"rules": {"interval": 10}, "zones": {"x": 1}}', "utf-8"
     )
     with pytest.raises(OSError, match="zonas inválidas"):
         recording.session_zones(session)
+
+
+def test_a_run_that_never_read_a_frame_leaves_no_session(tmp_path, monkeypatch):
+    record = tmp_path / "fallida"
+    log = tmp_path / "log.jsonl"
+    code = _run(
+        tmp_path, monkeypatch, log, "--source", "no.mp4", "--record", str(record)
+    )
+    assert code == 2
+    assert not recording.is_session(record)  # sin frames no hay sesión
+    recording.ensure_free(record)  # y la carpeta se puede usar para grabar de verdad
 
 
 def test_last_run_lines_parse_the_events(tmp_path):
@@ -177,7 +193,9 @@ def test_last_run_lines_parse_the_events(tmp_path):
 def test_session_frames_keep_their_real_times(tmp_path):
     session = tmp_path / "s"
     session.mkdir()
-    (session / recording.SESSION_FILE).write_text('{"interval": 10}', "utf-8")
+    (session / recording.SESSION_FILE).write_text(
+        '{"rules": {"interval": 10}, "anonymized": true}', "utf-8"
+    )
     t0 = datetime(2026, 11, 4, 21, 0, tzinfo=UTC)
     times = [t0, t0.replace(second=12), t0.replace(second=41)]  # cadencia irregular
     for t in times:

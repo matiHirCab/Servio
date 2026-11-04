@@ -73,16 +73,18 @@ class AlertProcessor:
         db: Database | None = None,
         resume: bool = False,
         resume_max_age_s: float = RESUME_MAX_AGE_S,
+        mirror_log: Path | None = None,
     ) -> None:
         """`resume`: seguir con el estado que dejó la corrida anterior en `db` (si es
         de hace menos de `resume_max_age_s`). Solo para una cámara en vivo: un video
-        o un fixture empiezan siempre de cero."""
+        o un fixture empiezan siempre de cero. `mirror_log`: copia del log de esta
+        corrida (la sesión grabada, B-1)."""
         self.config = config
         self.notifier = notifier
         self.restaurant = restaurant
         self.db = db  # base relacional (db.py): platos servidos, avisos y respuestas
         self.core = AlertCore(config, restaurant)
-        self.log = EventLog(log_path)
+        self.log = EventLog(log_path, mirror_log)
         self.log_output = EventLogOutput(self.log)
         self.db_output = DatabaseOutput(db, restaurant) if db is not None else None
         if db is not None and restaurant is not None:

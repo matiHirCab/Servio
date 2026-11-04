@@ -112,7 +112,7 @@ def load_tables(settings: Settings) -> tuple[Zones | None, TableTracker | None]:
     mensajes ya dicen qué hacer. Lo usan `build_pipeline` y el chequeo de encuadre.
     Una sesión grabada (B-1) se reproduce con las zonas con las que se grabó, aunque
     la config diga otras: con otras mesas no hay nada que comparar."""
-    if settings.source is not None and recording.is_session(Path(settings.source)):
+    if is_session_source(settings):
         recorded = recording.session_zones(Path(settings.source))
         if recorded is not None:
             if settings.zones is not None:
@@ -222,6 +222,8 @@ def build_pipeline(settings: Settings) -> Pipeline | None:
         database_url=settings.database_url,
         local_id=settings.local_id,
         resume=live,
+        # grabando (B-1): la sesión se queda con una copia de los eventos de esta corrida
+        mirror_log=settings.record / recording.EVENTS_FILE if settings.record else None,
     )
     feed = (
         SalonFeed(settings.local_id, processor, restaurant, settings.interval)
@@ -297,6 +299,8 @@ def run(settings: Settings, limit: int | None = None) -> int:
     assert settings.source is not None  # lo garantiza `require_source`
     try:
         settings = session_settings(settings)  # una sesión grabada: sus reglas
+        if settings.record:
+            recording.ensure_free(settings.record)  # antes de escribir nada ahí
     except OSError as e:
         logger.error("%s", e)
         return 2
@@ -376,7 +380,7 @@ def run(settings: Settings, limit: int | None = None) -> int:
             # con los avisos ya escritos (close los baja al log): la sesión queda
             # completa, con sus eventos, aunque se haya cortado a mano
             try:
-                session.finish(alerts.DEFAULT_LOG, truncated=recorder is None)
+                session.finish(truncated=recorder is None)
             except OSError as e:
                 logger.error("No se pudo cerrar la sesión grabada: %s", e)
     logger.info("%d lecturas", readings)
@@ -428,6 +432,8 @@ def _open_frames(
             time.sleep(wait)
 
 
+REPLAY_DB = "reproduccion.db"  # la base de una reproducción, dentro de la sesión
+
 # Lo que decide los avisos y va a `sesion.json` para reproducir con lo mismo.
 SESSION_RULES = (
     "interval",
@@ -449,22 +455,31 @@ def session_rules(settings: Settings) -> dict[str, Any]:
     return rules
 
 
+def is_session_source(settings: Settings) -> bool:
+    return settings.source is not None and recording.is_session(Path(settings.source))
+
+
 def session_settings(settings: Settings) -> Settings:
     """Si la fuente es una sesión grabada (B-1), se reproduce con las reglas grabadas
     (cadencia, umbrales, suavizado): con otras, los avisos no coinciden y la
     reproducción no reproduce nada. Para probar otras reglas, editar `sesion.json`.
-    `OSError` si la sesión no se puede leer."""
-    if settings.source is None or not recording.is_session(Path(settings.source)):
+    Y sin tocar nada de verdad: ni Telegram ni la base compartida (los avisos van a
+    una SQLite dentro de la sesión). `OSError` si la sesión no se puede leer."""
+    if not is_session_source(settings):
         return settings
-    info = recording.read_info(Path(settings.source))
-    rules = info.get("rules") or {"interval": info.get("interval")}
+    assert settings.source is not None
+    session = Path(settings.source)
+    info = recording.read_info(session)
+    rules = info.get("rules")
     if not isinstance(rules, dict):
-        raise OSError(f"{settings.source}: `rules` de sesion.json no es un objeto")
+        raise OSError(f"{settings.source}: sesion.json sin `rules`")
     # también los `null`: "umbral por defecto" en la grabación tiene que seguir
     # siéndolo, aunque el toml de esta máquina diga otra cosa
-    update = {k: v for k, v in rules.items() if k in SESSION_RULES}
+    update: dict[str, Any] = {k: v for k, v in rules.items() if k in SESSION_RULES}
     if update.get("interval") is None:
         raise OSError(f"{settings.source}: sesion.json sin cadencia")
+    update["telegram"] = False
+    update["database_url"] = f"sqlite:///{(session / REPLAY_DB).resolve().as_posix()}"
     replay = settings.model_copy()
     for name, value in update.items():
         try:  # con validación: sesion.json se puede editar a mano
