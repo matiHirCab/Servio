@@ -29,6 +29,7 @@ from typing import Any
 import numpy as np
 from pydantic import ValidationError
 
+from servio_vision.timestamps import iso
 from servio_vision.zones import Zones, to_jpeg
 
 logger = logging.getLogger(__name__)
@@ -68,21 +69,27 @@ class SessionRecorder(FrameRecorder):
         source: str,
         classifier: str,
         zones: Zones | None,
+        live: bool,
     ) -> None:
         """`rules`: la configuración que decide los avisos (cadencia, umbrales,
-        suavizado), para reproducir con la misma. `OSError` si la carpeta ya tiene
-        una sesión: dos grabaciones mezcladas no se pueden reproducir."""
-        super().__init__(directory)
-        if (directory / SESSION_FILE).exists() or any(directory.glob("*.jpg")):
+        suavizado), para reproducir con la misma. `live`: venía de una cámara (pudo
+        retomar avisos abiertos de la base; la reproducción arranca de cero).
+        `OSError` si la carpeta ya tiene una sesión: dos grabaciones mezcladas no se
+        pueden reproducir."""
+        if directory.is_dir() and (
+            (directory / SESSION_FILE).exists() or any(directory.glob("*.jpg"))
+        ):
             raise FileExistsError(
                 f"{directory} ya tiene una sesión grabada: usá otra carpeta para no"
                 " mezclar dos grabaciones"
             )
+        super().__init__(directory)
         self.info: dict[str, Any] = {
             "version": 1,
-            "started_at": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
+            "started_at": iso(datetime.now(UTC)),
             "interval": rules.get("interval"),
             "rules": rules,
+            "live": live,
             "local_id": local_id,
             "source": source,
             "classifier": classifier,
@@ -95,11 +102,21 @@ class SessionRecorder(FrameRecorder):
             json.dumps(self.info, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
         )
 
-    def finish(self, log_path: Path) -> int:
+    def finish(self, log_path: Path, *, truncated: bool = False) -> int:
         """Cierra la sesión: cuántas lecturas y los eventos de esta corrida (la parte
-        del log de `alerts` desde su último `run_started`). Devuelve cuántas líneas."""
+        del log de `alerts` desde su último `run_started`). `truncated`: la grabación
+        se cortó antes que la corrida (error de disco), queda anotado. Devuelve cuántas
+        líneas."""
         self.info["readings"] = self.saved
-        self.info["ended_at"] = datetime.now(UTC).isoformat().replace("+00:00", "Z")
+        self.info["ended_at"] = iso(datetime.now(UTC))
+        self.info["truncated"] = truncated
+        if truncated:
+            logger.error(
+                "La grabación en %s se cortó a los %d frames: los avisos de después"
+                " no se van a poder reproducir",
+                self.directory,
+                self.saved,
+            )
         self._write_info()
         lines = last_run_lines(log_path)
         (self.directory / EVENTS_FILE).write_text(

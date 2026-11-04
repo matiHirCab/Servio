@@ -51,6 +51,18 @@ def main(argv: list[str] | None = None) -> int:
     if not args.log.exists():
         print(f"No existe {args.log}: ¿ya reprodujiste la sesión?", file=sys.stderr)
         return 2
+    info = recording.read_info(args.session)
+    if info.get("truncated"):
+        print(
+            f"Ojo: la grabación se cortó a los {info.get('readings')} frames (error de"
+            " disco); los avisos de después no se pueden reproducir."
+        )
+    if info.get("live"):
+        print(
+            "Nota: se grabó de una cámara en vivo; si al arrancar retomó avisos"
+            " abiertos de la base, la reproducción (que arranca de cero) puede"
+            " diferir al principio."
+        )
     recorded = [line for line in events.read_text("utf-8").splitlines() if line.strip()]
     replayed = recording.last_run_lines(args.log)
     diffs = compare(recorded, replayed)

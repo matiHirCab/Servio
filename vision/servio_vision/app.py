@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any
 
 import cv2
+from pydantic import ValidationError
 
 from servio_vision import alerts, framing, llm, privacy, prompt, recording
 from servio_vision.alerts.config import load_config
@@ -109,11 +110,23 @@ def load_tables(settings: Settings) -> tuple[Zones | None, TableTracker | None]:
     """Las mesas: zonas fijas (`zones.json`) o un tracker que las detecta en cada
     lectura. `ImportError` sin ultralytics, `FileNotFoundError` sin el archivo; los
     mensajes ya dicen qué hacer. Lo usan `build_pipeline` y el chequeo de encuadre.
-    Una sesión grabada con zonas fijas (B-1) se reproduce con esas mismas zonas."""
-    if settings.zones is None:
-        recorded = recording.session_zones_arg(settings.source)
+    Una sesión grabada (B-1) se reproduce con las zonas con las que se grabó, aunque
+    la config diga otras: con otras mesas no hay nada que comparar."""
+    if settings.source is not None and recording.is_session(Path(settings.source)):
+        recorded = recording.session_zones(Path(settings.source))
         if recorded is not None:
+            if settings.zones is not None:
+                logger.info(
+                    "Sesión grabada con zonas fijas: van esas, no %s", settings.zones
+                )
             return recorded, None
+        if settings.zones is not None:
+            logger.warning(
+                "La sesión se grabó detectando las mesas solas; con --zones %s los"
+                " avisos pueden no coincidir",
+                settings.zones,
+            )
+    if settings.zones is None:
         try:
             return None, TableTracker(TableDetector())
         except ImportError as e:
@@ -307,6 +320,7 @@ def run(settings: Settings, limit: int | None = None) -> int:
                 source=settings.source,
                 classifier=settings.classifier,
                 zones=pipeline.zones if pipeline.tables is None else None,
+                live=is_live_source(settings.source),
             )
             if settings.record
             else None
@@ -362,7 +376,7 @@ def run(settings: Settings, limit: int | None = None) -> int:
             # con los avisos ya escritos (close los baja al log): la sesión queda
             # completa, con sus eventos, aunque se haya cortado a mano
             try:
-                session.finish(alerts.DEFAULT_LOG)
+                session.finish(alerts.DEFAULT_LOG, truncated=recorder is None)
             except OSError as e:
                 logger.error("No se pudo cerrar la sesión grabada: %s", e)
     logger.info("%d lecturas", readings)
@@ -446,18 +460,30 @@ def session_settings(settings: Settings) -> Settings:
     rules = info.get("rules") or {"interval": info.get("interval")}
     if not isinstance(rules, dict):
         raise OSError(f"{settings.source}: `rules` de sesion.json no es un objeto")
-    update = {k: v for k, v in rules.items() if k in SESSION_RULES and v is not None}
-    try:
-        update["interval"] = float(update["interval"])
-    except (KeyError, TypeError, ValueError) as e:
-        raise OSError(f"{settings.source}: sesion.json sin cadencia válida") from e
-    changed = {k: v for k, v in update.items() if getattr(settings, k) != v}
+    # también los `null`: "umbral por defecto" en la grabación tiene que seguir
+    # siéndolo, aunque el toml de esta máquina diga otra cosa
+    update = {k: v for k, v in rules.items() if k in SESSION_RULES}
+    if update.get("interval") is None:
+        raise OSError(f"{settings.source}: sesion.json sin cadencia")
+    replay = settings.model_copy()
+    for name, value in update.items():
+        try:  # con validación: sesion.json se puede editar a mano
+            replay.__pydantic_validator__.validate_assignment(replay, name, value)
+        except ValidationError as e:
+            raise OSError(
+                f"{settings.source}: sesion.json, regla inválida: {name}={value!r} ({e})"
+            ) from e
+    changed = {
+        k: getattr(replay, k)
+        for k in update
+        if getattr(settings, k) != getattr(replay, k)
+    }
     if changed:
         logger.info(
             "Sesión grabada: se reproduce con sus reglas (%s)",
             ", ".join(f"{k}={v}" for k, v in changed.items()),
         )
-    return settings.model_copy(update=update)
+    return replay
 
 
 def _record(recorder: FrameRecorder, frame, ts) -> FrameRecorder | None:

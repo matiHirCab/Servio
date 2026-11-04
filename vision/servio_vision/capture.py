@@ -100,14 +100,20 @@ def open_source(
         raise FileNotFoundError(f"No existe la fuente: {source}")
     # recién con una fuente que existe: un error de tipeo no tiene que terminar en
     # "no se pudo bajar el modelo"
-    anonymize = anonymize or privacy.default_anonymizer(
-        face_model=face_model, protect=protect
-    )
+    session = not is_camera and recording.is_session(path)
+    if session:
+        # los frames de una sesión ya salieron de acá sin caras (C-3): difuminarlos
+        # otra vez cambiaría los píxeles que vio la corrida en vivo
+        anonymize = anonymize or (lambda frame: frame)
+    else:
+        anonymize = anonymize or privacy.default_anonymizer(
+            face_model=face_model, protect=protect
+        )
     if is_camera:
         raw = read_camera(
             int(source) if source.isdigit() else source, interval, reconnect_s
         )
-    elif recording.is_session(path):
+    elif session:
         raw = read_session(path, speed)  # una sesión grabada: cada frame con su hora
     elif path.is_dir():
         raw = read_folder(path, interval, speed, start)
@@ -189,15 +195,10 @@ def read_folder(
 def _folder_frames(
     files: list[Path], interval: float, speed: float | None, start: datetime
 ) -> Iterator[Frame]:
-    pacer = _Pacer(speed)
-    for i, file in enumerate(files):
-        frame = cv2.imread(str(file))
-        if frame is None:
-            logger.warning("No se pudo leer %s, la salteo", file)
-            continue
-        seconds = i * interval
-        pacer.wait(seconds)
-        yield frame, start + timedelta(seconds=seconds)
+    stamped = [
+        (f, start + timedelta(seconds=i * interval)) for i, f in enumerate(files)
+    ]
+    return _stamped_frames(stamped, speed)
 
 
 def read_session(path: Path, speed: float | None) -> Iterator[Frame]:
@@ -205,15 +206,15 @@ def read_session(path: Path, speed: float | None) -> Iterator[Frame]:
     del nombre del archivo, así una reproducción da las mismas observaciones (y los
     mismos avisos) que la corrida en vivo. `interval` no cuenta: la cadencia es la
     grabada. `speed` espera entre frames como con un video."""
-    frames = recording.session_frames(path)
-    return _session_frames(frames, speed)
+    return _stamped_frames(recording.session_frames(path), speed)
 
 
-def _session_frames(
+def _stamped_frames(
     frames: list[tuple[Path, datetime]], speed: float | None
 ) -> Iterator[Frame]:
+    """Imágenes sueltas, cada una con su hora; `speed` espera lo que las separa."""
     pacer = _Pacer(speed)
-    first = frames[0][1]
+    first = frames[0][1] if frames else None
     for file, ts in frames:
         frame = cv2.imread(str(file))
         if frame is None:

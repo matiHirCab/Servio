@@ -143,6 +143,18 @@ def test_session_settings_restore_the_recorded_rules(tmp_path):
     (session / recording.SESSION_FILE).write_text('{"rules": {"demo": true}}', "utf-8")
     with pytest.raises(OSError, match="sin cadencia"):
         app.session_settings(settings)
+    # un null grabado vuelve a ser "por defecto" aunque los flags digan otra cosa
+    (session / recording.SESSION_FILE).write_text(
+        '{"rules": {"interval": 20, "finished_after": null}}', "utf-8"
+    )
+    flagged = _settings("--source", str(session), "--finished-after", "40")
+    assert app.session_settings(flagged).finished_after is None
+    # editado a mano con un valor inválido: error de config, no un traceback después
+    (session / recording.SESSION_FILE).write_text(
+        '{"rules": {"interval": 0.5}}', "utf-8"
+    )
+    with pytest.raises(OSError, match="regla inválida"):
+        app.session_settings(settings)
     (session / recording.SESSION_FILE).write_text(
         '{"interval": 10, "zones": {"x": 1}}', "utf-8"
     )
@@ -173,8 +185,10 @@ def test_session_frames_keep_their_real_times(tmp_path):
             str(session / recording.frame_name(t)), np.zeros((20, 20, 3), np.uint8)
         )
     (session / "notas.jpg").write_bytes(b"no es un frame")
-    read = [ts for _, ts in open_source(str(session), interval=999)]
-    assert read == times  # las horas grabadas, no cada 999 s
+    frames = list(open_source(str(session), interval=999))
+    assert [ts for _, ts in frames] == times  # las horas grabadas, no cada 999 s
+    # ya grabados sin caras: salen tal cual, sin pasar otra vez por el difuminado
+    assert all((frame == 0).all() for frame, _ in frames)
     assert recording.is_session(session) and not recording.is_session(tmp_path)
 
 
