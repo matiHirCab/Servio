@@ -41,7 +41,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from servio_vision import privacy
 from servio_vision.alerts.state import table_status
-from servio_vision.app import build_pipeline, setup_logging
+from servio_vision.app import build_pipeline, plate_protector, setup_logging
 from servio_vision.capture import (
     CAMERA_RECONNECT_S,
     IMAGE_SUFFIXES,
@@ -367,6 +367,8 @@ def run(args) -> int:
     pipeline = build_pipeline(cfg)
     if pipeline is None:
         return 2
+    # los platos no se pixelan aunque el detector de caras los confunda (privacy.py)
+    source.faces.protect = plate_protector(pipeline)
 
     speed = cfg.speed or 1.0  # la vista es para mirar: por defecto, tiempo real
     # cámara (siempre) o video con --realtime: el video nunca espera a la IA
