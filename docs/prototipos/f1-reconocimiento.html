@@ -61,7 +61,7 @@ h1,h2,h3{margin:0;font-weight:500;text-wrap:balance}
 .stage{position:relative;border-radius:22px;overflow:hidden;background:#0c0d10;border:1px solid var(--line);min-width:0}
 .stage svg,.stage img{display:block;width:100%;height:auto}
 .stage .video{position:relative;aspect-ratio:4/3;max-width:100%;background:#000}
-.stage .video img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;filter:saturate(.85) brightness(.9)}
+.stage .video img{position:absolute;inset:0;width:100%;height:100%;object-fit:fill;filter:saturate(.85) brightness(.9)}  /* la caja ya tiene la proporción del frame */
 .stage .video svg{position:absolute;inset:0;width:100%;height:100%}
 .cap{position:absolute;left:16px;top:12px;display:flex;gap:10px;align-items:center}
 .cap .label{color:var(--fg-2)}
@@ -204,27 +204,29 @@ const ALERT_COLOR = {mesa_terminada:COLOR.vacio, plato_vacio:COLOR.por_terminar,
 // manda el servidor es `taken_by` en el aviso (quién respondió «Voy», C-5); el mozo del
 // aviso sale de su mesa (`tableOf(a.table_id).waiter`). Mesa 1 es la que
 // ve la cámara del frame; el mozo que mira es Juan (sus mesas van marcadas).
-// Coordenadas 0–1 en la cámara; los bbox de los platos son relativos a la mesa.
+// Coordenadas 0–1 en la imagen, también los bbox de los platos (salon.py plate_box);
+// un plato sin caja (`bbox: null`) se reparte en la mesa como en salon.html.
 const ME = "Juan";
 const NOW = Date.parse("2026-11-04T21:42:11-03:00");  // la hora fija del prototipo
 const snap = {
-  local:"Casa Jessica", frame:[640,480], interval:30, read_at:"2026-11-04T21:42:07-03:00",
+  local:"Casa Jessica", camera:"cam-1", ts:"2026-11-04T21:42:07-03:00", interval:30, frame:[640,480],
   tables:[
     {id:"T1", name:"Mesa 1", waiter:"Juan", status:"comiendo", people:true, since:"2026-11-04T21:05:00-03:00", box:[0,.47,.53,.53],
-     plates:[{id:"T1-p1", dish:"Milanesa napolitana", state:"lleno", fill_ratio:.92, bbox:[.56,.52,.26,.30]},
-             {id:"T1-p2", dish:"Ensalada César", state:"comiendo", fill_ratio:.5, bbox:[.08,.18,.22,.26]}]},
+     plates:[{id:"T1-p1", dish:"Milanesa napolitana", state:"lleno", fill_ratio:.92, bbox:[.297,.746,.138,.159]},
+             {id:"T1-p2", dish:"Ensalada César", state:"comiendo", fill_ratio:.5, bbox:[.042,.565,.117,.138]}]},
     {id:"T2", name:"Mesa 2", waiter:"Juan", status:"por_terminar", people:true, since:"2026-11-04T20:38:00-03:00", box:[.60,.08,.36,.40],
-     plates:[{id:"T2-p1", dish:"Risotto de hongos", state:"por_terminar", fill_ratio:.15, bbox:[.12,.2,.3,.4]},
-             {id:"T2-p2", dish:"Lomo con papas", state:"vacio", fill_ratio:0, bbox:[.55,.25,.3,.4]}]},
+     plates:[{id:"T2-p1", dish:"Risotto de hongos", state:"por_terminar", fill_ratio:.15, bbox:[.643,.16,.108,.16]},
+             {id:"T2-p2", dish:"Lomo con papas", state:"vacio", fill_ratio:0, bbox:[.798,.18,.108,.16]}]},
     {id:"T3", name:"Mesa 3", waiter:"Sofía", status:"comiendo", people:true, since:"2026-11-04T21:20:00-03:00", box:[.60,.56,.36,.40],
-     plates:[{id:"T3-p1", dish:"Sorrentinos con fileto", state:"lleno", fill_ratio:.95, bbox:[.3,.25,.35,.45]},
-             {id:"T3-p2", dish:null, state:"comiendo", fill_ratio:.6, bbox:[.05,.55,.3,.4]}]},  // sin pedido cargado
+     plates:[{id:"T3-p1", dish:"Sorrentinos con fileto", state:"lleno", fill_ratio:.95, bbox:[.708,.66,.126,.18]},
+             {id:"T3-p2", dish:null, state:"comiendo", fill_ratio:.6, bbox:null}]},  // sin pedido cargado ni caja
     {id:"T4", name:"Mesa 4", waiter:"Sofía", status:"libre", people:false, since:null, box:[.08,.06,.4,.3], plates:[]},
   ],
   alerts:[
     {id:"a1", type:"plato_vacio", table_id:"T2", message:"Lomo con papas vacío hace 4 min", created_at:"2026-11-04T21:38:00-03:00", taken_by:"Juan"},
     {id:"a2", type:"plato_lleno_mucho", table_id:"T3", message:"Sorrentinos con fileto sigue lleno hace 14 min. ¿Está todo bien?", created_at:"2026-11-04T21:28:00-03:00", taken_by:null},
   ],
+  counts:{lleno:2, comiendo:2, por_terminar:1, vacio:1},
 };
 let selected = "T2";
 let changed = new Set();
@@ -296,6 +298,7 @@ function alertTag(x,y,text,col){
   return `<g class="tag" transform="translate(${x.toFixed(1)} ${y.toFixed(1)})"><rect x="0" y="-11" width="${w.toFixed(0)}" height="22" rx="11" fill="${col}"/><text x="${(w/2).toFixed(0)}" y="4" text-anchor="middle" class="svg-tag">${esc(text)}</text></g>`;
 }
 function fitTags(svg){
+  if(svg.hasAttribute("hidden")) return;
   for(const g of svg.querySelectorAll("g.tag")){ const t=g.querySelector("text"), r=g.querySelector("rect"); if(!t.getComputedTextLength) continue;
     const w=t.getComputedTextLength()+22; r.setAttribute("width",w.toFixed(0)); t.setAttribute("x",(w/2).toFixed(0)); }
 }
@@ -314,7 +317,13 @@ function renderFloor(){
 <text x="36" y="44" class="svg-cap">CASA JESSICA · CÁMARA 1 · CENITAL</text><text x="964" y="44" text-anchor="end" class="svg-cap">EN VIVO · CADA 30 s</text>`;
   for(const a of T){
     const t=a.t, x0=M+(a.x-minx)*k, y0=offY+(a.y-miny)*k, w=a.w*k, h=a.h*k, sel=t.id===selected, mine=t.waiter===ME;
-    const P=t.plates.map(p=>{const [bx,by,bw,bh]=p.bbox; return {p,x:x0+(bx+bw/2)*w,y:y0+(by+bh/2)*h,r:clamp(Math.min(bw*w,bh*h)/2,10,52)};});
+    // platos: con su caja de la cámara, o repartidos en la mesa si no la tienen (salon.html)
+    const n=t.plates.length, cols=Math.ceil(Math.sqrt(n||1)), rows=Math.ceil((n||1)/cols);
+    const P=t.plates.map((p,i)=>{
+      if(p.bbox){ const [bx,by,bw,bh]=p.bbox; return {p,x:M+((bx+bw/2)*fw-minx)*k,y:offY+((by+bh/2)*fh-miny)*k,r:clamp(Math.min(bw*fw,bh*fh)*k/2,9,60)}; }
+      const c=i%cols, r=Math.floor(i/cols);
+      return {p,x:x0+w*(c+.5)/cols,y:y0+h*(r+.5)/rows,r:clamp(Math.min(w/cols,h/rows)*.3,9,40)};
+    });
     const people=[];
     if(t.people) for(const q of P){
       const d={t:q.y-y0,b:y0+h-q.y,l:q.x-x0,r:x0+w-q.x}; const side=Object.keys(d).reduce((m,key)=>d[key]<d[m]?key:m,"t");
@@ -346,10 +355,12 @@ function renderFloor(){
 // dibuja lo que la cámara ve de verdad: acá, la Mesa 1 y sus platos.
 function renderVideo(){
   const svg=$("overlay"); const [fw,fh]=snap.frame; const t=tableOf("T1"); const sel=t.id===selected;
+  $("video").style.aspectRatio=`${fw} / ${fh}`; svg.setAttribute("viewBox",`0 0 ${fw} ${fh}`);
   const x0=t.box[0]*fw,y0=t.box[1]*fh,w=t.box[2]*fw,h=t.box[3]*fh;
   let out=`<defs>${halos("v")}</defs>`+`<g class="tbl" data-id="${t.id}" tabindex="0" role="button" aria-label="${esc(t.name)}, ${esc(TABLE_STATUS[t.status])}"><rect x="${x0}" y="${y0}" width="${w}" height="${h}" rx="10" fill="#3E8BFF" fill-opacity="${sel?.08:.03}" stroke="#3E8BFF" stroke-opacity="${sel?.9:.5}" stroke-width="2" stroke-dasharray="${sel?"0":"6 6"}"/>`;
   out+=`<g transform="translate(${x0+10} ${y0+20})"><rect x="0" y="-13" width="150" height="24" rx="12" fill="#07080a" fill-opacity=".75"/><text x="10" y="4" class="svg-label" font-size="13">${esc(t.name)}${t.waiter?" · "+esc(t.waiter):""}</text><text x="140" y="4" text-anchor="end" class="svg-status sel" font-size="11">${esc(TABLE_STATUS[t.status]).toUpperCase()}</text></g>`;
-  for(const p of t.plates){ const [bx,by,bw,bh]=p.bbox; const px=x0+(bx+bw/2)*w, py=y0+(by+bh/2)*h, r=Math.min(bw*w,bh*h)/2;
+  for(const p of t.plates){ if(!p.bbox) continue;  // sin caja no hay nada que marcar en la imagen
+    const [bx,by,bw,bh]=p.bbox; const px=(bx+bw/2)*fw, py=(by+bh/2)*fh, r=Math.min(bw*fw,bh*fh)/2;
     const col=COLOR[p.state], R=r+6, circ=2*Math.PI*R, f=p.fill_ratio ?? FILL[p.state], name=dishName(p);
     out+=`<g transform="translate(${px.toFixed(1)} ${py.toFixed(1)})"><circle r="${(R+10).toFixed(1)}" fill="url(#vhalo-${p.state})" opacity=".8"/><circle r="${R.toFixed(1)}" fill="none" stroke="${col}" stroke-opacity=".25" stroke-width="2.5"/>`;
     if(f>.02) out+=`<circle r="${R.toFixed(1)}" fill="none" stroke="${col}" stroke-width="3" stroke-linecap="round" stroke-dasharray="${(circ*f).toFixed(1)} ${circ.toFixed(1)}" transform="rotate(-90)"/>`;
@@ -367,19 +378,19 @@ function renderSide(){
   const A=snap.alerts;
   $("alerts-card").innerHTML=`<div class="card-h"><h2>Avisos</h2><span class="label num">${A.length} abiertos</span></div>`+
     A.map(a=>`<div class="alert"><span class="sev" style="background:${ALERT_COLOR[a.type]}"></span><p>${esc(ALERT_TITLE[a.type](tableName(a.table_id)))}<small>${esc(a.message)}</small>${a.taken_by?`<span class="taken">Voy · ${esc(a.taken_by)}</span>`:`<span class="taken" style="color:var(--por_terminar)">Nadie respondió${tableWaiter(a.table_id)?" · "+esc(tableWaiter(a.table_id)):""}</span>`}</p><time class="num">${ago(a.created_at)}</time></div>`).join("");
-  const occ=snap.tables.filter(x=>x.plates.length), plates=snap.tables.reduce((n,x)=>n+x.plates.length,0);
+  const occ=snap.tables.filter(x=>x.plates.length), plates=Object.values(snap.counts).reduce((a,b)=>a+b,0);
   $("shift-card").innerHTML=`<div class="card-h"><h2>Ahora</h2><span class="label">En el salón</span></div><div class="metrics">
 <div class="metric"><div class="label">Mesas ocupadas</div><div class="v num">${occ.length}<small>de ${snap.tables.length}</small></div></div>
 <div class="metric"><div class="label">Platos en mesa</div><div class="v num">${plates}</div></div>
 <div class="metric"><div class="label">Avisos abiertos</div><div class="v num">${A.length}</div></div>
 <div class="metric"><div class="label">Tiempo en mesa</div><div class="v num">41<small>min</small></div></div></div>`;
-  const counts={}; for(const x of snap.tables) for(const p of x.plates) counts[p.state]=(counts[p.state]||0)+1;
+  const counts=snap.counts;  // los cuenta el servidor
   $("legend").innerHTML=Object.keys(COLOR).map(s=>`<span class="chip" style="color:${COLOR[s]}"><i style="background:${COLOR[s]}"></i><span>${STATE_NAME[s]} <b class="num">${counts[s]||0}</b></span></span>`).join("");
   $("occupied").textContent=`${occ.length} de ${snap.tables.length} mesas ocupadas`;
 }
 function render(){ renderFloor(); renderVideo(); renderSide(); changed=new Set(); }
 
-function setMode(m){ $("floor").toggleAttribute("hidden",m!=="recon"); $("video").toggleAttribute("hidden",m!=="video");
+function setMode(m){ $("floor").toggleAttribute("hidden",m!=="recon"); $("video").toggleAttribute("hidden",m!=="video"); fitTags($("floor"));
   $("mode-recon").setAttribute("aria-pressed",String(m==="recon")); $("mode-video").setAttribute("aria-pressed",String(m==="video")); }
 function setDevice(phone){ $("wrap").className=phone?"phone-frame":""; $("dev-big").setAttribute("aria-pressed",String(!phone)); $("dev-phone").setAttribute("aria-pressed",String(phone));
   try{ localStorage.setItem("f1-device",phone?"phone":"big"); }catch(e){} }
@@ -389,7 +400,7 @@ for(const id of ["floor","overlay"]){ $(id).addEventListener("click",e=>{const g
   $(id).addEventListener("keydown",e=>{ if(e.key!=="Enter"&&e.key!==" ") return; const g=e.target.closest(".tbl"); if(!g) return; e.preventDefault(); selected=g.dataset.id; render(); }); }
 // "Simular una lectura": la milanesa pasa de lleno a comiendo y late; muestra la animación de cambio de estado.
 const NEXT={lleno:"comiendo",comiendo:"por_terminar",por_terminar:"vacio",vacio:"lleno"};
-$("sim").onclick=()=>{ const p=tableOf("T1").plates[0]; p.state=NEXT[p.state]; p.fill_ratio=FILL[p.state]; changed.add(p.id); selected="T1"; render(); };
+$("sim").onclick=()=>{ const p=tableOf("T1").plates[0]; snap.counts[p.state]--; p.state=NEXT[p.state]; snap.counts[p.state]++; p.fill_ratio=FILL[p.state]; changed.add(p.id); selected="T1"; render(); };
 try{ if(localStorage.getItem("f1-device")==="phone") setDevice(true); }catch(e){}
 render();
 </script>
