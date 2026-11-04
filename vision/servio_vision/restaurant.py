@@ -89,6 +89,12 @@ class Restaurant:
                 pending.remove(dish_id)
         return pending
 
+    def dish_of(self, table_id: str, track_id: str) -> Dish | None:
+        """Plato del pedido ya asignado a ese plato de la cámara, sin asignar nada."""
+        with self._lock:
+            dish_id = self._served.get(table_id, {}).get(track_id)
+        return self.dishes.get(dish_id) if dish_id else None
+
     def has_order(self, table_id: str) -> bool:
         return bool(self.tables.get(table_id, {}).get("pedido"))
 

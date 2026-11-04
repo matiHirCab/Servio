@@ -37,6 +37,9 @@ SAVE_STATE_EVERY_S = 5.0  # cada cuánto se guarda lo que recuerda el pipeline
 LOG_SAVE_ERROR_EVERY_S = 60.0  # una base caída falla en cada guardado
 
 ObservationHandler = Callable[[TableObservation], object]
+# Después de cada lectura: el pipeline, las observaciones de esa lectura y la hora.
+# Lo usa la vista del salón en vivo (salon.py); no puede cortar el loop.
+ReadingHandler = Callable[["Pipeline", list[TableObservation], datetime], object]
 
 
 class Pipeline:
@@ -53,12 +56,14 @@ class Pipeline:
         dish_matcher: DishMatcher | None = None,
         smoother_factory: Callable[[], TableSmoother] | None = None,
         state_db: Database | None = None,
+        on_reading: ReadingHandler | None = None,
     ) -> None:
         """`zones` fijas (de un archivo) o `tables`, que detecta las mesas en cada
         lectura. `smoother_factory`: cómo armar el suavizado de cada mesa (app.py le
         pasa los umbrales de la configuración); sin él, `TableSmoother` por defecto.
         `state_db`: dónde guarda lo que recuerda, para seguir tras un reinicio
-        (`resume`); sin base no guarda nada."""
+        (`resume`); sin base no guarda nada. `on_reading`: se llama al final de cada
+        lectura (la vista del salón en vivo)."""
         if (zones is None) == (tables is None):
             raise ValueError("Pipeline necesita zones o tables, no las dos")
         self.classifier = classifier
@@ -67,6 +72,7 @@ class Pipeline:
         self.restaurant = restaurant
         self.dish_matcher = dish_matcher
         self.on_observation = on_observation
+        self.on_reading = on_reading
         self.finished_after = finished_after
         self._new_smoother = smoother_factory or (
             lambda: TableSmoother(self.finished_after)
@@ -307,6 +313,11 @@ class Pipeline:
             and time.monotonic() - self._saved_at >= SAVE_STATE_EVERY_S
         ):
             self.save_state()
+        if self.on_reading is not None:
+            try:
+                self.on_reading(self, observations, ts)
+            except Exception:
+                logger.exception("%s: la vista del salón falló con esta lectura", ts)
         return observations
 
     def close(self) -> None:

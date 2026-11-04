@@ -34,6 +34,8 @@ from servio_vision.privacy import Anonymizer
 from servio_vision.recording import FrameRecorder
 from servio_vision.restaurant import DEFAULT_DIR as RESTAURANT_DIR
 from servio_vision.restaurant import Restaurant
+from servio_vision.salon import SalonFeed
+from servio_vision.salon_web import SalonServer
 from servio_vision.settings import Settings, activate
 from servio_vision.smoothing import TableSmoother
 from servio_vision.tables import TableDetector, TableTracker
@@ -201,6 +203,11 @@ def build_pipeline(settings: Settings) -> Pipeline | None:
         local_id=settings.local_id,
         resume=live,
     )
+    feed = (
+        SalonFeed(settings.local_id, processor, restaurant, settings.interval)
+        if settings.web_port is not None
+        else None
+    )
     pipeline = Pipeline(
         classifier,
         zones,
@@ -216,7 +223,23 @@ def build_pipeline(settings: Settings) -> Pipeline | None:
         smoother_factory=lambda: TableSmoother(finished_after, **smoothing),
         # la misma base que los avisos: ahí guarda lo que recuerda (sin base, nada)
         state_db=processor.db,
+        on_reading=feed.on_reading if feed is not None else None,
     )
+    if feed is not None:
+        assert settings.web_port is not None
+        try:
+            server = SalonServer(feed, settings.web_host, settings.web_port).start()
+        except OSError as e:
+            logger.error(
+                "No se pudo abrir la vista del salón en %s:%s (%s). ¿El puerto ya "
+                "está en uso? Probá con otro --web",
+                settings.web_host,
+                settings.web_port,
+                e,
+            )
+            pipeline.close()
+            return None
+        logger.info("Salón en vivo: %s", server.url)
     if live:
         pipeline.resume()  # los ids y el suavizado, para que sigan siendo los mismos
     return pipeline

@@ -86,6 +86,18 @@ FINISHED_AFTER=20           # 20 s en "por terminar" → "vacío"
 - **Grabar en vivo:** con la cámara, la grabación puede quedar más rápida que la realidad si el loop va más lento que los fps de la cámara. Para el plan B, grabar sobre el video.
 - **Colores de mesa:** gris libre · azul servida · verde comiendo · amarillo por terminar · rojo terminada. Los platos usan los mismos colores según su estado.
 
+## Salón en vivo (vista de reconocimiento, F-1)
+
+Con `--web PUERTO`, el loop (y `tools/vista_demo.py`) sirve una página con el salón visto desde arriba, estilo pantalla de auto: cada mesa en su lugar de la cámara, sus platos con un anillo de color según el estado (verde lleno, amarillo comiendo, naranja por terminar, rojo vacío), una figura por comensal, los avisos abiertos y un resumen del salón. Se actualiza sola después de cada lectura (Server-Sent Events), sin recargar.
+
+```
+python main.py --source "..\video demo test.mp4" --classifier hybrid --demo --interval 5 --no-telegram --web 8000
+```
+
+Abrí `http://localhost:8000/local/salon` (`local` es el `local_id` de la casa; `/` redirige ahí). Para verla desde el celular o una tablet en la misma red, sumá `--web-host 0.0.0.0` y entrá con la IP de la PC. No tiene usuario ni contraseña: no la abras a internet. También va en el toml (`web_port = 8000`, `web_host = "0.0.0.0"`).
+
+Rutas: `/<local>/salon` (página), `/<local>/salon/estado` (la última foto en JSON) y `/<local>/salon/eventos` (la misma foto cada vez que cambia). La foto la arma `servio_vision/salon.py`; el servidor es `servio_vision/salon_web.py` (biblioteca estándar, sin dependencias nuevas) y la página `servio_vision/static/salon.html`.
+
 ## Datos del restaurante y respuestas de los mozos
 
 Con la comanda del restaurante, Servio sabe **qué plato es cada uno** y **qué mozo atiende cada mesa**. Para la demo esos datos son simulados (`fixtures/restaurante/carta.json` y `salon.json`): es lo que daría el sistema del restaurante si estuviéramos conectados.
