@@ -122,7 +122,7 @@ code{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:.92em;color:var
 // Los cuatro avisos (mesas y mozos de fixtures/restaurante/salon.json y carta.json) con el
 // texto que el diseño le pide a messages.py (dos líneas: «emoji
 // Mesa · qué» y «hace cuánto · plato · mozo»). Telegram manda el mismo texto al reloj y al
-// celular: acá se arma una sola vez (<code>txt</code>) y las dos vistas lo muestran tal cual.
+// celular: acá se arma una sola vez (`txt`) y las dos vistas lo muestran tal cual.
 const AVISOS = [
   {id:"vacio", color:"var(--por_terminar)", titulo:"Plato vacío", why:"Hay platos vacíos sobre la mesa: retirarlos. Es el aviso más frecuente; una palabra alcanza.",
    txt:"🧹 Mesa 2 · retirar platos\nhace 1 min · Lomo con papas · Sofía", reloj:{acts:["Voy","Listo","No hacía falta"]},
@@ -141,9 +141,9 @@ const esc = s => String(s??"").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;"
 let vista="reloj";
 function card(a){
   const [l1,l2]=a.txt.split("\n");
-  const reloj=()=><code><div class="watch" aria-label="Reloj"><div class="app"><i></i>Telegram · Servio</div><div class="msg"><b>${esc(l1)}</b><small>${esc(l2)}</small></div><div class="acts">${a.reloj.acts.map((x,i)=></code><span class="${i===0?"go":i===a.reloj.acts.length-1?"sec":""}">${esc(x)}</span><code>).join("")}</div></div>${a.reloj.dictar?</code><p class="note" style="text-align:center;margin:-4px 0 8px">${esc(a.reloj.dictar)}: las respuestas rápidas del reloj son una lista fija.</p><code>:""}</code>;
-  const cel=()=><code><div class="phone"><div class="bubble">${esc(a.txt)}<div class="t">${esc(a.cel.hora)}</div><div class="btns">${a.cel.btns.map((x,i)=></code><span class="${a.cel.btns.length%2&&i===a.cel.btns.length-1?"wide":""}">${esc(x)}</span><code>).join("")}</div></div>${a.cel.reply?</code><div class="reply"><span>${esc(a.cel.reply)}</span></div><code>:""}${a.cel.nota?</code><p class="note">${esc(a.cel.nota)}</p><code>:""}</div></code>;
-  return <code><article class="card" aria-label="${esc(a.titulo)}"><span class="pill" style="background:${a.color};color:#0b0c0e">${esc(a.titulo)}</span><h2 style="margin-top:8px">${esc(l1.replace(/^\S+\s/,""))}</h2><p class="why">${esc(a.why)}</p>${vista==="reloj"?reloj():cel()}</article></code>;
+  const reloj=()=>`<div class="watch" aria-label="Reloj"><div class="app"><i></i>Telegram · Servio</div><div class="msg"><b>${esc(l1)}</b><small>${esc(l2)}</small></div><div class="acts">${a.reloj.acts.map((x,i)=>`<span class="${i===0?"go":i===a.reloj.acts.length-1?"sec":""}">${esc(x)}</span>`).join("")}</div></div>${a.reloj.dictar?`<p class="note" style="text-align:center;margin:-4px 0 8px">${esc(a.reloj.dictar)}: las respuestas rápidas del reloj son una lista fija.</p>`:""}`;
+  const cel=()=>`<div class="phone"><div class="bubble">${esc(a.txt)}<div class="t">${esc(a.cel.hora)}</div><div class="btns">${a.cel.btns.map((x,i)=>`<span class="${a.cel.btns.length%2&&i===a.cel.btns.length-1?"wide":""}">${esc(x)}</span>`).join("")}</div></div>${a.cel.reply?`<div class="reply"><span>${esc(a.cel.reply)}</span></div>`:""}${a.cel.nota?`<p class="note">${esc(a.cel.nota)}</p>`:""}</div>`;
+  return `<article class="card" aria-label="${esc(a.titulo)}"><span class="pill" style="background:${a.color};color:#0b0c0e">${esc(a.titulo)}</span><h2 style="margin-top:8px">${esc(l1.replace(/^\S+\s/,""))}</h2><p class="why">${esc(a.why)}</p>${vista==="reloj"?reloj():cel()}</article>`;
 }
 function render(){ document.getElementById("avisos").innerHTML=AVISOS.map(card).join("");
   document.getElementById("ver-reloj").setAttribute("aria-pressed",String(vista==="reloj")); document.getElementById("ver-cel").setAttribute("aria-pressed",String(vista==="cel")); }
