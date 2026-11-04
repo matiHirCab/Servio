@@ -30,7 +30,7 @@ El cambio de modo es un segmento en la barra de estado. Los dos modos comparten 
 | Por terminar | naranja `#FF8A3D` | anillo corto |
 | Vacío | rojo `#FF4D61` | sin anillo, plato con restos, punto rojo arriba |
 
-El **arco del anillo es cuánto queda** (`fill_ratio`), así el estado se lee aunque no se distinga el color. Cuando un plato cambia de estado **late** una vez (`pop`, 1,2 s) y queda quieto; un plato que aparece o desaparece entra y sale con esa misma animación corta. Nada parpadea en reposo salvo el punto rojo de «en vivo». Con `prefers-reduced-motion`, nada se anima.
+El **arco del anillo es cuánto queda** (`fill_ratio`), así el estado se lee aunque no se distinga el color. Cuando un plato cambia de estado **late** una vez (`pop`, 1,2 s) y queda quieto; un plato nuevo entra latiendo igual, y uno que se retiró simplemente ya no está (sin animación de salida: el dibujo se rehace entero en cada lectura). Nada parpadea en reposo salvo el punto rojo de «en vivo». Con `prefers-reduced-motion`, nada se anima.
 
 ### Mesas y avisos
 
@@ -55,9 +55,8 @@ Mismo contenido, otra composición: el salón arriba a todo el ancho, debajo la 
 
 Lo que necesita del servidor, además de lo que `/estado` ya manda (`fill_ratio`, `since` y `created_at` en ISO, `dish` que puede ser `null`, `message`, `waiter` por mesa):
 
-- `GET /<local>/salon/frame.jpg`: el último frame difuminado (modo video).
-- `taken_by` en cada aviso: quién respondió «Voy» (C-5); `null` si nadie respondió todavía. Con `null` el panel muestra «Nadie respondió · mozo» (el mozo sale de la mesa del aviso; el aviso no lo trae); si el campo no viene (el servidor de hoy), no dice nada: no sabe.
-- `GET /<local>/salon/frame.jpg` solo con `--web-video` (ver arriba).
+- `GET /<local>/salon/frame.jpg`: el último frame difuminado (modo video), solo con `--web-video` (ver arriba).
+- `answered_by` en cada aviso (el nombre que ya usa `alert_feedback` en el log): quién respondió «Voy» (C-5); `null` si nadie respondió todavía. Con `null` el panel muestra «Nadie respondió · mozo» (el mozo sale de la mesa del aviso; el aviso no lo trae); si el campo no viene (el servidor de hoy), no dice nada: no sabe.
 - Las horas (`since`, `created_at`, `ts`) vienen en UTC y la pantalla las muestra en la hora del navegador, que es la del local.
 - Quién mira (para marcar sus mesas): el usuario de R-1. Sin login, todas las mesas sin marca.
 

@@ -155,12 +155,12 @@ h1,h2,h3{margin:0;font-weight:500;text-wrap:balance}
     <div class="brand"><b>Servio</b><span>Casa Jessica · Salón</span></div>
     <div class="status-r">
       <span class="live"><i></i>Cámara en vivo</span>
-      <span class="num" id="occupied">2 de 3 mesas ocupadas</span>
+      <span class="num" id="occupied"></span>
       <span class="modes" role="group" aria-label="Modo">
         <button type="button" id="mode-recon" aria-pressed="true">Reconstrucción</button>
         <button type="button" id="mode-video" aria-pressed="false">Video</button>
       </span>
-      <span class="time num" id="clock">21:42</span>
+      <span class="time num" id="clock"></span>
     </div>
   </header>
 
@@ -181,7 +181,7 @@ h1,h2,h3{margin:0;font-weight:500;text-wrap:balance}
 
   <footer class="dock">
     <div class="legend" id="legend"></div>
-    <span class="conn">Última lectura hace 4 s · cada 30 s</span>
+    <span class="conn" id="conn"></span>
   </footer>
 </main>
 </div>
@@ -198,7 +198,7 @@ const ALERT_COLOR = {mesa_terminada:COLOR.vacio, plato_vacio:COLOR.por_terminar,
 // Datos de ejemplo con la forma real de /<local>/salon/estado (salon.py build_snapshot):
 // fill_ratio, since/created_at en ISO **UTC** (se muestran en la hora del local), dish puede
 // ser null, alert.message con la forma de alerts/messages.py. Lo que hoy no
-// manda el servidor es `taken_by` en el aviso (quién respondió «Voy», C-5); el mozo del
+// manda el servidor es `answered_by` en el aviso (quién respondió «Voy», C-5); el mozo del
 // aviso sale de su mesa (`tableOf(a.table_id).waiter`). Mesa 1 es la que
 // ve la cámara del frame; el mozo que mira es Juan (sus mesas van marcadas).
 // Coordenadas 0–1 en la imagen, también los bbox de los platos (salon.py plate_box);
@@ -207,22 +207,22 @@ const ME = "Juan";
 const NOW = Date.parse("2026-11-05T00:42:11Z");  // la hora fija del prototipo: 21:42 en Montevideo
 const TZ = "America/Montevideo";  // en la pantalla real, la zona del navegador (que es la del local)
 const snap = {
-  local:"Casa Jessica", camera:"cam-1", ts:"2026-11-05T00:42:07Z", interval:30, frame:[640,480],
+  local:"Casa Jessica", camera:"cam-1", ts:"2026-11-05T00:42:07+00:00", interval:30, frame:[640,480],
   tables:[
-    {id:"T1", name:"Mesa 1", waiter:"Juan", status:"comiendo", people:true, since:"2026-11-05T00:05:00Z", box:[0,.47,.53,.53],
+    {id:"T1", name:"Mesa 1", waiter:"Juan", status:"comiendo", people:true, since:"2026-11-05T00:05:00+00:00", box:[0,.47,.53,.53],
      plates:[{id:"T1-p1", dish:"Milanesa napolitana", state:"lleno", fill_ratio:.92, bbox:[.297,.746,.138,.159]},
              {id:"T1-p2", dish:"Ensalada César", state:"comiendo", fill_ratio:.5, bbox:[.042,.565,.117,.138]}]},
-    {id:"T2", name:"Mesa 2", waiter:"Juan", status:"por_terminar", people:true, since:"2026-11-04T23:38:00Z", box:[.60,.08,.36,.40],
+    {id:"T2", name:"Mesa 2", waiter:"Juan", status:"por_terminar", people:true, since:"2026-11-04T23:38:00+00:00", box:[.60,.08,.36,.40],
      plates:[{id:"T2-p1", dish:"Risotto de hongos", state:"por_terminar", fill_ratio:.15, bbox:[.643,.16,.108,.16]},
              {id:"T2-p2", dish:"Lomo con papas", state:"vacio", fill_ratio:0, bbox:[.798,.18,.108,.16]}]},
-    {id:"T3", name:"Mesa 3", waiter:"Sofía", status:"comiendo", people:true, since:"2026-11-05T00:20:00Z", box:[.60,.56,.36,.40],
+    {id:"T3", name:"Mesa 3", waiter:"Sofía", status:"comiendo", people:true, since:"2026-11-05T00:20:00+00:00", box:[.60,.56,.36,.40],
      plates:[{id:"T3-p1", dish:"Sorrentinos con fileto", state:"lleno", fill_ratio:.95, bbox:[.708,.66,.126,.18]},
              {id:"T3-p2", dish:null, state:"comiendo", fill_ratio:.6, bbox:null}]},  // sin pedido cargado ni caja
     {id:"T4", name:"Mesa 4", waiter:"Sofía", status:"libre", people:false, since:null, box:[.08,.06,.4,.3], plates:[]},
   ],
   alerts:[
-    {id:"a1", type:"plato_lleno_mucho", table_id:"T3", message:"❓ Mesa 3: un plato sigue lleno hace 14 min. ¿Está todo bien?", created_at:"2026-11-05T00:28:00Z", taken_by:null},
-    {id:"a2", type:"plato_vacio", table_id:"T2", message:"🧹 Mesa 2: hay platos vacíos para retirar.", created_at:"2026-11-05T00:38:00Z", taken_by:"Juan"},
+    {id:"a1", type:"plato_lleno_mucho", table_id:"T3", message:"❓ Mesa 3: un plato sigue lleno hace 14 min. ¿Está todo bien?", created_at:"2026-11-05T00:28:00+00:00", answered_by:null},
+    {id:"a2", type:"plato_vacio", table_id:"T2", message:"🧹 Mesa 2: hay platos vacíos para retirar.", created_at:"2026-11-05T00:38:00+00:00", answered_by:"Juan"},
   ],
   counts:{lleno:2, comiendo:2, por_terminar:1, vacio:1},
 };
@@ -235,6 +235,7 @@ const tableOf = id => snap.tables.find(t=>t.id===id);
 const tableName = id => { const t=tableOf(id); return t ? t.name : id; };
 const tableWaiter = id => tableOf(id)?.waiter ?? null;
 const dishName = p => p.dish ?? "Plato";
+const stateOf = p => STATE_NAME[p.state] ? p.state : "comiendo";  // como plate(): un estado raro no rompe nada
 function ago(iso){ if(!iso) return ""; const s=Math.max(0,Math.round((NOW-Date.parse(iso))/1000)); if(s<60) return `${s} s`; const m=Math.floor(s/60); return m<60?`${m} min`:`${Math.floor(m/60)} h ${m%60} min`; }
 const hhmm = iso => new Date(iso).toLocaleTimeString("es-UY",{timeZone:TZ,hour:"2-digit",minute:"2-digit",hour12:false});
 const alertTitle = (type,name) => (ALERT_TITLE[type]||(n=>`${n}: aviso`))(name);
@@ -296,12 +297,15 @@ function plate(p, x, y, r, changed) {
 }
 function alertTag(x,y,text,col,opacity=1){
   const w=text.length*7.2+22;  // estimado; `fitTags` lo ajusta al texto real
-  return `<g class="tag" transform="translate(${x.toFixed(1)} ${y.toFixed(1)})"><rect x="0" y="-11" width="${w.toFixed(0)}" height="22" rx="11" fill="${col}" fill-opacity="${opacity}"/><text x="${(w/2).toFixed(0)}" y="4" text-anchor="middle" class="svg-tag">${esc(text)}</text></g>`;
+  return `<g class="tag" data-x="${x.toFixed(1)}" data-y="${y.toFixed(1)}" transform="translate(${x.toFixed(1)} ${y.toFixed(1)})"><rect x="0" y="-11" width="${w.toFixed(0)}" height="22" rx="11" fill="${col}" fill-opacity="${opacity}"/><text x="${(w/2).toFixed(0)}" y="4" text-anchor="middle" class="svg-tag">${esc(text)}</text></g>`;
 }
 function fitTags(svg){
   if(svg.hasAttribute("hidden")||(svg.checkVisibility&&!svg.checkVisibility())) return;  // oculto (o su padre): no se puede medir
+  const vw=svg.viewBox&&svg.viewBox.baseVal?svg.viewBox.baseVal.width:Infinity;
   for(const g of svg.querySelectorAll("g.tag")){ const t=g.querySelector("text"), r=g.querySelector("rect"); if(!t.getComputedTextLength) continue;
-    const w=t.getComputedTextLength()+22; r.setAttribute("width",w.toFixed(0)); t.setAttribute("x",(w/2).toFixed(0)); }
+    const w=t.getComputedTextLength()+22; r.setAttribute("width",w.toFixed(0)); t.setAttribute("x",(w/2).toFixed(0));
+    const x=Math.min(+g.dataset.x, vw-w-4);  // que no se corte contra el borde derecho
+    g.setAttribute("transform",`translate(${Math.max(0,x).toFixed(1)} ${g.dataset.y})`); }
 }
 
 function renderFloor(){
@@ -315,7 +319,7 @@ function renderFloor(){
   const s=clamp(sides[Math.floor(sides.length/2)]/120,.55,1.3), seat=34*s;
   let out=defs()+`<rect width="${W}" height="${H.toFixed(0)}" fill="url(#floorg)"/><rect width="${W}" height="${H.toFixed(0)}" fill="url(#grid)"/>
 <path d="M20 20H980V${(H-20).toFixed(0)}H20Z" fill="none" stroke="#ffffff" stroke-opacity=".08" stroke-width="2"/>
-<text x="36" y="44" class="svg-cap">CASA JESSICA · CÁMARA 1 · CENITAL</text><text x="964" y="44" text-anchor="end" class="svg-cap">EN VIVO · CADA 30 s</text>`;
+<text x="36" y="44" class="svg-cap">${esc(snap.local).toUpperCase()} · ${esc(snap.camera).toUpperCase()} · CENITAL</text><text x="964" y="44" text-anchor="end" class="svg-cap">EN VIVO · CADA ${snap.interval} s</text>`;
   for(const a of T){
     const t=a.t, x0=M+(a.x-minx)*k, y0=offY+(a.y-miny)*k, w=a.w*k, h=a.h*k, sel=t.id===selected, mine=t.waiter===ME;
     // platos: con su caja de la cámara, o repartidos en la mesa si no la tienen (salon.html)
@@ -370,10 +374,10 @@ function renderVideo(){
     if(al) out+=alertTag(x0+8, y0+h-16, alertTitle(al.type,t.name).toUpperCase()+" · "+ago(al.created_at).toUpperCase(), alertColor(al.type));
     for(const p of t.plates){ if(!p.bbox) continue;
       const [bx,by,bw,bh]=p.bbox; const px=(bx+bw/2)*fw, py=(by+bh/2)*fh, r=Math.min(bw*fw,bh*fh)/2;
-      const col=COLOR[p.state], R=r+6, circ=2*Math.PI*R, f=p.fill_ratio ?? FILL[p.state];
-      out+=`<g transform="translate(${px.toFixed(1)} ${py.toFixed(1)})"><g class="${changed.has(p.id)?"changed":""}"><circle r="${(R+10).toFixed(1)}" fill="url(#vhalo-${p.state})" opacity=".8"/><circle r="${R.toFixed(1)}" fill="none" stroke="${col}" stroke-opacity=".25" stroke-width="2.5"/>`;
+      const st=stateOf(p), col=COLOR[st], R=r+6, circ=2*Math.PI*R, f=p.fill_ratio ?? FILL[st];
+      out+=`<g transform="translate(${px.toFixed(1)} ${py.toFixed(1)})"><g class="${changed.has(p.id)?"changed":""}"><circle r="${(R+10).toFixed(1)}" fill="url(#vhalo-${st})" opacity=".8"/><circle r="${R.toFixed(1)}" fill="none" stroke="${col}" stroke-opacity=".25" stroke-width="2.5"/>`;
       if(f>.02) out+=`<circle r="${R.toFixed(1)}" fill="none" stroke="${col}" stroke-width="3" stroke-linecap="round" stroke-dasharray="${(circ*f).toFixed(1)} ${circ.toFixed(1)}" transform="rotate(-90)"/>`;
-      out+=`</g>`+alertTag(R+8, -(R-2), `${dishName(p)} · ${STATE_NAME[p.state].toUpperCase()}`, col)+`</g>`;
+      out+=`</g>`+alertTag(R+8, -(R-2), `${dishName(p)} · ${STATE_NAME[st].toUpperCase()}`, col)+`</g>`;
     }
     out+=`</g>`;
   }
@@ -382,13 +386,13 @@ function renderVideo(){
 
 function renderSide(){
   const t=tableOf(selected);
-  const rows=t.plates.map(p=>`<div class="prow"><i style="background:${COLOR[p.state]}"></i><span class="nm">${esc(dishName(p))}</span><span class="st">${STATE_NAME[p.state]}</span><div class="bar"><b style="width:${Math.round((p.fill_ratio ?? FILL[p.state])*100)}%;background:${COLOR[p.state]}"></b></div></div>`).join("")
+  const rows=t.plates.map(p=>{ const st=stateOf(p); return `<div class="prow"><i style="background:${COLOR[st]}"></i><span class="nm">${esc(dishName(p))}</span><span class="st">${STATE_NAME[st]}</span><div class="bar"><b style="width:${Math.round((p.fill_ratio ?? FILL[st])*100)}%;background:${COLOR[st]}"></b></div></div>`; }).join("")
     || `<p class="muted">Mesa libre.</p>`;
   $("table-card").innerHTML=`<div class="card-h"><h2>${esc(t.name)}</h2><small>${t.waiter?esc(t.waiter)+" · mozo"+(t.waiter===ME?" · tuya":""):"Sin mozo asignado"}</small></div>${rows}
 <div class="label num" style="margin-top:10px">${t.since?"Sentados desde las "+hhmm(t.since):(t.people?"Hay gente, sin platos":"Libre")} · ${t.plates.length} ${t.plates.length===1?"plato":"platos"}</div>`;
-  const A=[...snap.alerts].sort((a,b)=>a.created_at.localeCompare(b.created_at));  // el más viejo arriba
+  const A=[...snap.alerts].sort((a,b)=>Date.parse(a.created_at)-Date.parse(b.created_at));  // el más viejo arriba
   $("alerts-card").innerHTML=`<div class="card-h"><h2>Avisos</h2><span class="label num">${A.length} abiertos</span></div>`+
-    A.map(a=>`<div class="alert"><span class="sev" style="background:${alertColor(a.type)}"></span><p>${esc(alertTitle(a.type,tableName(a.table_id)))}<small>${esc(plainMessage(a.message))}</small>${a.taken_by?`<span class="taken">Voy · ${esc(a.taken_by)}</span>`:a.taken_by===null?`<span class="taken" style="color:var(--por_terminar)">Nadie respondió${tableWaiter(a.table_id)?" · "+esc(tableWaiter(a.table_id)):""}</span>`:""}</p><time class="num">${ago(a.created_at)}</time></div>`).join("");
+    A.map(a=>`<div class="alert"><span class="sev" style="background:${alertColor(a.type)}"></span><p>${esc(alertTitle(a.type,tableName(a.table_id)))}<small>${esc(plainMessage(a.message))}</small>${a.answered_by?`<span class="taken">Voy · ${esc(a.answered_by)}</span>`:a.answered_by===null?`<span class="taken" style="color:var(--por_terminar)">Nadie respondió${tableWaiter(a.table_id)?" · "+esc(tableWaiter(a.table_id)):""}</span>`:""}</p><time class="num">${ago(a.created_at)}</time></div>`).join("");
   const occ=snap.tables.filter(x=>x.plates.length), plates=Object.values(snap.counts).reduce((a,b)=>a+b,0);
   const since=snap.tables.filter(x=>x.since).map(x=>(NOW-Date.parse(x.since))/60000);  // promedio desde `since`, acá
   const seated=since.length?Math.round(since.reduce((a,b)=>a+b,0)/since.length):null;
@@ -400,8 +404,19 @@ function renderSide(){
   const counts=snap.counts;  // los cuenta el servidor
   $("legend").innerHTML=Object.keys(COLOR).map(s=>`<span class="chip" style="color:${COLOR[s]}"><i style="background:${COLOR[s]}"></i><span>${STATE_NAME[s]} <b class="num">${counts[s]||0}</b></span></span>`).join("");
   $("occupied").textContent=`${occ.length} de ${snap.tables.length} mesas ocupadas`;
+  $("clock").textContent=hhmm(new Date(NOW).toISOString());
+  $("conn").textContent=`Última lectura hace ${ago(snap.ts)} · cada ${snap.interval} s`;
 }
-function render(){ renderFloor(); renderVideo(); renderSide(); changed=new Set(); }
+let seen=new Set();
+function render(){
+  const focused=document.activeElement&&document.activeElement.closest?document.activeElement.closest(".tbl"):null;
+  const ids=new Set(snap.tables.flatMap(t=>t.plates.map(p=>p.id)));
+  for(const id of ids) if(seen.size&&!seen.has(id)) changed.add(id);  // un plato nuevo entra latiendo
+  seen=ids;
+  renderFloor(); renderVideo(); renderSide();
+  if(focused){ const svg=focused.closest("svg"), g=svg&&svg.querySelector(`.tbl[data-id="${selected}"]`); if(g&&g.focus) g.focus(); }
+  clearTimeout(render.timer); render.timer=setTimeout(()=>{ changed=new Set(); },1200);  // lo que late, late entero
+}
 
 function setMode(m){ $("floor").toggleAttribute("hidden",m!=="recon"); $("video").toggleAttribute("hidden",m!=="video"); fitTags($("floor")); fitTags($("overlay"));
   $("mode-recon").setAttribute("aria-pressed",String(m==="recon")); $("mode-video").setAttribute("aria-pressed",String(m==="video")); }
@@ -420,11 +435,11 @@ function tableStatus(plates){
   if((c("por_terminar")+c("vacio"))*2>=n) return "por_terminar";
   return c("lleno")*2>=n ? "servida" : "comiendo";
 }
-$("sim").onclick=()=>{ const t=tableOf("T1"), p=t.plates[0]; snap.counts[p.state]--; p.state=NEXT[p.state]; snap.counts[p.state]++; p.fill_ratio=FILL[p.state]; changed.add(p.id);
+$("sim").onclick=()=>{ const t=tableOf("T1"), [p0,p1]=t.plates, p=(p0.state==="vacio"&&p1&&p1.state!=="vacio")?p1:p0; snap.counts[p.state]--; p.state=NEXT[p.state]; snap.counts[p.state]++; p.fill_ratio=FILL[p.state]; changed.add(p.id);
   t.status=tableStatus(t.plates);
   snap.alerts=snap.alerts.filter(a=>a.table_id!==t.id);  // el aviso de la mesa sigue a sus platos
-  if(t.status==="terminada") snap.alerts.push({id:"sim-t", type:"mesa_terminada", table_id:t.id, message:`🍽️ ${t.name}: terminó.`, created_at:new Date(NOW).toISOString(), taken_by:null});
-  else if(p.state==="vacio") snap.alerts.push({id:"sim-v", type:"plato_vacio", table_id:t.id, message:`🧹 ${t.name}: hay platos vacíos para retirar.`, created_at:new Date(NOW).toISOString(), taken_by:null});
+  if(t.status==="terminada") snap.alerts.push({id:"sim-t", type:"mesa_terminada", table_id:t.id, message:`🍽️ ${t.name}: terminó.`, created_at:new Date(NOW).toISOString(), answered_by:null});
+  else if(p.state==="vacio") snap.alerts.push({id:"sim-v", type:"plato_vacio", table_id:t.id, message:`🧹 ${t.name}: hay platos vacíos para retirar.`, created_at:new Date(NOW).toISOString(), answered_by:null});
   selected="T1"; render(); };
 try{ if(localStorage.getItem("f1-device")==="phone") setDevice(true); }catch(e){}
 render();
