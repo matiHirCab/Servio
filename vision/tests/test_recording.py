@@ -102,11 +102,15 @@ def test_record_leaves_a_complete_session_and_replay_gives_the_same_alerts(
         "fake",
     )
     assert code == 0
-    assert comparar_sesion.compare(recorded, recording.last_run_lines(replay_log)) == []
-    # la reproducción deja sus eventos en la sesión: es lo que compara la herramienta
-    assert (session / recording.REPLAY_EVENTS_FILE).exists()
+    # la reproducción deja su log en la sesión (el compartido no se toca): es lo que
+    # compara la herramienta
+    assert not replay_log.exists()
+    replay_events = session / recording.REPLAY_EVENTS_FILE
+    assert (
+        comparar_sesion.compare(recorded, recording.last_run_lines(replay_events)) == []
+    )
     assert comparar_sesion.main([str(session)]) == 0
-    assert comparar_sesion.main([str(session), "--log", str(replay_log)]) == 0
+    assert comparar_sesion.main([str(session), "--log", str(replay_events)]) == 0
     # reproducir de nuevo pisa lo de la reproducción anterior, no lo mezcla
     again = _run(
         tmp_path,
@@ -124,7 +128,9 @@ def test_record_leaves_a_complete_session_and_replay_gives_the_same_alerts(
         monkeypatch,
         replay_log,
         "--source",
-        str(session),
+        str(tmp_path / "salon.avi"),
+        "--classifier",
+        "fake",
         "--record",
         str(session),
     )
@@ -200,6 +206,10 @@ def test_session_info_hides_camera_credentials():
         == "rtsp://cam/stream"
     )
     assert recording.redact_source("video.mp4") == "video.mp4"
+    assert (
+        recording.redact_source("http://cam/video.cgi?user=admin&pwd=s3cret&res=hd")
+        == "http://cam/video.cgi?user=admin&pwd=***&res=hd"
+    )
     assert (
         recording.redact_source("http://cam.local:8080/video")
         == "http://cam.local:8080/video"

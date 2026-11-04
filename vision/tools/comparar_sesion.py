@@ -20,17 +20,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from servio_vision import recording
 
-Signature = tuple[str, str, str, str]
-
 
 def compare(recorded: list[str], replayed: list[str]) -> list[str]:
     """Las diferencias, en palabras; vacío si los avisos coinciden."""
-    return compare_signatures(
-        recording.alert_signature(recorded), recording.alert_signature(replayed)
-    )
-
-
-def compare_signatures(a: list[Signature], b: list[Signature]) -> list[str]:
+    a, b = recording.alert_signature(recorded), recording.alert_signature(replayed)
     if a == b:
         return []
     found = []
@@ -82,12 +75,17 @@ def main(argv: list[str] | None = None) -> int:
             " abiertos de la base, la reproducción (que arranca de cero) puede"
             " diferir al principio."
         )
-    recorded = recording.alert_signature(
-        [line for line in events.read_text("utf-8").splitlines() if line.strip()]
-    )
-    replayed = recording.alert_signature(recording.last_run_lines(log))
-    diffs = compare_signatures(recorded, replayed)
-    total = len(recorded)
+    recorded = [line for line in events.read_text("utf-8").splitlines() if line.strip()]
+    answers = sum('"event": "alert_feedback"' in line for line in recorded)
+    if answers:
+        print(
+            f"Nota: en vivo los mozos respondieron {answers} veces; la reproducción no"
+            " tiene respuestas, así que los avisos que se cerraron por una respuesta"
+            " (o no recordaron) van a diferir."
+        )
+    replayed = recording.last_run_lines(log)
+    diffs = compare(recorded, replayed)
+    total = len(recording.alert_signature(recorded))
     if not diffs:
         print(f"Coinciden: {total} eventos de aviso iguales en vivo y reproducidos.")
         return 0

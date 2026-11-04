@@ -222,7 +222,10 @@ def build_pipeline(settings: Settings) -> Pipeline | None:
         database_url=settings.database_url,
         local_id=settings.local_id,
         resume=live,
-        mirror_log=mirror_log(settings),
+        log_path=replay_log(
+            settings
+        ),  # reproduciendo: el log va a la sesión, no a out/
+        mirror_log=settings.record / recording.EVENTS_FILE if settings.record else None,
     )
     feed = (
         SalonFeed(settings.local_id, processor, restaurant, settings.interval)
@@ -299,8 +302,6 @@ def run(settings: Settings, limit: int | None = None) -> int:
     try:
         settings = session_settings(settings)  # una sesión grabada: sus reglas
         if is_session_source(settings):
-            if settings.record:
-                raise OSError("Una reproducción no se graba: sacá --record")
             recording.reset_replay(Path(settings.source))  # lo de la vez anterior
         if settings.record:
             recording.ensure_free(
@@ -351,7 +352,12 @@ def run(settings: Settings, limit: int | None = None) -> int:
             # antes de abrir la cámara: si no abre, también hay que enterarse
             monitor.start()
         frames = _open_frames(settings, anonymize, protect)
-        logger.info("Privacidad: caras difuminadas en la captura")
+        if is_session_source(settings):
+            logger.info(
+                "Privacidad: frames de una sesión grabada, ya sin caras según sesion.json"
+            )
+        else:
+            logger.info("Privacidad: caras difuminadas en la captura")
         for frame, ts in frames:
             if recorder is not None:
                 recorder = _record(recorder, frame, ts)
@@ -465,16 +471,14 @@ def session_rules(settings: Settings) -> dict[str, Any]:
     }
 
 
-def mirror_log(settings: Settings) -> Path | None:
-    """Dónde va la copia del log de esta corrida: grabando, a la sesión
-    (`eventos.jsonl`); reproduciendo, también a la sesión (`reproduccion.jsonl`,
-    lo que compara `tools/comparar_sesion.py`); si no, a ningún lado."""
-    if settings.record:
-        return settings.record / recording.EVENTS_FILE
-    if is_session_source(settings):
-        assert settings.source is not None
-        return Path(settings.source) / recording.REPLAY_EVENTS_FILE
-    return None
+def replay_log(settings: Settings) -> Path | None:
+    """Reproduciendo una sesión, el log de `alerts` de esa corrida va a la sesión
+    (`reproduccion.jsonl`, lo que compara `tools/comparar_sesion.py`) y no al log
+    compartido de `out/`, que es el del servicio de verdad. `None`: el de siempre."""
+    if not is_session_source(settings):
+        return None
+    assert settings.source is not None
+    return Path(settings.source) / recording.REPLAY_EVENTS_FILE
 
 
 def is_session_source(settings: Settings) -> bool:
@@ -501,6 +505,9 @@ def session_settings(settings: Settings) -> Settings:
     if update.get("interval") is None:
         raise OSError(f"{settings.source}: sesion.json sin cadencia")
     update["telegram"] = False
+    if settings.record:  # viene del toml o del entorno: una reproducción no se graba
+        logger.info("Reproduciendo: no se graba (la sesión ya es la grabación)")
+    update["record"] = None
     update["database_url"] = (
         f"sqlite:///{(session / recording.REPLAY_DB).resolve().as_posix()}"
     )

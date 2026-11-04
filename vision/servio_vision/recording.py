@@ -133,11 +133,21 @@ def redact_source(source: str) -> str:
     if "://" not in source:
         return source
     scheme, rest = source.split("://", 1)
-    if "@" not in rest:
-        return source
-    # todo lo que hay antes de la última `@` es usuario:clave, aunque la clave
-    # tenga `/` o `:` sin escapar (urlsplit se confunde con eso)
-    return f"{scheme}://{rest.rsplit('@', 1)[1]}"
+    if "@" in rest:
+        # todo lo que hay antes de la última `@` es usuario:clave, aunque la clave
+        # tenga `/` o `:` sin escapar (urlsplit se confunde con eso)
+        rest = rest.rsplit("@", 1)[1]
+    if "?" in rest:  # cámaras que llevan la clave en la query (?user=&pwd=, ?token=)
+        path, query = rest.split("?", 1)
+        pairs = []
+        for pair in query.split("&"):
+            key = pair.split("=", 1)[0]
+            secret = any(
+                w in key.lower() for w in ("pass", "pwd", "token", "key", "secret")
+            )
+            pairs.append(f"{key}=***" if secret and "=" in pair else pair)
+        rest = f"{path}?{'&'.join(pairs)}"
+    return f"{scheme}://{rest}"
 
 
 def reset_replay(directory: Path) -> None:
