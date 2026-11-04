@@ -298,6 +298,10 @@ def run(settings: Settings, limit: int | None = None) -> int:
     assert settings.source is not None  # lo garantiza `require_source`
     try:
         settings = session_settings(settings)  # una sesión grabada: sus reglas
+        if is_session_source(settings):
+            if settings.record:
+                raise OSError("Una reproducción no se graba: sacá --record")
+            recording.reset_replay(Path(settings.source))  # lo de la vez anterior
         if settings.record:
             recording.ensure_free(
                 settings.record, alerts.DEFAULT_LOG
@@ -434,8 +438,6 @@ def _open_frames(
             time.sleep(wait)
 
 
-REPLAY_DB = "reproduccion.db"  # la base de una reproducción, dentro de la sesión
-
 # Lo que decide los avisos y va a `sesion.json` para reproducir con lo mismo.
 SESSION_RULES = (
     "interval",
@@ -456,7 +458,11 @@ def session_rules(settings: Settings) -> dict[str, Any]:
     """Las reglas de esta corrida, resueltas (`finished_after` ya en segundos)."""
     rules = {name: getattr(settings, name) for name in SESSION_RULES}
     rules["finished_after"] = finished_after_seconds(settings)
-    return {k: str(v) if isinstance(v, Path) else v for k, v in rules.items()}
+    # rutas absolutas y en POSIX: la sesión se reproduce desde otra carpeta o máquina
+    return {
+        k: v.resolve().as_posix() if isinstance(v, Path) else v
+        for k, v in rules.items()
+    }
 
 
 def mirror_log(settings: Settings) -> Path | None:
@@ -495,7 +501,16 @@ def session_settings(settings: Settings) -> Settings:
     if update.get("interval") is None:
         raise OSError(f"{settings.source}: sesion.json sin cadencia")
     update["telegram"] = False
-    update["database_url"] = f"sqlite:///{(session / REPLAY_DB).resolve().as_posix()}"
+    update["database_url"] = (
+        f"sqlite:///{(session / recording.REPLAY_DB).resolve().as_posix()}"
+    )
+    if update.get("restaurante") and not Path(update["restaurante"]).exists():
+        logger.warning(
+            "La comanda de la grabación (%s) no está en esta máquina: va %s",
+            update["restaurante"],
+            settings.restaurante,
+        )
+        del update["restaurante"]
     replay = settings.model_copy()
     for name, value in update.items():
         try:  # con validación: sesion.json se puede editar a mano
@@ -507,7 +522,7 @@ def session_settings(settings: Settings) -> Settings:
     changed = {
         k: getattr(replay, k)
         for k in update
-        if getattr(settings, k) != getattr(replay, k)
+        if k in SESSION_RULES and getattr(settings, k) != getattr(replay, k)
     }
     if changed:
         logger.info(

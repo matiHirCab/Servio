@@ -231,7 +231,16 @@ class EventLog:
         with self._lock:
             self._file.write(line)
             if self._mirror is not None:
-                self._mirror.write(line)
+                try:
+                    self._mirror.write(line)
+                except OSError as e:
+                    # la copia es auxiliar (la carpeta compartida se puede caer): los
+                    # avisos siguen, la sesión queda incompleta y se avisa una vez
+                    logger.error(
+                        "No se pudo escribir la copia del log, sigo sin ella: %s", e
+                    )
+                    self._mirror.close()
+                    self._mirror = None
 
     def close(self) -> None:
         try:

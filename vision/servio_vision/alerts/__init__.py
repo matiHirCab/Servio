@@ -55,15 +55,21 @@ def configure(
             url=database_url if database_url is not None else cfg.database_url,
             local_id=local_id or cfg.local_id,
         )
-    _processor = AlertProcessor(
-        config,
-        get_notifier(telegram, env),
-        log_path,
-        restaurant,
-        db,
-        resume=resume,
-        mirror_log=mirror_log,
-    )
+    _processor = None  # el anterior ya está cerrado: que nadie lo use
+    try:
+        _processor = AlertProcessor(
+            config,
+            get_notifier(telegram, env),
+            log_path,
+            restaurant,
+            db,
+            resume=resume,
+            mirror_log=mirror_log,
+        )
+    except Exception:
+        if db is not None:
+            db.close()
+        raise
     return _processor
 
 

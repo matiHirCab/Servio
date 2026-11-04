@@ -25,7 +25,6 @@ import logging
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlsplit, urlunsplit
 
 import numpy as np
 from pydantic import ValidationError
@@ -39,6 +38,7 @@ JPEG_QUALITY = 90  # más que los recortes (85): es lo que se guarda para reprod
 SESSION_FILE = "sesion.json"
 EVENTS_FILE = "eventos.jsonl"
 REPLAY_EVENTS_FILE = "reproduccion.jsonl"  # los eventos de la última reproducción
+REPLAY_DB = "reproduccion.db"  # y su base (no la compartida)
 FRAME_FORMAT = "%Y%m%dT%H%M%S.%fZ"
 ALERT_EVENTS = ("alert_opened", "alert_reminder", "alert_resolved")
 
@@ -78,9 +78,8 @@ class SessionRecorder(FrameRecorder):
         """`rules`: la configuración que decide los avisos (cadencia, umbrales,
         suavizado), para reproducir con la misma. `live`: venía de una cámara (pudo
         retomar avisos abiertos de la base; la reproducción arranca de cero).
-        `OSError` si la carpeta ya tiene una sesión: dos grabaciones mezcladas no se
-        pueden reproducir."""
-        super().__init__(directory)  # `run` ya verificó la carpeta (ensure_free)
+        La carpeta tiene que estar libre: `ensure_free` antes (lo hace `run`)."""
+        super().__init__(directory)
         self.info: dict[str, Any] = {
             "version": 1,
             "started_at": iso(datetime.now(UTC)),
@@ -133,11 +132,19 @@ def redact_source(source: str) -> str:
     compartida; la clave de la cámara no."""
     if "://" not in source:
         return source
-    parts = urlsplit(source)
-    if "@" not in parts.netloc:
+    scheme, rest = source.split("://", 1)
+    if "@" not in rest:
         return source
-    host = parts.netloc.rsplit("@", 1)[1]
-    return urlunsplit(parts._replace(netloc=host))
+    # todo lo que hay antes de la última `@` es usuario:clave, aunque la clave
+    # tenga `/` o `:` sin escapar (urlsplit se confunde con eso)
+    return f"{scheme}://{rest.rsplit('@', 1)[1]}"
+
+
+def reset_replay(directory: Path) -> None:
+    """Lo que dejó la reproducción anterior de la sesión (eventos y base): se borra
+    antes de reproducir de nuevo, así no se mezclan."""
+    for name in (REPLAY_EVENTS_FILE, REPLAY_DB):
+        (directory / name).unlink(missing_ok=True)
 
 
 def ensure_free(directory: Path, log_path: Path | None = None) -> None:

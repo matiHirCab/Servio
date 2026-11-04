@@ -107,6 +107,17 @@ def test_record_leaves_a_complete_session_and_replay_gives_the_same_alerts(
     assert (session / recording.REPLAY_EVENTS_FILE).exists()
     assert comparar_sesion.main([str(session)]) == 0
     assert comparar_sesion.main([str(session), "--log", str(replay_log)]) == 0
+    # reproducir de nuevo pisa lo de la reproducción anterior, no lo mezcla
+    again = _run(
+        tmp_path,
+        monkeypatch,
+        replay_log,
+        "--source",
+        str(session),
+        "--classifier",
+        "fake",
+    )
+    assert again == 0 and comparar_sesion.main([str(session)]) == 0
     # la misma carpeta no se graba dos veces: quedarían dos sesiones mezcladas
     code = _run(
         tmp_path,
@@ -142,7 +153,7 @@ def test_session_settings_restore_the_recorded_rules(tmp_path):
     )
     # una reproducción no manda a Telegram ni escribe en la base compartida
     assert restored.telegram is False
-    scratch = (session / app.REPLAY_DB).resolve().as_posix()
+    scratch = (session / recording.REPLAY_DB).resolve().as_posix()
     assert restored.database_url == f"sqlite:///{scratch}"
     assert (
         app.session_settings(_settings("--source", "v.mp4", "--interval", "5")).interval
@@ -183,6 +194,10 @@ def test_session_info_hides_camera_credentials():
     assert (
         recording.redact_source("rtsp://admin:S3cret@192.168.1.10/stream")
         == "rtsp://192.168.1.10/stream"
+    )
+    assert (
+        recording.redact_source("rtsp://admin:pa/ss:x@cam/stream")
+        == "rtsp://cam/stream"
     )
     assert recording.redact_source("video.mp4") == "video.mp4"
     assert (
