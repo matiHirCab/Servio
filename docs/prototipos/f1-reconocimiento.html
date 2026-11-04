@@ -42,7 +42,9 @@ h1,h2,h3{margin:0;font-weight:500;text-wrap:balance}
 .seg button:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
 
 /* --- la pantalla --- */
-.phone-frame .screen{max-width:390px;border:10px solid #1d2026;border-radius:38px;padding:14px 12px 18px;box-shadow:0 30px 80px rgba(0,0,0,.6)}
+#wrap{container-type:inline-size}
+.phone-frame{max-width:414px;margin:0 auto}
+.phone-frame .screen{border:10px solid #1d2026;border-radius:38px;padding:14px 12px 18px;box-shadow:0 30px 80px rgba(0,0,0,.6)}
 .screen{max-width:1440px;margin:0 auto;display:grid;grid-template-columns:minmax(0,1fr) 360px;gap:16px;align-items:start}
 .status{grid-column:1/-1;display:flex;align-items:center;justify-content:space-between;gap:14px;flex-wrap:wrap;padding:4px 4px 0}
 .brand{display:flex;align-items:baseline;gap:14px;flex-wrap:wrap}
@@ -112,31 +114,25 @@ h1,h2,h3{margin:0;font-weight:500;text-wrap:balance}
 .chip b{color:var(--fg);font-weight:500}
 .conn{color:var(--fg-2);font-size:13px}
 
-/* celular: el salón arriba, las tarjetas abajo, la barra con las mesas activas pegada al fondo */
-.phone-frame .screen{grid-template-columns:minmax(0,1fr);gap:12px}
-.phone-frame .brand b{font-size:20px}
-.phone-frame .status-r .time{font-size:18px}
-.phone-frame .status-r>span:nth-child(2){display:none}
-.phone-frame .dock{position:sticky;bottom:calc(8px + env(safe-area-inset-bottom,0px));flex-wrap:nowrap;overflow-x:auto;gap:12px;padding:10px 14px}
-.phone-frame .legend{gap:14px;flex-wrap:nowrap}
-.phone-frame .chip span{white-space:nowrap}
-.phone-frame .conn{display:none}
-.phone-frame .metrics{grid-template-columns:1fr 1fr 1fr 1fr}
-.phone-frame .metric .v{font-size:24px}
+/* celular: el salón arriba, las tarjetas abajo, la barra con las mesas activas pegada al
+   fondo. Por ancho del contenedor: vale igual para un celular real y para el marco «Celular»
+   del prototipo (414 px) en una pantalla grande. */
 @media (max-width:1000px){.screen{grid-template-columns:minmax(0,1fr)}}
-/* en un celular de verdad, lo mismo sin apretar ningún botón (y sin marco) */
-@media (max-width:620px){.status-r{gap:12px}
-.screen{grid-template-columns:minmax(0,1fr);gap:12px}
-.brand b{font-size:20px}
-.status-r .time{font-size:18px}
-.status-r>span:nth-child(2){display:none}
-.dock{position:sticky;bottom:calc(8px + env(safe-area-inset-bottom,0px));flex-wrap:nowrap;overflow-x:auto;gap:12px;padding:10px 14px}
-.legend{gap:14px;flex-wrap:nowrap}
-.chip span{white-space:nowrap}
-.conn{display:none}
-.metrics{grid-template-columns:1fr 1fr 1fr 1fr}
-.metric .v{font-size:24px}
-.phone-frame .screen{max-width:none;border:0;border-radius:0;padding:0;box-shadow:none}}
+@container (max-width:620px){
+  .screen{grid-template-columns:minmax(0,1fr);gap:12px}
+  .status-r{gap:12px}
+  .brand b{font-size:20px}
+  .status-r .time{font-size:18px}
+  .status-r>span:nth-child(2){display:none}
+  .dock{position:sticky;bottom:calc(8px + env(safe-area-inset-bottom,0px));flex-wrap:nowrap;overflow-x:auto;gap:12px;padding:10px 14px}
+  .legend{gap:14px;flex-wrap:nowrap}
+  .chip span{white-space:nowrap}
+  .conn{display:none}
+  .metrics{grid-template-columns:1fr 1fr 1fr 1fr}
+  .metric .v{font-size:24px}
+}
+/* en un celular de verdad el marco no se dibuja aunque esté el botón apretado */
+@media (max-width:620px){.phone-frame{max-width:none}.phone-frame .screen{border:0;border-radius:0;padding:0;box-shadow:none}}
 @media (prefers-reduced-motion:reduce){.changed,.live i{animation:none}}
 </style>
 </head>
@@ -200,31 +196,33 @@ const ALERT_TITLE = {mesa_terminada:n=>`${n} terminó`, plato_vacio:n=>`${n}: pl
 const ALERT_COLOR = {mesa_terminada:COLOR.vacio, plato_vacio:COLOR.por_terminar, plato_lleno_mucho:COLOR.lleno};
 
 // Datos de ejemplo con la forma real de /<local>/salon/estado (salon.py build_snapshot):
-// fill_ratio, since/created_at en ISO, dish puede ser null, alert.message. Lo que hoy no
+// fill_ratio, since/created_at en ISO **UTC** (se muestran en la hora del local), dish puede
+// ser null, alert.message con la forma de alerts/messages.py. Lo que hoy no
 // manda el servidor es `taken_by` en el aviso (quién respondió «Voy», C-5); el mozo del
 // aviso sale de su mesa (`tableOf(a.table_id).waiter`). Mesa 1 es la que
 // ve la cámara del frame; el mozo que mira es Juan (sus mesas van marcadas).
 // Coordenadas 0–1 en la imagen, también los bbox de los platos (salon.py plate_box);
 // un plato sin caja (`bbox: null`) se reparte en la mesa como en salon.html.
 const ME = "Juan";
-const NOW = Date.parse("2026-11-04T21:42:11-03:00");  // la hora fija del prototipo
+const NOW = Date.parse("2026-11-05T00:42:11Z");  // la hora fija del prototipo: 21:42 en Montevideo
+const TZ = "America/Montevideo";  // en la pantalla real, la zona del navegador (que es la del local)
 const snap = {
-  local:"Casa Jessica", camera:"cam-1", ts:"2026-11-04T21:42:07-03:00", interval:30, frame:[640,480],
+  local:"Casa Jessica", camera:"cam-1", ts:"2026-11-05T00:42:07Z", interval:30, frame:[640,480],
   tables:[
-    {id:"T1", name:"Mesa 1", waiter:"Juan", status:"comiendo", people:true, since:"2026-11-04T21:05:00-03:00", box:[0,.47,.53,.53],
+    {id:"T1", name:"Mesa 1", waiter:"Juan", status:"comiendo", people:true, since:"2026-11-05T00:05:00Z", box:[0,.47,.53,.53],
      plates:[{id:"T1-p1", dish:"Milanesa napolitana", state:"lleno", fill_ratio:.92, bbox:[.297,.746,.138,.159]},
              {id:"T1-p2", dish:"Ensalada César", state:"comiendo", fill_ratio:.5, bbox:[.042,.565,.117,.138]}]},
-    {id:"T2", name:"Mesa 2", waiter:"Juan", status:"por_terminar", people:true, since:"2026-11-04T20:38:00-03:00", box:[.60,.08,.36,.40],
+    {id:"T2", name:"Mesa 2", waiter:"Juan", status:"por_terminar", people:true, since:"2026-11-04T23:38:00Z", box:[.60,.08,.36,.40],
      plates:[{id:"T2-p1", dish:"Risotto de hongos", state:"por_terminar", fill_ratio:.15, bbox:[.643,.16,.108,.16]},
              {id:"T2-p2", dish:"Lomo con papas", state:"vacio", fill_ratio:0, bbox:[.798,.18,.108,.16]}]},
-    {id:"T3", name:"Mesa 3", waiter:"Sofía", status:"comiendo", people:true, since:"2026-11-04T21:20:00-03:00", box:[.60,.56,.36,.40],
+    {id:"T3", name:"Mesa 3", waiter:"Sofía", status:"comiendo", people:true, since:"2026-11-05T00:20:00Z", box:[.60,.56,.36,.40],
      plates:[{id:"T3-p1", dish:"Sorrentinos con fileto", state:"lleno", fill_ratio:.95, bbox:[.708,.66,.126,.18]},
              {id:"T3-p2", dish:null, state:"comiendo", fill_ratio:.6, bbox:null}]},  // sin pedido cargado ni caja
     {id:"T4", name:"Mesa 4", waiter:"Sofía", status:"libre", people:false, since:null, box:[.08,.06,.4,.3], plates:[]},
   ],
   alerts:[
-    {id:"a1", type:"plato_lleno_mucho", table_id:"T3", message:"Sorrentinos con fileto sigue lleno hace 14 min. ¿Está todo bien?", created_at:"2026-11-04T21:28:00-03:00", taken_by:null},
-    {id:"a2", type:"plato_vacio", table_id:"T2", message:"Lomo con papas vacío hace 4 min", created_at:"2026-11-04T21:38:00-03:00", taken_by:"Juan"},
+    {id:"a1", type:"plato_lleno_mucho", table_id:"T3", message:"❓ Mesa 3: un plato sigue lleno hace 14 min. ¿Está todo bien?", created_at:"2026-11-05T00:28:00Z", taken_by:null},
+    {id:"a2", type:"plato_vacio", table_id:"T2", message:"🧹 Mesa 2: hay platos vacíos para retirar.", created_at:"2026-11-05T00:38:00Z", taken_by:"Juan"},
   ],
   counts:{lleno:2, comiendo:2, por_terminar:1, vacio:1},
 };
@@ -238,7 +236,10 @@ const tableName = id => { const t=tableOf(id); return t ? t.name : id; };
 const tableWaiter = id => tableOf(id)?.waiter ?? null;
 const dishName = p => p.dish ?? "Plato";
 function ago(iso){ if(!iso) return ""; const s=Math.max(0,Math.round((NOW-Date.parse(iso))/1000)); if(s<60) return `${s} s`; const m=Math.floor(s/60); return m<60?`${m} min`:`${Math.floor(m/60)} h ${m%60} min`; }
-const hhmm = iso => iso.slice(11,16);  // la hora del local, no la del que mira
+const hhmm = iso => new Date(iso).toLocaleTimeString("es-UY",{timeZone:TZ,hour:"2-digit",minute:"2-digit",hour12:false});
+const alertTitle = (type,name) => (ALERT_TITLE[type]||(n=>`${n}: aviso`))(name);
+const alertColor = type => ALERT_COLOR[type]||"#9aa3ad";
+const plainMessage = m => String(m??"").replace(/^[^\p{L}\p{N}]+/u,"");  // sin el emoji, como salon.html
 function hash(str){ let h=2166136261; for(const c of str) h=Math.imul(h^c.charCodeAt(0),16777619); return h>>>0; }
 function rand(seed){ return ()=>((seed=Math.imul(seed^(seed>>>15),2246822507)>>>0)%1000)/1000; }
 const alertsOf = id => snap.alerts.filter(a=>a.table_id===id);
@@ -298,7 +299,7 @@ function alertTag(x,y,text,col,opacity=1){
   return `<g class="tag" transform="translate(${x.toFixed(1)} ${y.toFixed(1)})"><rect x="0" y="-11" width="${w.toFixed(0)}" height="22" rx="11" fill="${col}" fill-opacity="${opacity}"/><text x="${(w/2).toFixed(0)}" y="4" text-anchor="middle" class="svg-tag">${esc(text)}</text></g>`;
 }
 function fitTags(svg){
-  if(svg.hasAttribute("hidden")) return;
+  if(svg.hasAttribute("hidden")||(svg.checkVisibility&&!svg.checkVisibility())) return;  // oculto (o su padre): no se puede medir
   for(const g of svg.querySelectorAll("g.tag")){ const t=g.querySelector("text"), r=g.querySelector("rect"); if(!t.getComputedTextLength) continue;
     const w=t.getComputedTextLength()+22; r.setAttribute("width",w.toFixed(0)); t.setAttribute("x",(w/2).toFixed(0)); }
 }
@@ -345,7 +346,7 @@ function renderFloor(){
     out+=`<text x="${x0.toFixed(1)}" y="${ly.toFixed(1)}" class="svg-label">${esc(t.name)}${t.waiter&&!mine?" · "+esc(t.waiter):""}</text>`;
     out+=`<text x="${(x0+w).toFixed(1)}" y="${ly.toFixed(1)}" text-anchor="end" class="svg-status${sel?" sel":""}">${esc(status)}</text>`;
     const al=alertsOf(t.id)[0];
-    if(al) out+=alertTag(x0, y0+h+(people.some(o=>o.side==="b")?seat+26*s:22), ALERT_TITLE[al.type](t.name).toUpperCase()+" · "+ago(al.created_at).toUpperCase(), ALERT_COLOR[al.type]);
+    if(al) out+=alertTag(x0, y0+h+(people.some(o=>o.side==="b")?seat+26*s:22), alertTitle(al.type,t.name).toUpperCase()+" · "+ago(al.created_at).toUpperCase(), alertColor(al.type));
     out+=`</g>`;
   }
   svg.setAttribute("viewBox",`0 0 ${W} ${H.toFixed(0)}`); svg.innerHTML=out; fitTags(svg);
@@ -366,7 +367,7 @@ function renderVideo(){
     out+=`<rect x="${x0.toFixed(1)}" y="${y0.toFixed(1)}" width="${w.toFixed(1)}" height="${h.toFixed(1)}" rx="10" fill="#3E8BFF" fill-opacity="${sel?.08:.02}" stroke="${mine?"#3E8BFF":"#ffffff"}" stroke-opacity="${sel?.9:mine?.6:.35}" stroke-width="2" stroke-dasharray="${sel?"0":"6 6"}"/>`;
     out+=alertTag(x0+8, y0+16, `${t.name}${t.waiter&&!mine?" · "+t.waiter:""} · ${status.toUpperCase()}`, "#07080a", .78);
     const al=alertsOf(t.id)[0];
-    if(al) out+=alertTag(x0+8, y0+h-16, ALERT_TITLE[al.type](t.name).toUpperCase()+" · "+ago(al.created_at).toUpperCase(), ALERT_COLOR[al.type]);
+    if(al) out+=alertTag(x0+8, y0+h-16, alertTitle(al.type,t.name).toUpperCase()+" · "+ago(al.created_at).toUpperCase(), alertColor(al.type));
     for(const p of t.plates){ if(!p.bbox) continue;
       const [bx,by,bw,bh]=p.bbox; const px=(bx+bw/2)*fw, py=(by+bh/2)*fh, r=Math.min(bw*fw,bh*fh)/2;
       const col=COLOR[p.state], R=r+6, circ=2*Math.PI*R, f=p.fill_ratio ?? FILL[p.state];
@@ -387,7 +388,7 @@ function renderSide(){
 <div class="label num" style="margin-top:10px">${t.since?"Sentados desde las "+hhmm(t.since):(t.people?"Hay gente, sin platos":"Libre")} · ${t.plates.length} ${t.plates.length===1?"plato":"platos"}</div>`;
   const A=[...snap.alerts].sort((a,b)=>a.created_at.localeCompare(b.created_at));  // el más viejo arriba
   $("alerts-card").innerHTML=`<div class="card-h"><h2>Avisos</h2><span class="label num">${A.length} abiertos</span></div>`+
-    A.map(a=>`<div class="alert"><span class="sev" style="background:${ALERT_COLOR[a.type]}"></span><p>${esc(ALERT_TITLE[a.type](tableName(a.table_id)))}<small>${esc(a.message)}</small>${a.taken_by?`<span class="taken">Voy · ${esc(a.taken_by)}</span>`:`<span class="taken" style="color:var(--por_terminar)">Nadie respondió${tableWaiter(a.table_id)?" · "+esc(tableWaiter(a.table_id)):""}</span>`}</p><time class="num">${ago(a.created_at)}</time></div>`).join("");
+    A.map(a=>`<div class="alert"><span class="sev" style="background:${alertColor(a.type)}"></span><p>${esc(alertTitle(a.type,tableName(a.table_id)))}<small>${esc(plainMessage(a.message))}</small>${a.taken_by?`<span class="taken">Voy · ${esc(a.taken_by)}</span>`:a.taken_by===null?`<span class="taken" style="color:var(--por_terminar)">Nadie respondió${tableWaiter(a.table_id)?" · "+esc(tableWaiter(a.table_id)):""}</span>`:""}</p><time class="num">${ago(a.created_at)}</time></div>`).join("");
   const occ=snap.tables.filter(x=>x.plates.length), plates=Object.values(snap.counts).reduce((a,b)=>a+b,0);
   const since=snap.tables.filter(x=>x.since).map(x=>(NOW-Date.parse(x.since))/60000);  // promedio desde `since`, acá
   const seated=since.length?Math.round(since.reduce((a,b)=>a+b,0)/since.length):null;
@@ -412,7 +413,19 @@ for(const id of ["floor","overlay"]){ $(id).addEventListener("click",e=>{const g
   $(id).addEventListener("keydown",e=>{ if(e.key!=="Enter"&&e.key!==" ") return; const g=e.target.closest(".tbl"); if(!g) return; e.preventDefault(); selected=g.dataset.id; render(); }); }
 // "Simular una lectura": la milanesa pasa de lleno a comiendo y late; muestra la animación de cambio de estado.
 const NEXT={lleno:"comiendo",comiendo:"por_terminar",por_terminar:"vacio",vacio:"lleno"};
-$("sim").onclick=()=>{ const p=tableOf("T1").plates[0]; snap.counts[p.state]--; p.state=NEXT[p.state]; snap.counts[p.state]++; p.fill_ratio=FILL[p.state]; changed.add(p.id); selected="T1"; render(); };
+// el estado de la mesa, con la regla de alerts/state.py table_status
+function tableStatus(plates){
+  const n=plates.length, c=s=>plates.filter(p=>p.state===s).length;
+  if(!n) return "libre"; if(c("vacio")===n) return "terminada";
+  if((c("por_terminar")+c("vacio"))*2>=n) return "por_terminar";
+  return c("lleno")*2>=n ? "servida" : "comiendo";
+}
+$("sim").onclick=()=>{ const t=tableOf("T1"), p=t.plates[0]; snap.counts[p.state]--; p.state=NEXT[p.state]; snap.counts[p.state]++; p.fill_ratio=FILL[p.state]; changed.add(p.id);
+  t.status=tableStatus(t.plates);
+  snap.alerts=snap.alerts.filter(a=>a.table_id!==t.id);  // el aviso de la mesa sigue a sus platos
+  if(t.status==="terminada") snap.alerts.push({id:"sim-t", type:"mesa_terminada", table_id:t.id, message:`🍽️ ${t.name}: terminó.`, created_at:new Date(NOW).toISOString(), taken_by:null});
+  else if(p.state==="vacio") snap.alerts.push({id:"sim-v", type:"plato_vacio", table_id:t.id, message:`🧹 ${t.name}: hay platos vacíos para retirar.`, created_at:new Date(NOW).toISOString(), taken_by:null});
+  selected="T1"; render(); };
 try{ if(localStorage.getItem("f1-device")==="phone") setDevice(true); }catch(e){}
 render();
 // las etiquetas se midieron con la fuente de reserva: al llegar Barlow Condensed, de nuevo
