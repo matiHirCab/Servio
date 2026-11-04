@@ -149,3 +149,25 @@ def test_tool_serves_the_dashboard(db, roles):
     finally:
         server.shutdown()
         server.server_close()
+
+
+def test_salon_server_also_serves_the_dashboard(db, roles):
+    from servio_vision.app import build_dashboard
+    from servio_vision.salon import SalonFeed
+    from servio_vision.salon_web import SalonServer
+
+    assert build_dashboard(None) is None  # sin base no hay métricas
+    srv = SalonServer(
+        SalonFeed("casa-tomas"), "127.0.0.1", 0, build_dashboard(db)
+    ).start()
+    base = f"http://127.0.0.1:{srv.port}/casa-tomas"
+    try:
+        with urlopen(f"{base}/dashboard/datos?rol=dueno") as res:
+            assert json.load(res)["rol"] == "dueno"
+        with urlopen(f"{base}/salon") as res:  # el salón sigue igual
+            assert res.status == 200
+        with pytest.raises(HTTPError) as e:
+            urlopen(f"{base}/dashboard?rol=mozo")
+        assert e.value.code == 403
+    finally:
+        srv.stop()

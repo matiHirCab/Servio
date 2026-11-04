@@ -8,8 +8,8 @@ y abrí http://localhost:8090/<local_id>/dashboard?rol=encargado (o ?rol=dueno).
 `--demo` carga el historial simulado (fixtures/restaurante/historial.jsonl) en la
 base, como `tools/metricas.py`, para ver números sin haber corrido la cámara.
 
-Cuando el servidor del salón en vivo (`salon_web.py`) esté en develop, el
-dashboard se monta ahí, en el mismo puerto, y esta herramienta queda para probar.
+Con la cámara (`main.py --web`) el dashboard sale en el mismo servidor que el
+salón en vivo (`salon_web.py`); esta herramienta es para verlo sin cámara.
 """
 
 import argparse

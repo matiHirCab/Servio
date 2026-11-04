@@ -29,6 +29,8 @@ from servio_vision.capture import (
 )
 from servio_vision.classifier import ClassifierUnavailable, get_classifier
 from servio_vision.cli import require_source
+from servio_vision.dashboard import Dashboard
+from servio_vision.db import Database
 from servio_vision.dish_match import DishMatcher
 from servio_vision.health import STALL_S, HealthMonitor
 from servio_vision.pipeline import Pipeline
@@ -36,6 +38,7 @@ from servio_vision.privacy import Anonymizer
 from servio_vision.recording import FrameRecorder
 from servio_vision.restaurant import DEFAULT_DIR as RESTAURANT_DIR
 from servio_vision.restaurant import Restaurant
+from servio_vision.roles import Roles
 from servio_vision.salon import SalonFeed
 from servio_vision.salon_web import SalonServer
 from servio_vision.settings import Settings, activate
@@ -230,7 +233,12 @@ def build_pipeline(settings: Settings) -> Pipeline | None:
     if feed is not None:
         assert settings.web_port is not None
         try:
-            server = SalonServer(feed, settings.web_host, settings.web_port).start()
+            server = SalonServer(
+                feed,
+                settings.web_host,
+                settings.web_port,
+                build_dashboard(processor.db),
+            ).start()
         except OSError as e:
             logger.error(
                 "No se pudo abrir la vista del salón en %s:%s (%s). ¿El puerto ya "
@@ -242,9 +250,23 @@ def build_pipeline(settings: Settings) -> Pipeline | None:
             pipeline.close()
             return None
         logger.info("Salón en vivo: %s", server.url)
+        if server.dashboard is not None:
+            logger.info("Dashboard: %s", server.url.replace("/salon", "/dashboard"))
     if live:
         pipeline.resume()  # los ids y el suavizado, para que sigan siendo los mismos
     return pipeline
+
+
+def build_dashboard(db: Database | None) -> Dashboard | None:
+    """El dashboard del encargado y del dueño (D-1), en el mismo servidor que el
+    salón. Lee las métricas de la base de los avisos: sin base, no hay dashboard."""
+    if db is None:
+        return None
+    try:
+        return Dashboard(db, Roles.load())
+    except (OSError, ValueError) as e:
+        logger.warning("Sin dashboard: no se pudieron leer los roles (%s)", e)
+        return None
 
 
 def build_health_monitor(settings: Settings) -> HealthMonitor | None:
