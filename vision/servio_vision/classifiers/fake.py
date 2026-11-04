@@ -84,7 +84,7 @@ class FakeClassifier:
         step = (reading + _table_index(table_id) * TABLE_OFFSET) % cycle
         meal = (reading + _table_index(table_id) * TABLE_OFFSET) // cycle
         state = None
-        for state, length in self.script:
+        for state, length in self.script:  # noqa: B007 — `state` se usa después del for
             if step < length:
                 break
             step -= length

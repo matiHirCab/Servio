@@ -2,6 +2,7 @@
 
 import math
 import re
+from typing import cast
 
 from servio_vision.detector import _iou
 from servio_vision.schemas import Item
@@ -78,6 +79,26 @@ class IdCounter:
             del where[pid]
         return ids
 
+    def export_state(self) -> dict:
+        """La memoria de ids como JSON, para seguir tras un reinicio: el número que
+        sigue y dónde estaba cada plato recordado."""
+        return {
+            "last": dict(self._last),
+            "reading": dict(self._reading),
+            "where": {
+                table: {pid: [list(bbox), r] for pid, (bbox, r) in plates.items()}
+                for table, plates in self._where.items()
+            },
+        }
+
+    def restore_state(self, data: dict) -> None:
+        self._last = {t: int(n) for t, n in data["last"].items()}
+        self._reading = {t: int(n) for t, n in data["reading"].items()}
+        self._where = {
+            table: {pid: (tuple(bbox), int(r)) for pid, (bbox, r) in plates.items()}
+            for table, plates in data["where"].items()
+        }
+
     def missing(self, table_id: str) -> list[tuple[str, tuple]]:
         """(id, última caja) de los platos que YOLO no vio en la última `assign` de
         esa mesa pero todavía se recuerdan (hasta `MAX_MISSING` lecturas)."""
@@ -133,7 +154,7 @@ def _match(bboxes: list, tiers: list[list[tuple]], first_new: int) -> list[str]:
         if ids[i] is None:
             ids[i] = f"p{n}"
             n += 1
-    return ids
+    return cast("list[str]", ids)  # ya no queda ninguno sin id
 
 
 def match_ids(
@@ -147,6 +168,20 @@ def match_ids(
     """
     previous = [(i.id, i.bbox) for i in previous_items if i.bbox is not None]
     return _match(bboxes, [previous], first_new or _next_number(previous_items))
+
+
+# Las nueve etiquetas posibles de `position_label` (la grilla 3×3 de la mesa).
+POSITION_LABELS = (
+    "arriba-izquierda",
+    "arriba-centro",
+    "arriba-derecha",
+    "centro-izquierda",
+    "centro",
+    "centro-derecha",
+    "abajo-izquierda",
+    "abajo-centro",
+    "abajo-derecha",
+)
 
 
 def position_label(bbox) -> str:

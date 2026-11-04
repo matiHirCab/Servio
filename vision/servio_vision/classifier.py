@@ -23,10 +23,16 @@ class Classifier(Protocol):
         ...
 
 
+class ClassifierUnavailable(RuntimeError):
+    """El clasificador existe pero no se puede usar ahora (falta un permiso o una
+    dependencia). El mensaje dice qué hacer; `app.py` lo muestra y no arranca."""
+
+
 # nombre → "módulo:Clase"
 _REGISTRY: dict[str, str] = {
     "fake": "servio_vision.classifiers.fake:FakeClassifier",  # P3
-    "claude": "servio_vision.classifiers.claude:ClaudeClassifier",  # Tomás, respaldo
+    # Tomás, respaldo: la mesa entera al modelo, solo con CLAUDE_ALLOW_TABLE_IMAGES
+    "claude": "servio_vision.classifiers.claude:ClaudeClassifier",
     "yolo": "servio_vision.classifiers.yolo:YoloClassifier",  # Tomás, plan B sin internet
     "hybrid": "servio_vision.classifiers.hybrid:HybridClassifier",  # Tomás, el de la demo
 }

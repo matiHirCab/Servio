@@ -11,18 +11,20 @@ Los textos están en archivos para cambiarlos sin tocar código (`vision/prompts
   (`CLAUDE_PROVIDER=openai`).
 
 Para probar otro prompt sin pisar el default: `CLAUDE_PROMPT_FILE` / `OPENAI_PROMPT_FILE`
-en el `.env`, con la ruta a otro archivo (relativa a la raíz del repo, o absoluta). Se
-leen en cada llamada: editar el archivo cambia la lectura siguiente.
+en el `.env` o el toml (`settings.py`), con la ruta a otro archivo (relativa a la raíz
+del repo, o absoluta). Se leen en cada llamada: editar el archivo cambia la lectura
+siguiente. Cada función acepta la ruta por parámetro; sin ella, la de la configuración.
 
 Base en docs/context/04-vision.md («Prompt de Claude»).
 """
 
 import json
-import os
 from pathlib import Path
 
-PROMPTS_DIR = Path(__file__).resolve().parents[1] / "prompts"
-REPO_DIR = PROMPTS_DIR.parents[1]
+from servio_vision import settings
+from servio_vision.tracking import POSITION_LABELS
+
+PROMPTS_DIR = settings.PROMPTS_DIR
 DEFAULT_CLAUDE_PROMPT = PROMPTS_DIR / "claude.txt"
 DEFAULT_OPENAI_PROMPT = PROMPTS_DIR / "openai.json"
 
@@ -37,14 +39,6 @@ class PromptError(ValueError):
     """El archivo de prompt no existe o no tiene la forma esperada."""
 
 
-def _path(env_var: str, default: Path) -> Path:
-    value = (os.environ.get(env_var) or "").strip()
-    if not value:
-        return default
-    path = Path(value)
-    return path if path.is_absolute() else REPO_DIR / path
-
-
 def _read(path: Path) -> str:
     try:
         return path.read_text(encoding="utf-8")
@@ -52,19 +46,22 @@ def _read(path: Path) -> str:
         raise PromptError(f"No se pudo leer el prompt {path}: {e}") from e
 
 
-def instructions() -> str:
+def instructions(path: Path | None = None) -> str:
     """Instrucciones para Claude (`claude.txt` o `CLAUDE_PROMPT_FILE`)."""
-    return _read(_path("CLAUDE_PROMPT_FILE", DEFAULT_CLAUDE_PROMPT)).strip()
+    return _read(path or prompt_file("cli")).strip()
 
 
-def system_prompt() -> str:
+def system_prompt(path: Path | None = None) -> str:
     """cli y anthropic piden un JSON libre: las instrucciones más el pedido de JSON."""
-    return instructions() + "\nRespondé solo con el JSON pedido, un elemento por plato."
+    return (
+        instructions(path)
+        + "\nRespondé solo con el JSON pedido, un elemento por plato."
+    )
 
 
-def openai_prompt() -> dict:
+def openai_prompt(path: Path | None = None) -> dict:
     """`openai.json` (o `OPENAI_PROMPT_FILE`), validado."""
-    path = _path("OPENAI_PROMPT_FILE", DEFAULT_OPENAI_PROMPT)
+    path = path or prompt_file("openai")
     try:
         cfg = json.loads(_read(path))
     except json.JSONDecodeError as e:
@@ -85,18 +82,17 @@ def openai_prompt() -> dict:
 
 
 def prompt_file(provider: str) -> Path:
-    """Archivo de prompt que usa ese proveedor."""
-    if provider == "openai":
-        return _path("OPENAI_PROMPT_FILE", DEFAULT_OPENAI_PROMPT)
-    return _path("CLAUDE_PROMPT_FILE", DEFAULT_CLAUDE_PROMPT)
+    """Archivo de prompt que usa ese proveedor según la configuración."""
+    return settings.current().prompt_file_for(provider)
 
 
-def check(provider: str) -> None:
+def check(provider: str, path: Path | None = None) -> None:
     """Lee y valida el prompt de ese proveedor; `PromptError` si está mal."""
+    path = path or prompt_file(provider)
     if provider == "openai":
-        openai_prompt()
-    elif not instructions():
-        raise PromptError(f"{prompt_file(provider)} está vacío")
+        openai_prompt(path)
+    elif not instructions(path):
+        raise PromptError(f"{path} está vacío")
 
 
 def openai_instructions() -> str:
@@ -185,8 +181,50 @@ def decision_questions(has_reference: list[bool]) -> list[dict]:
     return questions
 
 
-def table_caption(table_id: str) -> str:
+# Esquema de la respuesta del clasificador `claude` (la mesa entera): el modelo también
+# ubica cada plato, con la grilla 3×3 de `tracking.position_label`.
+REPORT_TABLE_SCHEMA: dict = {
+    "type": "object",
+    "properties": {
+        "plates": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "position": {"type": "string", "enum": list(POSITION_LABELS)},
+                    "fill_ratio": {"type": "number"},
+                    "confidence": {"type": "number"},
+                    "visible": {"type": "boolean"},
+                },
+                "required": ["position", "fill_ratio", "confidence", "visible"],
+                "additionalProperties": False,
+            },
+        },
+        "people_present": {"type": "boolean"},
+    },
+    "required": ["plates", "people_present"],
+    "additionalProperties": False,
+}
+
+TABLE_PROMPT = PROMPTS_DIR / "claude_table.txt"
+
+
+def table_system_prompt(path: Path | None = None) -> str:
+    """Instrucciones del clasificador `claude` (`claude_table.txt`), más el pedido de
+    JSON. Se leen en cada llamada, como los demás prompts."""
+    return (
+        _read(path or TABLE_PROMPT).strip()
+        + "\nRespondé solo con el JSON pedido, un elemento por plato."
+    )
+
+
+def table_whole_caption(table_id: str) -> str:
     return f"Mesa {table_id}, vista desde arriba:"
+
+
+def table_caption(table_id: str) -> str:
+    # solo texto: la imagen de la mesa no se manda (C-3), van los recortes de plato
+    return f"Mesa {table_id}, recortes de sus platos vistos desde arriba:"
 
 
 def plate_caption(index: int) -> str:
