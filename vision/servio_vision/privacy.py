@@ -60,8 +60,19 @@ MAX_FACE_FRACTION = 0.5
 MARGIN = 0.35  # la caja se agranda esto de cada lado: pelo, orejas, mentón
 BLOCKS = 6  # mosaico: la cara queda en ~6×6 bloques, irreconocible
 
+# Lo que nunca se pixela aunque el detector de caras lo tome por una cara: los
+# platos. Desde arriba, YuNet confunde algunos platos (galletitas, donas) con caras
+# y los pixela antes de que los vea el detector de platos (pasaba con el video de
+# demo: se perdía un plato de dos). Las cajas las da YOLO, local, sobre el frame
+# sin difuminar; el frame que sigue (modelo, grabación, vista) ya sale pixelado
+# salvo adentro de los platos. Una caja de "plato" enorme no se respeta: si YOLO
+# toma la mesa entera por un plato, la privacidad gana.
+PROTECT_REUSE_S = 2.0  # los platos se mueven poco: no buscarlos en cada frame
+MAX_PROTECT_FRACTION = 0.15  # de la superficie del frame
+
 Box = tuple[int, int, int, int]  # x, y, ancho, alto, en píxeles del frame
 Anonymizer = Callable[[np.ndarray], np.ndarray]
+Protector = Callable[[np.ndarray], Sequence[Box]]  # frame BGR → cajas a no pixelar
 
 
 class PrivacyError(OSError):
@@ -208,10 +219,18 @@ def pixelate(
     boxes: Sequence[Box],
     margin: float = MARGIN,
     blocks: int = BLOCKS,
+    keep: Sequence[Box] = (),
 ) -> np.ndarray:
     """Mosaico sobre cada caja (agrandada `margin` de cada lado), **en el mismo
-    frame**; lo devuelve. Las cajas que se salen del frame se recortan a él."""
+    frame**; lo devuelve. Las cajas que se salen del frame se recortan a él. Lo que
+    cae adentro de una caja de `keep` (los platos) queda como estaba."""
     height, width = frame.shape[:2]
+    saved = []
+    for x, y, w, h in keep:
+        x0, y0 = max(0, x), max(0, y)
+        x1, y1 = min(width, x + w), min(height, y + h)
+        if x1 > x0 and y1 > y0:
+            saved.append((x0, y0, frame[y0:y1, x0:x1].copy()))
     for x, y, w, h in boxes:
         dx, dy = int(w * margin), int(h * margin)
         x0, y0 = max(0, x - dx), max(0, y - dy)
@@ -223,6 +242,8 @@ def pixelate(
         frame[y0:y1, x0:x1] = cv2.resize(
             small, (x1 - x0, y1 - y0), interpolation=cv2.INTER_NEAREST
         )
+    for x0, y0, patch in saved:
+        frame[y0 : y0 + patch.shape[0], x0 : x0 + patch.shape[1]] = patch
     return frame
 
 
@@ -240,11 +261,19 @@ class FaceBlur:
 
     MAX_REUSE_S = 0.15  # más que esto sin detectar y una cara que camina se escapa
 
-    def __init__(self, detector: FaceDetector, every: int = 1) -> None:
+    def __init__(
+        self, detector: FaceDetector, every: int = 1, protect: Protector | None = None
+    ) -> None:
+        """`protect`: da las cajas de los platos, que no se pixelan (ver
+        `PROTECT_REUSE_S`). Se puede poner después (`faces.protect = ...`), cuando
+        el detector de platos ya está cargado."""
         if every < 1:
             raise ValueError(f"every tiene que ser al menos 1 (vino {every})")
         self.detector = detector
         self.every = every
+        self.protect = protect
+        self._keep: list[Box] = []
+        self._keep_at = float("-inf")
         self.faces = 0
         self._frames = 0
         self._boxes: list[Box] = []
@@ -264,8 +293,24 @@ class FaceBlur:
                 logger.debug("%d cara(s) difuminada(s)", len(self._boxes))
         self._frames += 1
         if self._boxes:
-            pixelate(frame, self._boxes)
+            pixelate(frame, self._boxes, keep=self._plates(frame, now))
         return frame
+
+    def _plates(self, frame: np.ndarray, now: float) -> list[Box]:
+        """Cajas de platos a respetar (solo se buscan si hay caras que pixelar).
+        Si el detector de platos falla, ninguna: la privacidad gana."""
+        if self.protect is None:
+            return []
+        if now - self._keep_at > PROTECT_REUSE_S:
+            try:
+                boxes = list(self.protect(frame))
+            except Exception:
+                logger.exception("No se pudieron buscar los platos: pixelo todo")
+                boxes = []
+            limit = MAX_PROTECT_FRACTION * frame.shape[0] * frame.shape[1]
+            self._keep = [b for b in boxes if b[2] * b[3] <= limit]
+            self._keep_at = now
+        return self._keep
 
     def refresh(self, frame: np.ndarray) -> np.ndarray:
         """Para el último frame que pasó por acá y va a salir de la máquina (al
@@ -277,13 +322,15 @@ class FaceBlur:
             return frame  # ya se detectó en este mismo frame
         new = self.detector.detect(frame)
         if new:
-            pixelate(frame, new)
+            pixelate(frame, new, keep=self._keep)
         return frame
 
 
-def default_anonymizer(every: int = 1, face_model: Path | None = None) -> FaceBlur:
+def default_anonymizer(
+    every: int = 1, face_model: Path | None = None, protect: Protector | None = None
+) -> FaceBlur:
     """El que usa `capture.py` si no le pasan otro."""
-    return FaceBlur(load_detector(face_model), every)
+    return FaceBlur(load_detector(face_model), every, protect)
 
 
 def main(argv: list[str] | None = None) -> int:

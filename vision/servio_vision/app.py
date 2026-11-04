@@ -14,6 +14,8 @@ import time
 import warnings
 from typing import Any
 
+import cv2
+
 from servio_vision import alerts, framing, llm, privacy, prompt
 from servio_vision.alerts.config import load_config
 from servio_vision.alerts.notify import TelegramNotifier
@@ -34,6 +36,8 @@ from servio_vision.privacy import Anonymizer
 from servio_vision.recording import FrameRecorder
 from servio_vision.restaurant import DEFAULT_DIR as RESTAURANT_DIR
 from servio_vision.restaurant import Restaurant
+from servio_vision.salon import SalonFeed
+from servio_vision.salon_web import SalonServer
 from servio_vision.settings import Settings, activate
 from servio_vision.smoothing import TableSmoother
 from servio_vision.tables import TableDetector, TableTracker
@@ -201,6 +205,11 @@ def build_pipeline(settings: Settings) -> Pipeline | None:
         local_id=settings.local_id,
         resume=live,
     )
+    feed = (
+        SalonFeed(settings.local_id, processor, restaurant, settings.interval)
+        if settings.web_port is not None
+        else None
+    )
     pipeline = Pipeline(
         classifier,
         zones,
@@ -216,7 +225,23 @@ def build_pipeline(settings: Settings) -> Pipeline | None:
         smoother_factory=lambda: TableSmoother(finished_after, **smoothing),
         # la misma base que los avisos: ahí guarda lo que recuerda (sin base, nada)
         state_db=processor.db,
+        on_reading=feed.on_reading if feed is not None else None,
     )
+    if feed is not None:
+        assert settings.web_port is not None
+        try:
+            server = SalonServer(feed, settings.web_host, settings.web_port).start()
+        except OSError as e:
+            logger.error(
+                "No se pudo abrir la vista del salón en %s:%s (%s). ¿El puerto ya "
+                "está en uso? Probá con otro --web",
+                settings.web_host,
+                settings.web_port,
+                e,
+            )
+            pipeline.close()
+            return None
+        logger.info("Salón en vivo: %s", server.url)
     if live:
         pipeline.resume()  # los ids y el suavizado, para que sigan siendo los mismos
     return pipeline
@@ -266,15 +291,18 @@ def run(settings: Settings, limit: int | None = None) -> int:
         # cargarlo (o bajarlo) en cada reintento, o contarlo como tiempo sin lecturas,
         # no tiene sentido. Con un archivo lo arma `open_source` después de ver que
         # existe, así un error de tipeo no termina en «no se pudo bajar el modelo».
+        # Los platos no se pixelan aunque el detector de caras los confunda: los
+        # busca el mismo YOLO del clasificador, local, antes de difuminar.
+        protect = plate_protector(pipeline)
         anonymize = (
-            privacy.default_anonymizer(face_model=settings.face_model)
+            privacy.default_anonymizer(face_model=settings.face_model, protect=protect)
             if is_live_source(settings.source)
             else None
         )
         if monitor is not None:
             # antes de abrir la cámara: si no abre, también hay que enterarse
             monitor.start()
-        frames = _open_frames(settings, anonymize)
+        frames = _open_frames(settings, anonymize, protect)
         logger.info("Privacidad: caras difuminadas en la captura")
         for frame, ts in frames:
             if recorder is not None:
@@ -310,7 +338,29 @@ def run(settings: Settings, limit: int | None = None) -> int:
     return 0 if readings else 1
 
 
-def _open_frames(settings: Settings, anonymize: Anonymizer | None):
+def plate_protector(pipeline: Pipeline) -> privacy.Protector | None:
+    """Las cajas de los platos de un frame entero (BGR), con el detector de platos
+    del clasificador (yolo o hybrid), para que el difuminado de caras no las tape.
+    `None` si el clasificador no tiene detector (fake, claude)."""
+    detector = getattr(pipeline.classifier, "detector", None)
+    if detector is None:
+        return None
+
+    def plates(frame) -> list[privacy.Box]:
+        dets = detector.detect(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
+        return [
+            (int(x0), int(y0), int(x1 - x0) + 1, int(y1 - y0) + 1)
+            for x0, y0, x1, y1 in (d.box for d in dets)
+        ]
+
+    return plates
+
+
+def _open_frames(
+    settings: Settings,
+    anonymize: Anonymizer | None,
+    protect: privacy.Protector | None = None,
+):
     """La fuente de frames. Una cámara que no abre se reintenta con esperas que
     crecen, sin rendirse: tras un corte de luz el router o el celular pueden
     arrancar después que la PC. Cualquier otro error de apertura sale tal cual."""
@@ -325,6 +375,7 @@ def _open_frames(settings: Settings, anonymize: Anonymizer | None):
                 settings.speed,
                 anonymize=anonymize,
                 face_model=settings.face_model,
+                protect=protect,
             )
         except CameraUnavailable as error:
             wait = next(waits)

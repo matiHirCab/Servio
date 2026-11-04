@@ -429,3 +429,77 @@ def test_main_keeps_alerting_when_recording_fails(tmp_path, caplog):
     recorder = Broken(tmp_path / "rec")
     assert app._record(recorder, noise(), datetime.now(UTC)) is None
     assert "sigo sin grabar" in caplog.text
+
+
+# --- los platos no se pixelan aunque el detector de caras los confunda ---
+
+
+def test_pixelate_leaves_the_kept_boxes_alone():
+    frame = noise()
+    original = frame.copy()
+    pixelate(frame, [(50, 30, 40, 40)], keep=[(60, 40, 10, 10), (-5, -5, 3, 3)])
+    assert np.array_equal(frame[40:50, 60:70], original[40:50, 60:70])  # el plato
+    assert not np.array_equal(frame[30:40, 50:90], original[30:40, 50:90])  # la cara
+
+
+def test_face_blur_does_not_pixelate_a_plate_taken_for_a_face():
+    plate = (60, 20, 30, 30)
+    blur = FaceBlur(FixedFaces([plate]), protect=lambda f: [plate])
+    frame = noise()
+    original = frame.copy()
+    blur(frame)
+    assert np.array_equal(frame[20:50, 60:90], original[20:50, 60:90])
+    # el margen de la "cara" que cae afuera del plato sí se pixela
+    assert not np.array_equal(frame[10:20, 55:95], original[10:20, 55:95])
+
+
+def test_face_blur_ignores_a_plate_box_as_big_as_the_table():
+    face = (20, 20, 20, 20)
+    table = (0, 0, 150, 90)  # más que MAX_PROTECT_FRACTION del frame
+    blur = FaceBlur(FixedFaces([face]), protect=lambda f: [table])
+    frame = noise()
+    original = frame.copy()
+    blur(frame)
+    assert not np.array_equal(frame[20:40, 20:40], original[20:40, 20:40])
+
+
+def test_face_blur_pixelates_everything_if_the_plate_detector_fails():
+    face = (20, 20, 20, 20)
+
+    def broken(frame):
+        raise RuntimeError("YOLO se cayó")
+
+    blur = FaceBlur(FixedFaces([face]), protect=broken)
+    frame = noise()
+    original = frame.copy()
+    blur(frame)
+    assert not np.array_equal(frame[20:40, 20:40], original[20:40, 20:40])
+
+
+def test_face_blur_looks_for_plates_only_when_there_are_faces_and_not_every_frame():
+    calls = []
+
+    def plates(frame):
+        calls.append(1)
+        return []
+
+    FaceBlur(FixedFaces([]), protect=plates)(noise())
+    assert calls == []  # sin caras no hay nada que respetar
+    blur = FaceBlur(FixedFaces([(20, 20, 20, 20)]), protect=plates)
+    for i in range(5):
+        blur(noise(seed=i))
+    assert len(calls) == 1  # se reusan durante PROTECT_REUSE_S
+
+
+def test_open_source_passes_the_plates_to_the_default_anonymizer(tmp_path, monkeypatch):
+    box = (60, 20, 30, 30)
+    monkeypatch.setattr(privacy, "load_detector", lambda *a, **k: FixedFaces([box]))
+    frame = np.zeros((100, 200, 3), np.uint8)
+    frame[20:50, 60:90] = (40, 160, 240)
+    frame[20:35, 60:75] = (240, 40, 40)
+    (tmp_path / "fotos").mkdir()
+    cv2.imwrite(str(tmp_path / "fotos" / "a.png"), frame)
+    read, _ = next(
+        open_source(str(tmp_path / "fotos"), interval=1, protect=lambda f: [box])
+    )
+    assert np.array_equal(read[20:50, 60:90], frame[20:50, 60:90])

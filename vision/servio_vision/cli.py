@@ -75,6 +75,16 @@ def build_parser(
         type=float,
         help="umbral de confianza del detector (yolo/hybrid; por defecto 0.25)",
     )
+    parser.add_argument(
+        "--web",
+        type=int,
+        metavar="PUERTO",
+        help="servir el salón en vivo en http://localhost:PUERTO/<local>/salon",
+    )
+    parser.add_argument(
+        "--web-host",
+        help="dónde escucha --web (por defecto 127.0.0.1; 0.0.0.0 para la red)",
+    )
     return parser
 
 
@@ -107,6 +117,8 @@ def settings_from_args(args: argparse.Namespace) -> Settings:
         finished_after=args.finished_after,
         restaurante=args.restaurante,
         yolo_conf=args.yolo_conf,
+        web_port=getattr(args, "web", None),
+        web_host=getattr(args, "web_host", None),
         record=getattr(args, "record", None),  # solo main.py lo agrega
     )
 

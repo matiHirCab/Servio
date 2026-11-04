@@ -138,3 +138,25 @@ def test_camera_down_at_boot_is_retried_with_the_monitor_already_watching(loop):
     assert events.count("open") == 3
     assert len(sleeps) == 2 and sleeps[1] >= sleeps[0]
     assert monitor.beats == 3
+
+
+def test_plate_protector_uses_the_classifier_detector():
+    import numpy as np
+
+    from servio_vision.detector import Detection
+
+    class Detector:
+        def detect(self, image):
+            assert image.shape == (100, 200, 3)
+            return [Detection((10.0, 20.0, 50.0, 60.0), 0.9, "plate")]
+
+    class WithDetector:
+        detector = Detector()
+
+    protect = app.plate_protector(Pipeline(WithDetector(), ZONES, lambda o: None))
+    assert protect is not None
+    assert protect(np.zeros((100, 200, 3), np.uint8)) == [(10, 20, 41, 41)]
+    # el fake no tiene detector: no hay platos que respetar
+    assert (
+        app.plate_protector(Pipeline(FakeClassifier(), ZONES, lambda o: None)) is None
+    )
