@@ -394,7 +394,8 @@ def run(settings: Settings, limit: int | None = None) -> int:
             # cada evento ya bajó al disco al escribirse (EventLog, buffering=1): la
             # sesión queda completa, con sus eventos, aunque se haya cortado a mano
             try:
-                session.finish(truncated=recorder is None)
+                # incompleta si se cortaron los frames o la copia de los eventos
+                session.finish(truncated=recorder is None or alerts.mirror_lost())
             except OSError as e:
                 logger.error("No se pudo cerrar la sesión grabada: %s", e)
     logger.info("%d lecturas", readings)
@@ -513,6 +514,12 @@ def session_settings(settings: Settings) -> Settings:
     update["database_url"] = (
         f"sqlite:///{(session / recording.REPLAY_DB).resolve().as_posix()}"
     )
+    if update.get("restaurante") is not None and not isinstance(
+        update["restaurante"], str
+    ):
+        raise OSError(
+            f"{settings.source}: sesion.json, regla inválida: restaurante={update['restaurante']!r}"
+        )
     if update.get("restaurante") and not Path(update["restaurante"]).exists():
         logger.warning(
             "La comanda de la grabación (%s) no está en esta máquina: va %s",

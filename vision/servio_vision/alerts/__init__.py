@@ -73,6 +73,11 @@ def configure(
     return _processor
 
 
+def mirror_lost() -> bool:
+    """La copia del log de la corrida (sesión grabada, B-1) se perdió a mitad de camino."""
+    return _processor is not None and _processor.log.mirror_lost
+
+
 def process(observation: TableObservation) -> list[dict[str, Any]]:
     """Procesa una observación. Sin `configure()`, usa producción y Telegram."""
     if _processor is None:

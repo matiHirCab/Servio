@@ -216,6 +216,9 @@ class EventLog:
         # Abierto una sola vez; buffering=1 baja cada línea al disco al escribirla.
         # El espejo primero: si no se puede abrir, el log principal no queda abierto.
         self._mirror = None
+        self.mirror_lost = (
+            False  # la copia falló a mitad de camino (la sesión queda incompleta)
+        )
         if mirror is not None:
             mirror.parent.mkdir(parents=True, exist_ok=True)
             self._mirror = mirror.open("w", encoding="utf-8", buffering=1)
@@ -243,13 +246,17 @@ class EventLog:
                     with contextlib.suppress(OSError):  # el flush puede fallar igual
                         self._mirror.close()
                     self._mirror = None
+                    self.mirror_lost = True
 
     def close(self) -> None:
         try:
             self._file.close()
         finally:
             if self._mirror is not None:
-                self._mirror.close()
+                with contextlib.suppress(
+                    OSError
+                ):  # auxiliar: un flush que falla no corta
+                    self._mirror.close()
 
 
 class EventLogOutput:

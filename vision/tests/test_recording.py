@@ -202,7 +202,7 @@ def test_session_info_hides_camera_credentials():
         == "rtsp://192.168.1.10/stream"
     )
     assert (
-        recording.redact_source("rtsp://admin:pa/ss:x@cam/stream")
+        recording.redact_source("rtsp://admin:pa%2Fss:x@cam/stream")
         == "rtsp://cam/stream"
     )
     assert recording.redact_source("video.mp4") == "video.mp4"
@@ -212,6 +212,9 @@ def test_session_info_hides_camera_credentials():
     )
     assert (
         recording.redact_source("http://cam/x?token=ab@cd") == "http://cam/x?token=***"
+    )
+    assert (
+        recording.redact_source("rtsp://cam.local/live@1") == "rtsp://cam.local/live@1"
     )
     assert (
         recording.redact_source("http://cam.local:8080/video")
@@ -227,6 +230,7 @@ def test_mirror_log_failure_does_not_stop_the_alerts(tmp_path):
     log._mirror.close()  # como si el share se hubiera caído: escribir va a fallar
     log.write({"event": "b"})  # no explota; sigue sin la copia
     log.write({"event": "c"})
+    assert log.mirror_lost
     log.close()
     assert (tmp_path / "log.jsonl").read_text("utf-8").count("\n") == 3
     assert (tmp_path / "copia.jsonl").read_text("utf-8").count("\n") == 1

@@ -134,9 +134,11 @@ def redact_source(source: str) -> str:
         return source
     scheme, rest = source.split("://", 1)
     # usuario:clave va antes de la última `@` de la autoridad (hasta el primer `/` o
-    # `?`); una `@` en la query no cuenta. Aguanta `/` o `:` sin escapar en la clave
-    # porque la clave no puede tener `?` ni `@`
-    end = min((i for i in (rest.find("?"), len(rest)) if i >= 0), default=len(rest))
+    # `?`); una `@` en la ruta o en la query no cuenta. Una `/` en la clave va escapada
+    # (%2F), como en cualquier URL
+    end = min(
+        (i for i in (rest.find("/"), rest.find("?")) if i >= 0), default=len(rest)
+    )
     authority, tail = rest[:end], rest[end:]
     if "@" in authority:
         rest = authority.rsplit("@", 1)[1] + tail
@@ -246,12 +248,13 @@ def last_run_lines(log_path: Path) -> list[str]:
     lines = log_path.read_text(encoding="utf-8").splitlines()
     start = 0
     for i, line in enumerate(lines):
-        if '"run_started"' in line and _event(line) == "run_started":
+        if '"run_started"' in line and event_of(line) == "run_started":
             start = i
     return [line for line in lines[start:] if line.strip()]
 
 
-def _event(line: str) -> str | None:
+def event_of(line: str) -> str | None:
+    """El `event` de una línea del log, o `None` si no es un evento."""
     try:
         data = json.loads(line)
     except ValueError:

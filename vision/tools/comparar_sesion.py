@@ -76,7 +76,7 @@ def main(argv: list[str] | None = None) -> int:
             " diferir al principio."
         )
     recorded = [line for line in events.read_text("utf-8").splitlines() if line.strip()]
-    answers = sum('"event": "alert_feedback"' in line for line in recorded)
+    answers = sum(recording.event_of(line) == "alert_feedback" for line in recorded)
     if answers:
         print(
             f"Nota: en vivo los mozos respondieron {answers} veces; la reproducción no"
