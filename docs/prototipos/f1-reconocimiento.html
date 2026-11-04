@@ -44,7 +44,7 @@ h1,h2,h3{margin:0;font-weight:500;text-wrap:balance}
 /* --- la pantalla --- */
 #wrap{container-type:inline-size}
 .phone-frame{max-width:414px;margin:0 auto}
-.phone-frame .screen{border:10px solid #1d2026;border-radius:38px;padding:14px 12px 18px;box-shadow:0 30px 80px rgba(0,0,0,.6)}
+.phone-frame .screen{height:780px;overflow:auto;border:10px solid #1d2026;border-radius:38px;padding:14px 12px 18px;box-shadow:0 30px 80px rgba(0,0,0,.6)}
 .screen{max-width:1440px;margin:0 auto;display:grid;grid-template-columns:minmax(0,1fr) 360px;gap:16px;align-items:start}
 .status{grid-column:1/-1;display:flex;align-items:center;justify-content:space-between;gap:14px;flex-wrap:wrap;padding:4px 4px 0}
 .brand{display:flex;align-items:baseline;gap:14px;flex-wrap:wrap}
@@ -53,7 +53,9 @@ h1,h2,h3{margin:0;font-weight:500;text-wrap:balance}
 .status-r{display:flex;gap:18px;align-items:center;color:var(--fg-2);flex-wrap:wrap}
 .status-r .time{color:var(--fg);font-size:22px;font-weight:300}
 .live{display:inline-flex;align-items:center;gap:8px}
-.live i{width:8px;height:8px;border-radius:50%;background:var(--vacio);box-shadow:0 0 0 4px rgba(255,77,97,.18);animation:blink 2s infinite}
+.live i{width:8px;height:8px;border-radius:50%;background:var(--por_terminar);box-shadow:0 0 0 4px rgba(255,138,61,.18)}
+.live.on i{background:var(--vacio);box-shadow:0 0 0 4px rgba(255,77,97,.18);animation:blink 2s infinite}
+.conn.off{color:var(--por_terminar)}
 @keyframes blink{50%{opacity:.35}}
 .modes{display:inline-flex;background:var(--surface-2);border-radius:999px;padding:3px}
 .modes button{border:0;background:transparent;color:var(--fg-2);font-family:var(--f-label);font-size:13px;letter-spacing:.12em;text-transform:uppercase;padding:8px 16px;border-radius:999px;cursor:pointer;min-height:36px}
@@ -146,6 +148,7 @@ h1,h2,h3{margin:0;font-weight:500;text-wrap:balance}
   </span>
   <span class="seg" role="group" aria-label="Simulación">
     <button type="button" id="sim">Simular una lectura</button>
+    <button type="button" id="sim-stale">Simular un corte</button>
   </span>
 </section>
 
@@ -154,7 +157,7 @@ h1,h2,h3{margin:0;font-weight:500;text-wrap:balance}
   <header class="status">
     <div class="brand"><b>Servio</b><span>Casa Jessica · Salón</span></div>
     <div class="status-r">
-      <span class="live"><i></i>Cámara en vivo</span>
+      <span class="live on" id="live"><i></i><span id="live-text">Cámara en vivo</span></span>
       <span class="num" id="occupied"></span>
       <span class="modes" role="group" aria-label="Modo">
         <button type="button" id="mode-recon" aria-pressed="true">Reconstrucción</button>
@@ -226,7 +229,7 @@ const snap = {
   ],
   counts:{lleno:2, comiendo:2, por_terminar:1, vacio:1},
 };
-let selected = "T2";
+let selected = null;  // la elige pickTable: la del último aviso, si no la primera ocupada
 let changed = new Set();
 const $ = id => document.getElementById(id);
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
@@ -295,17 +298,17 @@ function plate(p, x, y, r, changed) {
   }
   return o + `</g></g>`;
 }
-function alertTag(x,y,text,col,opacity=1){
-  const w=text.length*7.2+22;  // estimado; `fitTags` lo ajusta al texto real
-  return `<g class="tag" data-x="${x.toFixed(1)}" data-y="${y.toFixed(1)}" transform="translate(${x.toFixed(1)} ${y.toFixed(1)})"><rect x="0" y="-11" width="${w.toFixed(0)}" height="22" rx="11" fill="${col}" fill-opacity="${opacity}"/><text x="${(w/2).toFixed(0)}" y="4" text-anchor="middle" class="svg-tag">${esc(text)}</text></g>`;
+function alertTag(x,y,text,col,opacity=1,anchor="start"){
+  const w=text.length*7.2+22, x0=anchor==="end"?-w:0;  // estimado; `fitTags` lo ajusta al texto real
+  return `<g class="tag" data-x="${x.toFixed(1)}" data-y="${y.toFixed(1)}" data-anchor="${anchor}" transform="translate(${x.toFixed(1)} ${y.toFixed(1)})"><rect x="${x0.toFixed(0)}" y="-11" width="${w.toFixed(0)}" height="22" rx="11" fill="${col}" fill-opacity="${opacity}"/><text x="${(x0+w/2).toFixed(0)}" y="4" text-anchor="middle" class="svg-tag">${esc(text)}</text></g>`;
 }
 function fitTags(svg){
   for(let e=svg; e; e=e.parentElement) if(e.hasAttribute&&e.hasAttribute("hidden")) return;  // oculto (o un ancestro): no se puede medir
   const vw=svg.viewBox&&svg.viewBox.baseVal?svg.viewBox.baseVal.width:Infinity;
   for(const g of svg.querySelectorAll("g.tag")){ const t=g.querySelector("text"), r=g.querySelector("rect"); if(!t.getComputedTextLength) continue;
-    const w=t.getComputedTextLength()+22; r.setAttribute("width",w.toFixed(0)); t.setAttribute("x",(w/2).toFixed(0));
+    const w=t.getComputedTextLength()+22, x0=g.dataset.anchor==="end"?-w:0; r.setAttribute("width",w.toFixed(0)); r.setAttribute("x",x0.toFixed(0)); t.setAttribute("x",(x0+w/2).toFixed(0));
     g.setAttribute("transform",`translate(${g.dataset.x} ${g.dataset.y})`);
-    const m=g.getCTM&&svg.getCTM?svg.getCTM().inverse().multiply(g.getCTM()):null, absX=m?m.e:+g.dataset.x;  // dónde cae, en unidades del viewBox
+    const m=g.getCTM&&svg.getCTM?svg.getCTM().inverse().multiply(g.getCTM()):null, absX=(m?m.e:+g.dataset.x)+x0;  // dónde cae, en unidades del viewBox
     const shift=Math.min(0, vw-w-4-absX);  // que no se corte contra el borde derecho
     if(shift<0) g.setAttribute("transform",`translate(${(+g.dataset.x+shift).toFixed(1)} ${g.dataset.y})`); }
 }
@@ -347,7 +350,7 @@ function renderFloor(){
     if(sel) out+=`<rect x="${(x0-seat-26*s).toFixed(1)}" y="${(y0-seat-26*s).toFixed(1)}" width="${(w+2*seat+52*s).toFixed(1)}" height="${(h+2*seat+52*s).toFixed(1)}" rx="26" fill="#3E8BFF" fill-opacity=".05" stroke="#3E8BFF" stroke-opacity=".7" stroke-width="1.5" stroke-dasharray="2 5"/>`;
     out+=`<rect class="tbl-top" x="${x0.toFixed(1)}" y="${y0.toFixed(1)}" width="${w.toFixed(1)}" height="${h.toFixed(1)}" rx="14" fill="url(#tableg)" stroke="${mine?"#3E8BFF":"#ffffff"}" stroke-opacity="${sel?.5:mine?.35:.1}"/>`;
     out+=`<rect x="${(x0+8).toFixed(1)}" y="${(y0+8).toFixed(1)}" width="${Math.max(0,w-16).toFixed(1)}" height="${(h*.32).toFixed(1)}" rx="10" fill="#ffffff" opacity=".035"/>`;
-    for(const q of P) out+=plate(q.p,q.x,q.y,q.r,changed.has(q.p.id));
+    for(const q of P) out+=plate(q.p,q.x,q.y,q.r,pending.floor.has(q.p.id));
     for(const o of people) out+=person(o.x,o.y,o.rot,s);
     if(!P.length) out+=`<text x="${(x0+w/2).toFixed(1)}" y="${(y0+h/2+4).toFixed(1)}" text-anchor="middle" class="svg-free">LIBRE</text>`;
     out+=`<text x="${x0.toFixed(1)}" y="${ly.toFixed(1)}" class="svg-label">${esc(t.name)}${t.waiter&&!mine?" · "+esc(t.waiter):""}</text>`;
@@ -356,7 +359,7 @@ function renderFloor(){
     if(al) out+=alertTag(x0, y0+h+(people.some(o=>o.side==="b")?seat+26*s:22), alertTitle(al.type,t.name).toUpperCase()+" · "+ago(al.created_at).toUpperCase(), alertColor(al.type));
     out+=`</g>`;
   }
-  svg.setAttribute("viewBox",`0 0 ${W} ${H.toFixed(0)}`); svg.innerHTML=out; fitTags(svg);
+  svg.setAttribute("viewBox",`0 0 ${W} ${H.toFixed(0)}`); svg.innerHTML=out; fitTags(svg); pending.floor.clear();
 }
 
 // Modo video: la imagen de la cámara (ya difuminada) con las capas encima. Todas las
@@ -378,13 +381,14 @@ function renderVideo(){
     for(const p of t.plates){ if(!p.bbox) continue;
       const [bx,by,bw,bh]=p.bbox; const px=(bx+bw/2)*fw, py=(by+bh/2)*fh, r=Math.min(bw*fw,bh*fh)/2;
       const st=stateOf(p), col=COLOR[st], R=r+6, circ=2*Math.PI*R, f=p.fill_ratio ?? FILL[st];
-      out+=`<g transform="translate(${px.toFixed(1)} ${py.toFixed(1)})"><g class="${changed.has(p.id)?"changed":""}"><circle r="${(R+10).toFixed(1)}" fill="url(#vhalo-${st})" opacity=".8"/><circle r="${R.toFixed(1)}" fill="none" stroke="${col}" stroke-opacity=".25" stroke-width="2.5"/>`;
+      out+=`<g transform="translate(${px.toFixed(1)} ${py.toFixed(1)})"><g class="${pending.video.has(p.id)?"changed":""}"><circle r="${(R+10).toFixed(1)}" fill="url(#vhalo-${st})" opacity=".8"/><circle r="${R.toFixed(1)}" fill="none" stroke="${col}" stroke-opacity=".25" stroke-width="2.5"/>`;
       if(f>.02) out+=`<circle r="${R.toFixed(1)}" fill="none" stroke="${col}" stroke-width="3" stroke-linecap="round" stroke-dasharray="${(circ*f).toFixed(1)} ${circ.toFixed(1)}" transform="rotate(-90)"/>`;
-      out+=`</g>`+alertTag(R+8, -(R-2), `${dishName(p)} · ${STATE_NAME[st].toUpperCase()}`, col)+`</g>`;
+      const label=`${dishName(p)} · ${STATE_NAME[st].toUpperCase()}`, left=px+R+8+label.length*7.2+22>fw;  // a la izquierda si a la derecha no entra
+      out+=`</g>`+alertTag(left?-(R+8):R+8, -(R-2), label, col, 1, left?"end":"start")+`</g>`;
     }
     out+=`</g>`;
   }
-  svg.innerHTML=out; fitTags(svg);
+  svg.innerHTML=out; fitTags(svg); pending.video.clear();
 }
 
 function renderSide(){
@@ -408,16 +412,26 @@ function renderSide(){
   $("legend").innerHTML=Object.keys(COLOR).map(s=>`<span class="chip" style="color:${COLOR[s]}"><i style="background:${COLOR[s]}"></i><span>${STATE_NAME[s]} <b class="num">${counts[s]||0}</b></span></span>`).join("");
   $("occupied").textContent=`${occ.length} de ${snap.tables.length} mesas ocupadas`;
   $("clock").textContent=hhmm(new Date(NOW).toISOString());
-  $("conn").textContent=`Última lectura hace ${ago(snap.ts)} · cada ${snap.interval} s`;
+  const late=(NOW-Date.parse(snap.ts))/1000>3*snap.interval+10;  // la regla de salon.html
+  $("live").className="live"+(late?"":" on"); $("live-text").textContent=late?"Sin lecturas":"Cámara en vivo";
+  $("conn").className="conn"+(late?" off":""); $("conn").textContent=`${late?"Sin lecturas desde hace":"Última lectura hace"} ${ago(snap.ts)} · cada ${snap.interval} s`;
+}
+function pickTable(){
+  if(selected&&snap.tables.some(t=>t.id===selected)) return;
+  const last=snap.alerts[snap.alerts.length-1];
+  selected=last?last.table_id:(snap.tables.find(t=>t.plates.length)||snap.tables[0]||{}).id||null;
 }
 let seen=new Set();
 const dirty={floor:false,video:false};  // el modo oculto se dibuja recién al mostrarlo
+const pending={floor:new Set(),video:new Set()};  // lo que tiene que latir en cada modo
 function render(){
+  pickTable();
   const focused=document.activeElement&&document.activeElement.closest?document.activeElement.closest(".tbl"):null;
   const focusedSvg=focused?focused.closest("svg"):null;  // antes de redibujar: después el nodo ya no está en el documento
   const ids=new Set(snap.tables.flatMap(t=>t.plates.map(p=>p.id)));
   for(const id of ids) if(seen.size&&!seen.has(id)) changed.add(id);  // un plato nuevo entra latiendo
   seen=ids;
+  for(const id of changed){ pending.floor.add(id); pending.video.add(id); }
   if($("floor").hasAttribute("hidden")) dirty.floor=true; else renderFloor();
   if($("video").hasAttribute("hidden")) dirty.video=true; else renderVideo();
   renderSide();
@@ -450,6 +464,7 @@ $("sim").onclick=()=>{ const t=tableOf("T1"), [p0,p1]=t.plates, p=(p0.state==="v
   if(t.status==="terminada") snap.alerts.push({id:"sim-t", type:"mesa_terminada", table_id:t.id, message:`🍽️ ${t.name}: terminó.`, created_at:new Date(NOW).toISOString(), answered_by:null});
   else if(t.plates.some(x=>x.state==="vacio")) snap.alerts.push({id:"sim-v", type:"plato_vacio", table_id:t.id, message:`🧹 ${t.name}: hay platos vacíos para retirar.`, created_at:new Date(NOW).toISOString(), answered_by:null});
   selected="T1"; render(); };
+$("sim-stale").onclick=()=>{ snap.ts=new Date(NOW-11*60*1000).toISOString(); render(); };  // 11 min sin lecturas
 try{ if(localStorage.getItem("f1-device")==="phone") setDevice(true); }catch(e){}
 render();
 // las etiquetas se midieron con la fuente de reserva: al llegar Barlow Condensed, de nuevo

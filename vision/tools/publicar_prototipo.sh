@@ -9,4 +9,10 @@ if [ $# -ne 1 ] || [ ! -f "$1" ]; then
   echo "uso: $0 docs/prototipos/<prototipo>.html" >&2
   exit 2
 fi
-grep -v -i -E '^[[:space:]]*(<!doctype html>|</?html([[:space:]][^>]*)?>|</?head>|</?body([[:space:]][^>]*)?>|<meta charset=[^>]*>|<meta name="viewport"[^>]*>)[[:space:]]*$' "$1"
+out=$(grep -v -i -E '^[[:space:]]*(<!doctype html>|</?html([[:space:]][^>]*)?>|</?head>|</?body([[:space:]][^>]*)?>|<meta charset=[^>]*>|<meta name="viewport"[^>]*>)[[:space:]]*$' "$1" || true)
+# si quedó algo del esqueleto (una etiqueta compartiendo línea con otra cosa), no se publica así
+if printf '%s\n' "$out" | grep -q -i -E '</?(html|head|body)([[:space:]>])'; then
+  echo "$1: quedan etiquetas html/head/body que no están solas en su línea; acomodalas" >&2
+  exit 3
+fi
+printf '%s\n' "$out"

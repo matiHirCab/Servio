@@ -37,12 +37,14 @@ El **arco del anillo es cuánto queda** (`fill_ratio`), así el estado se lee au
 - Cada mesa lleva su **etiqueta flotante** arriba: nombre, mozo (si no es el que mira) y estado de la mesa (libre, servida, comiendo, por terminar, terminó). La mesa elegida tiene un recuadro punteado azul.
 - **Las mesas del mozo que mira van marcadas** (borde azul suave): el mozo ve todas las mesas, pero encuentra las suyas de un vistazo. Quién mira sale del rol/usuario (R-1); hasta que haya login, la pantalla del salón muestra todas sin marca.
 - Una mesa con **aviso abierto** lleva una etiqueta de color debajo («MESA 2: PLATO VACÍO · 4 MIN»). El panel de la derecha lista los avisos abiertos, el más viejo arriba, con quién lo tomó («Voy · Juan») o, si nadie respondió, en naranja. Los botones para responder **no están acá**: se responde desde el reloj (F-3); la pantalla es para mirar.
+- **Qué pasa cuando no llegan lecturas** (lo que `salon.html` ya hace y se mantiene): pasadas 3 lecturas + 10 s sin novedades, el punto rojo de «en vivo» deja de latir, se pone naranja y dice «Sin lecturas»; sin conexión con el servidor, «Reconectando». En el dock, «Sin lecturas desde hace X». En el celular el dock no muestra ese texto, pero el punto y «Sin lecturas» arriba sí. El prototipo tiene «Simular un corte».
+- **La mesa elegida** al entrar es la del último aviso abierto; si no hay avisos, la primera ocupada. Si la mesa elegida desaparece (se redibujaron las zonas), se vuelve a elegir con la misma regla. Es lo que ya hace `salon.html` (`pickTable`).
 - Panel derecho: la mesa elegida (platos, nombre del pedido, barra de cuánto queda, desde cuándo están sentados), los avisos y «Ahora» (mesas ocupadas, platos en mesa, avisos abiertos, tiempo promedio en mesa; el promedio se calcula en el navegador desde el `since` de cada mesa, no hace falta nada nuevo del servidor).
 - Dock abajo: la leyenda de los cuatro estados con el conteo de platos en cada uno, y hace cuánto llegó la última lectura.
 
 ### En el celular del mozo
 
-Mismo contenido, otra composición: el salón arriba a todo el ancho, debajo la mesa elegida y los avisos, y el dock de estados **pegado al borde de abajo** (sticky, con `safe-area-inset-bottom`) como barra de mesas activas. Los números de «Ahora» en una fila de cuatro. Tocar una mesa en el salón la elige. En un celular sale así sola (`max-width: 620px`); el botón «Celular» del prototipo es para verlo desde una computadora.
+Mismo contenido, otra composición: el salón arriba a todo el ancho, debajo la mesa elegida y los avisos, y el dock de estados **pegado al borde de abajo** (sticky, con `safe-area-inset-bottom`) como barra de mesas activas. Los números de «Ahora» en una fila de cuatro. Tocar una mesa en el salón la elige. En un celular sale así sola (ancho del contenedor hasta 620 px); el botón «Celular» del prototipo es para verlo desde una computadora, con un marco del alto de un celular y scroll propio, así el dock se pega al borde del marco.
 
 ### Qué cambia respecto de lo implementado (`salon.html`)
 
@@ -51,7 +53,6 @@ Mismo contenido, otra composición: el salón arriba a todo el ancho, debajo la 
 3. La **marca de las mesas del mozo** (necesita saber quién mira: login de R-1).
 4. En el aviso, **quién lo tomó** («Voy · Juan») o que nadie respondió (necesita C-5).
 5. El dock sticky en celular.
-6. Un arreglo chico para pasar a `salon.html`: `.changed` necesita `transform-box: fill-box; transform-origin: center`, si no el `pop` escala desde el origen del SVG y el plato se corre en vez de latir.
 
 Lo que necesita del servidor, además de lo que `/estado` ya manda (`fill_ratio`, `since` y `created_at` en ISO, `dish` que puede ser `null`, `message`, `waiter` por mesa):
 
@@ -60,6 +61,6 @@ Lo que necesita del servidor, además de lo que `/estado` ya manda (`fill_ratio`
 - Las horas (`since`, `created_at`, `ts`) vienen en UTC y la pantalla las muestra en la hora del navegador, que es la del local.
 - Quién mira (para marcar sus mesas): el usuario de R-1. Sin login, todas las mesas sin marca.
 
-Lo demás (colores, tipografías Barlow y Barlow Condensed, el dibujo de mesas, sillas, personas y platos, la animación de cambio) es lo que ya está: el prototipo es una **copia** del código de dibujo de `salon.html` al día de hoy (`plate()`, `person()`, `chair()`, `renderFloor()`, colores, `FILL`); si se tocan, `salon.html` manda, salvo el punto 6. No comparten archivo a propósito: el prototipo se publica solo, sin el servidor; y los datos de ejemplo del prototipo tienen la forma real de `/estado`, así que lo que se implemente a partir de él usa los campos que existen.
+Lo demás (colores, tipografías Barlow y Barlow Condensed, el dibujo de mesas, sillas, personas y platos, la animación de cambio) es lo que ya está: el prototipo es una **copia** del código de dibujo de `salon.html` al día de hoy (`plate()`, `person()`, `chair()`, `renderFloor()`, colores, `FILL`); si se tocan, `salon.html` manda (este PR le arregla una cosa: `.changed` con `transform-box: fill-box; transform-origin: center`, sin eso el `pop` corría el plato en vez de hacerlo latir). No comparten archivo a propósito: el prototipo se publica solo, sin el servidor; y los datos de ejemplo del prototipo tienen la forma real de `/estado`, así que lo que se implemente a partir de él usa los campos que existen.
 
 **Hecho cuando** (de la tarjeta): diseño con los dos modos, los 4 estados y una mesa con aviso abierto, en pantalla grande y en celular, revisado por el equipo. El prototipo cubre todo eso; falta la revisión.
