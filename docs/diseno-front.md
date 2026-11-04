@@ -5,7 +5,7 @@ Las tres pantallas de Servio, para que el equipo las revise antes de implementar
 | Pantalla | Quién la ve | Prototipo | Implementación |
 |---|---|---|---|
 | F-1 · Reconocimiento (el salón) | Mozo (principal), encargado, dueño | [prototipos/f1-reconocimiento.html](prototipos/f1-reconocimiento.html) | `vision/servio_vision/static/salon.html`, `/<local>/salon` (PR #64) |
-| F-2 · Dashboard | Encargado, dueño | pendiente | `vision/servio_vision/static/dashboard.html`, `/<local>/dashboard` (rama `tomas/dashboards`, D-1) |
+| F-2 · Dashboard | Encargado, dueño | [prototipos/f2-dashboard.html](prototipos/f2-dashboard.html) | `vision/servio_vision/static/dashboard.html`, `/<local>/dashboard` (rama `tomas/dashboards`, D-1) |
 | F-3 · Notificaciones | Mozo (reloj), encargado, dueño | pendiente | `vision/servio_vision/alerts/messages.py`, `vision/servio_vision/alerts/bot.py` (Telegram) |
 
 Los prototipos son documentos HTML completos (abrirlos desde el repo anda, también en un celular); para publicarlos como artifact, `vision/tools/publicar_prototipo.sh` les saca el esqueleto (la plataforma pone su propio `charset` y `viewport` con `viewport-fit=cover`, no se pierde el safe-area). **Ninguna imagen real de un local va al repo**: la «cámara» del prototipo F-1 es un SVG dibujado con las mismas coordenadas que los datos de ejemplo (sin imágenes en el repo, regla 6 de AGENTS.md).
@@ -65,3 +65,33 @@ Lo que necesita del servidor, además de lo que `/estado` ya manda (`fill_ratio`
 Lo demás (colores, tipografías Barlow y Barlow Condensed, el dibujo de mesas, sillas, personas y platos, la animación de cambio) es lo que ya está: el prototipo es una **copia** del código de dibujo de `salon.html` al día de hoy (`plate()`, `person()`, `chair()`, `renderFloor()`, colores, `FILL`); si se tocan, `salon.html` manda (este PR le arregla una cosa: `.changed` con `transform-box: fill-box; transform-origin: center`, sin eso el `pop` corría el plato en vez de hacerlo latir). No comparten archivo a propósito: el prototipo se publica solo, sin el servidor; y los datos de ejemplo del prototipo tienen la forma real de `/estado`, así que lo que se implemente a partir de él usa los campos que existen.
 
 **Hecho cuando** (de la tarjeta): diseño con los dos modos, los 4 estados y una mesa con aviso abierto, en pantalla grande y en celular, revisado por el equipo. El prototipo cubre todo eso; falta la revisión.
+
+## F-2 · Dashboard: la pizarra del encargado y del dueño
+
+Prototipo: [prototipos/f2-dashboard.html](prototipos/f2-dashboard.html). Parte de lo que Tomás ya implementó en D-1 (`vision/servio_vision/static/dashboard.html`, servido en `/<local>/dashboard?rol=…` por el mismo servidor que el salón): **mismo estilo y misma forma de datos**, así lo que se decida acá se aplica sobre ese archivo y no en otro. Las métricas son las 17 de [13-metricas.md](context/13-metricas.md); cada tarjeta lleva `data-metric` con el id de la métrica, y la barra de revisión cuenta cuántas tiene cada vista.
+
+### Estilo «pizarra», primero celular
+
+Una sola columna de 480 px como máximo, bloques de color plano, **números enormes** y una línea de texto que dice qué hacer con el número («Martín es el que más tarda y el que más mesas tiene: sacale una»). Sin gráficos decorativos: las dos únicas series (horas pico, semana a semana) son barras planas a escala, con la peor franja o la última semana en color. Tema claro único, a propósito: es la pizarra que el dueño mira en la reunión y manda por WhatsApp como captura. Tipografía Bricolage Grotesque, la de D-1.
+
+### Dos roles, dos pizarras
+
+- **Encargado** (lo que pasa en este turno): tiempo de respuesta como héroe, sin atender > 5 min, mesas olvidadas, avisos abiertos con quién respondió, tabla de mozos (mesas, respuesta, retiro, olvidadas), rotación, siguiente plato, horas pico, platos que vuelven, y el resumen al cerrar (llega por Telegram). Botón «Ver el salón en vivo» arriba: la pizarra y el salón son la misma app.
+- **Dueño** (si vale la pena): pestañas **Resultados / Carta / Turno / Config**. Resultados abre con el héroe «**Tus mesas esperan X min menos**» (antes/después del modo sombra), después las cuatro cifras, la serie semana a semana, lo que vuelve a la cocina en pesos y la adopción de los mozos. Carta: tabla por plato (vuelve, ritmo, sobra) con una frase de diagnóstico por plato. Turno: lo mismo que ve el encargado. Config: costo de Servio por mes, umbrales del local, roles y usuarios.
+
+Qué ve cada rol sale del servidor (`vistas` en la respuesta de `/datos`), no del front: el prototipo tiene el segmento Encargado/Dueño solo para revisar.
+
+### Cuando todavía no hay datos
+
+Toda métrica tiene su lugar desde el primer día, pero **no se inventa**: si el servidor manda `null`, la tarjeta sale punteada con el porqué («Se muestra a partir del día 7», «Necesita servicios en modo sombra», «Ningún plato volvió lleno todavía»). D-1 ya manda esos textos (`PENDING` en `dashboard.py`) y dibuja la tarjeta punteada; el prototipo agrega el botón «Primer día» para ver cómo queda un local recién instalado: avisos en cero, sin histórico ni antes/después, y el resto con sus textos. Ninguna tarjeta divide por cero ni muestra «NaN».
+
+### Qué cambia respecto de lo implementado (`dashboard.html`, D-1)
+
+1. El héroe **antes/después** del dueño con la frase en minutos menos (hoy sale punteado: necesita D-5 y M-2).
+2. La serie **semana a semana** y la tarjeta de **costos** dibujadas (hoy punteadas: D-4 y C-2); cuando lleguen los datos, el prototipo es la referencia.
+3. La frase de diagnóstico debajo de cada tabla (mozos, carta) la escribe el servidor con los datos, no está fija en el HTML.
+4. Textos de «todavía sin datos» por métrica, no uno genérico.
+
+Lo demás (colores, tipografía, tarjetas, tablas, barras, armado por rol, botón al salón) es lo que ya está en D-1 y el prototipo lo copia tal cual.
+
+**Hecho cuando** (de la tarjeta): diseño con las dos vistas, todas las métricas de M-1 ubicadas y revisado por el equipo. El prototipo cubre las 17 en la vista del dueño (10 en la del encargado); falta la revisión.
