@@ -79,17 +79,17 @@ Una sola columna de 480 px como máximo, bloques de color plano, **números enor
 - **Encargado** (lo que pasa en este turno): tiempo de respuesta como héroe, sin atender > 5 min, mesas olvidadas, avisos abiertos con quién respondió, tabla de mozos (mesas, respuesta, retiro, olvidadas), rotación, siguiente plato, horas pico, platos que vuelven, y el resumen al cerrar (llega por Telegram). Botón «Ver el salón en vivo» arriba: la pizarra y el salón son la misma app.
 - **Dueño** (si vale la pena): pestañas **Resultados / Carta / Turno / Config**. Resultados abre con el héroe «**Tus mesas esperan X min menos**» (antes/después del modo sombra), después las cuatro cifras, la serie semana a semana, lo que vuelve a la cocina en pesos y la adopción de los mozos. Carta: tabla por plato (vuelve, ritmo, sobra) con una frase de diagnóstico por plato. Turno: lo mismo que ve el encargado. Config: costo de Servio por mes, umbrales del local, roles y usuarios.
 
-Qué ve cada rol sale del servidor (`vistas` en la respuesta de `/datos`), no del front: el prototipo tiene el segmento Encargado/Dueño solo para revisar.
+Qué ve cada rol sale del servidor (`vistas` y `metricas` en la respuesta de `/datos`: la forma exacta de `dashboard.py`, que el prototipo usa tal cual, con `metricas{…}`, `pendientes{…}` y `configuracion{umbrales, roles}`), no del front: el prototipo tiene el segmento Encargado/Dueño solo para revisar.
 
 ### Cuando todavía no hay datos
 
-Toda métrica tiene su lugar desde el primer día, pero **no se inventa**: si el servidor manda `null`, la tarjeta sale punteada con el porqué («Se muestra a partir del día 7», «Necesita servicios en modo sombra», «Ningún plato volvió lleno todavía»). D-1 ya manda esos textos (`PENDING` en `dashboard.py`) y dibuja la tarjeta punteada; el prototipo agrega el botón «Primer día» para ver cómo queda un local recién instalado: avisos en cero, sin histórico ni antes/después, y el resto con sus textos. Ninguna tarjeta divide por cero ni muestra «NaN».
+Toda métrica tiene su lugar desde el primer día, pero **no se inventa**: si el servidor manda `null`, la tarjeta sale punteada con el porqué («Se muestra a partir del día 7», «Necesita servicios en modo sombra», «Ningún plato volvió lleno todavía»). D-1 ya dibuja la tarjeta punteada y manda `pendientes` con un texto por métrica, pero hoy esos textos dicen qué tarea la trae («Llega con D-5 y M-2»); el diseño pide que digan **qué tiene que pasar en el local** («Se muestra a partir del día 7») y que toda métrica en `null` tenga el suyo (punto 4 de «Qué cambia»). El prototipo agrega el botón «Primer día» para ver cómo queda un local recién instalado: avisos en cero, sin histórico ni antes/después, y el resto con sus textos. Ninguna tarjeta divide por cero ni muestra «NaN».
 
 ### Qué cambia respecto de lo implementado (`dashboard.html`, D-1)
 
 1. El héroe **antes/después** del dueño con la frase en minutos menos (hoy sale punteado: necesita D-5 y M-2).
 2. La serie **semana a semana** y la tarjeta de **costos** dibujadas (hoy punteadas: D-4 y C-2); cuando lleguen los datos, el prototipo es la referencia.
-3. La frase de diagnóstico debajo de cada tabla (mozos, carta) la escribe el servidor con los datos, no está fija en el HTML.
+3. La frase de diagnóstico debajo de cada tabla (mozos, carta) sale de los datos (el más lento, el que más vuelve), nunca de un texto fijo; en producción la arma el servidor.
 4. Textos de «todavía sin datos» por métrica, no uno genérico.
 
 Lo demás (colores, tipografía, tarjetas, tablas, barras, armado por rol, botón al salón) es lo que ya está en D-1 y el prototipo lo copia tal cual.
