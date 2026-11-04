@@ -12,11 +12,12 @@ import logging
 import sys
 import time
 import warnings
+from pathlib import Path
 from typing import Any
 
 import cv2
 
-from servio_vision import alerts, framing, llm, privacy, prompt
+from servio_vision import alerts, framing, llm, privacy, prompt, recording
 from servio_vision.alerts.config import load_config
 from servio_vision.alerts.notify import TelegramNotifier
 from servio_vision.capture import (
@@ -33,7 +34,7 @@ from servio_vision.dish_match import DishMatcher
 from servio_vision.health import STALL_S, HealthMonitor
 from servio_vision.pipeline import Pipeline
 from servio_vision.privacy import Anonymizer
-from servio_vision.recording import FrameRecorder
+from servio_vision.recording import FrameRecorder, SessionRecorder
 from servio_vision.restaurant import DEFAULT_DIR as RESTAURANT_DIR
 from servio_vision.restaurant import Restaurant
 from servio_vision.salon import SalonFeed
@@ -107,8 +108,12 @@ def finished_after_seconds(settings: Settings) -> float:
 def load_tables(settings: Settings) -> tuple[Zones | None, TableTracker | None]:
     """Las mesas: zonas fijas (`zones.json`) o un tracker que las detecta en cada
     lectura. `ImportError` sin ultralytics, `FileNotFoundError` sin el archivo; los
-    mensajes ya dicen qué hacer. Lo usan `build_pipeline` y el chequeo de encuadre."""
+    mensajes ya dicen qué hacer. Lo usan `build_pipeline` y el chequeo de encuadre.
+    Una sesión grabada con zonas fijas (B-1) se reproduce con esas mismas zonas."""
     if settings.zones is None:
+        recorded = recording.session_zones_arg(settings.source)
+        if recorded is not None:
+            return recorded, None
         try:
             return None, TableTracker(TableDetector())
         except ImportError as e:
@@ -277,6 +282,7 @@ def run(settings: Settings, limit: int | None = None) -> int:
     if not require_source(settings):
         return 2
     assert settings.source is not None  # lo garantiza `require_source`
+    settings = session_settings(settings)  # una sesión grabada: su cadencia
     pipeline = build_pipeline(settings)
     if pipeline is None:
         return 2
@@ -286,7 +292,18 @@ def run(settings: Settings, limit: int | None = None) -> int:
         # La carpeta de grabación primero: si no se puede crear, la cámara todavía
         # no se abrió. Después la fuente, que sale de open_source con las caras
         # difuminadas (C-3): nada de lo que sigue, tampoco la grabación, ve una cara.
-        recorder = FrameRecorder(settings.record) if settings.record else None
+        recorder = (
+            SessionRecorder(
+                settings.record,
+                interval=settings.interval,
+                local_id=settings.local_id,
+                source=settings.source,
+                classifier=settings.classifier,
+                zones=pipeline.zones if pipeline.tables is None else None,
+            )
+            if settings.record
+            else None
+        )
         # El detector de caras de una cámara se arma una sola vez y antes del latido:
         # cargarlo (o bajarlo) en cada reintento, o contarlo como tiempo sin lecturas,
         # no tiene sentido. Con un archivo lo arma `open_source` después de ver que
@@ -334,6 +351,10 @@ def run(settings: Settings, limit: int | None = None) -> int:
         if monitor is not None:
             monitor.stop()
         pipeline.close()
+        if isinstance(recorder, SessionRecorder):
+            # con los avisos ya escritos (close los baja al log): la sesión queda
+            # completa, con sus eventos, aunque se haya cortado a mano
+            recorder.finish(alerts.DEFAULT_LOG)
     logger.info("%d lecturas", readings)
     return 0 if readings else 1
 
@@ -381,6 +402,18 @@ def _open_frames(
             wait = next(waits)
             logger.warning("%s: reintento en %g s", error, wait)
             time.sleep(wait)
+
+
+def session_settings(settings: Settings) -> Settings:
+    """Si la fuente es una sesión grabada (B-1), la cadencia es la grabada: con otra,
+    los umbrales de los avisos no coinciden y la reproducción no reproduce nada."""
+    if settings.source is None or not recording.is_session(Path(settings.source)):
+        return settings
+    info = recording.read_info(Path(settings.source))
+    interval = float(info.get("interval", settings.interval))
+    if interval != settings.interval:
+        logger.info("Sesión grabada cada %g s: se reproduce con esa cadencia", interval)
+    return settings.model_copy(update={"interval": interval})
 
 
 def _record(recorder: FrameRecorder, frame, ts) -> FrameRecorder | None:

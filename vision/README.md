@@ -98,6 +98,18 @@ Abrí `http://localhost:8000/local/salon` (`local` es el `local_id` de la casa; 
 
 Rutas: `/<local>/salon` (página), `/<local>/salon/estado` (la última foto en JSON) y `/<local>/salon/eventos` (la misma foto cada vez que cambia). La foto la arma `servio_vision/salon.py`; el servidor es `servio_vision/salon_web.py` (biblioteca estándar, sin dependencias nuevas) y la página `servio_vision/static/salon.html`.
 
+## Grabar y reproducir sesiones (B-1)
+
+```bash
+python main.py --config config/casa-jessica.toml --record out/sesiones/cena-jueves   # graba
+python main.py --source out/sesiones/cena-jueves --classifier hybrid --no-telegram      # reproduce
+python tools/comparar_sesion.py out/sesiones/cena-jueves                                # ¿mismos avisos?
+```
+
+`--record DIR` deja una **sesión**: un JPEG por lectura con su hora en el nombre (ya con las caras difuminadas, C-3), `sesion.json` (cadencia, zonas si eran fijas, local, clasificador) y `eventos.jsonl` con las observaciones y avisos de esa corrida. Sin `--record` no queda ninguna imagen. Las sesiones van a la carpeta compartida del equipo, **nunca al repo** (`out/` está ignorado).
+
+`--source DIR` reproduce la sesión con cualquier clasificador: cada frame con su hora real, la cadencia y las zonas de la grabación (no hace falta `--interval` ni `--zones`), `--speed` para ir a ritmo de reloj. Las reglas cuentan tiempo de las observaciones, así que con el mismo clasificador salen los mismos avisos; `tools/comparar_sesion.py` lo verifica contra `out/eventos.jsonl`. Para probar las reglas sin volver a clasificar, `tools/replay.py` sigue reproduciendo el log directamente.
+
 ## Datos del restaurante y respuestas de los mozos
 
 Con la comanda del restaurante, Servio sabe **qué plato es cada uno** y **qué mozo atiende cada mesa**. Para la demo esos datos son simulados (`fixtures/restaurante/carta.json` y `salon.json`): es lo que daría el sistema del restaurante si estuviéramos conectados.

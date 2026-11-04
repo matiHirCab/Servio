@@ -29,7 +29,7 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-from servio_vision import privacy
+from servio_vision import privacy, recording
 from servio_vision.privacy import Anonymizer
 
 logger = logging.getLogger(__name__)
@@ -107,6 +107,8 @@ def open_source(
         raw = read_camera(
             int(source) if source.isdigit() else source, interval, reconnect_s
         )
+    elif recording.is_session(path):
+        raw = read_session(path, speed)  # una sesión grabada: cada frame con su hora
     elif path.is_dir():
         raw = read_folder(path, interval, speed, start)
     elif path.suffix.lower() in IMAGE_SUFFIXES:
@@ -196,6 +198,29 @@ def _folder_frames(
         seconds = i * interval
         pacer.wait(seconds)
         yield frame, start + timedelta(seconds=seconds)
+
+
+def read_session(path: Path, speed: float | None) -> Iterator[Frame]:
+    """Una sesión grabada (B-1): los frames con la hora real de cada lectura, sacada
+    del nombre del archivo, así una reproducción da las mismas observaciones (y los
+    mismos avisos) que la corrida en vivo. `interval` no cuenta: la cadencia es la
+    grabada. `speed` espera entre frames como con un video."""
+    frames = recording.session_frames(path)
+    return _session_frames(frames, speed)
+
+
+def _session_frames(
+    frames: list[tuple[Path, datetime]], speed: float | None
+) -> Iterator[Frame]:
+    pacer = _Pacer(speed)
+    first = frames[0][1]
+    for file, ts in frames:
+        frame = cv2.imread(str(file))
+        if frame is None:
+            logger.warning("No se pudo leer %s, lo salteo", file)
+            continue
+        pacer.wait((ts - first).total_seconds())
+        yield frame, ts
 
 
 def read_image(path: Path, start: datetime) -> Iterator[Frame]:

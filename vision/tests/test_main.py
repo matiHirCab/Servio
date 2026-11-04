@@ -180,7 +180,9 @@ def test_cli_record_saves_one_blurred_frame_per_reading(tmp_path, monkeypatch):
     )
     assert code == 0
     alerts._processor.close()
-    saved = sorted(record.iterdir())
+    saved = sorted(
+        record.glob("*.jpg")
+    )  # al lado quedan sesion.json y eventos.jsonl (B-1)
     assert [p.suffix for p in saved] == [".jpg"] * 3
     assert all(p.name.endswith("Z.jpg") for p in saved)
     assert _images_under(tmp_path) == saved  # y en ningún otro lado
