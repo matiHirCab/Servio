@@ -93,8 +93,8 @@ h1,h2,h3{margin:0;font-weight:500;text-wrap:balance}
 .bar{grid-column:2/-1;height:3px;border-radius:2px;background:var(--surface-2);overflow:hidden;margin-top:-2px}
 .bar b{display:block;height:100%;border-radius:2px}
 .muted{color:var(--fg-2);font-size:13px;margin:0}
-.alert{display:grid;grid-template-columns:4px 1fr auto;gap:12px;padding:12px 0;border-top:1px solid var(--line)}
-.alert:first-of-type{border-top:0;padding-top:0}
+.alert{display:grid;grid-template-columns:4px 1fr auto;gap:12px;padding:0 0 12px}
+.alert + .alert{border-top:1px solid var(--line);padding-top:12px}
 .alert .sev{border-radius:2px}
 .alert p{margin:0;font-size:15px;line-height:1.35}
 .alert p small{display:block;color:var(--fg-2);font-size:13px;margin-top:3px}
@@ -124,7 +124,19 @@ h1,h2,h3{margin:0;font-weight:500;text-wrap:balance}
 .phone-frame .metrics{grid-template-columns:1fr 1fr 1fr 1fr}
 .phone-frame .metric .v{font-size:24px}
 @media (max-width:1000px){.screen{grid-template-columns:minmax(0,1fr)}}
-@media (max-width:620px){.status-r{gap:12px}.brand b{font-size:22px}.metrics{grid-template-columns:1fr 1fr}}
+/* en un celular de verdad, lo mismo sin apretar ningún botón (y sin marco) */
+@media (max-width:620px){.status-r{gap:12px}
+.screen{grid-template-columns:minmax(0,1fr);gap:12px}
+.brand b{font-size:20px}
+.status-r .time{font-size:18px}
+.status-r>span:nth-child(2){display:none}
+.dock{position:sticky;bottom:calc(8px + env(safe-area-inset-bottom,0px));flex-wrap:nowrap;overflow-x:auto;gap:12px;padding:10px 14px}
+.legend{gap:14px;flex-wrap:nowrap}
+.chip span{white-space:nowrap}
+.conn{display:none}
+.metrics{grid-template-columns:1fr 1fr 1fr 1fr}
+.metric .v{font-size:24px}
+.phone-frame{border:0;border-radius:0;padding:0;width:auto;height:auto;margin:0}}
 @media (prefers-reduced-motion:reduce){.changed,.live i{animation:none}}
 </style>
 </head>
@@ -188,8 +200,9 @@ const ALERT_TITLE = {mesa_terminada:n=>`${n} terminó`, plato_vacio:n=>`${n}: pl
 const ALERT_COLOR = {mesa_terminada:COLOR.vacio, plato_vacio:COLOR.por_terminar, plato_lleno_mucho:COLOR.lleno};
 
 // Datos de ejemplo con la forma real de /<local>/salon/estado (salon.py build_snapshot):
-// fill_ratio, since/created_at en ISO, dish puede ser null, alert.message. Lo único que
-// hoy no manda el servidor es `taken_by` (quién respondió «Voy», C-5). Mesa 1 es la que
+// fill_ratio, since/created_at en ISO, dish puede ser null, alert.message. Lo que hoy no
+// manda el servidor es `taken_by` en el aviso (quién respondió «Voy», C-5); el mozo del
+// aviso sale de su mesa (`tableOf(a.table_id).waiter`). Mesa 1 es la que
 // ve la cámara del frame; el mozo que mira es Juan (sus mesas van marcadas).
 // Coordenadas 0–1 en la cámara; los bbox de los platos son relativos a la mesa.
 const ME = "Juan";
@@ -209,8 +222,8 @@ const snap = {
     {id:"T4", name:"Mesa 4", waiter:"Sofía", status:"libre", people:false, since:null, box:[.08,.06,.4,.3], plates:[]},
   ],
   alerts:[
-    {id:"a1", type:"plato_vacio", table_id:"T2", waiter:"Juan", message:"Lomo con papas vacío hace 4 min", created_at:"2026-11-04T21:38:00-03:00", taken_by:"Juan"},
-    {id:"a2", type:"plato_lleno_mucho", table_id:"T3", waiter:"Sofía", message:"Sorrentinos con fileto sigue lleno hace 14 min. ¿Está todo bien?", created_at:"2026-11-04T21:28:00-03:00", taken_by:null},
+    {id:"a1", type:"plato_vacio", table_id:"T2", message:"Lomo con papas vacío hace 4 min", created_at:"2026-11-04T21:38:00-03:00", taken_by:"Juan"},
+    {id:"a2", type:"plato_lleno_mucho", table_id:"T3", message:"Sorrentinos con fileto sigue lleno hace 14 min. ¿Está todo bien?", created_at:"2026-11-04T21:28:00-03:00", taken_by:null},
   ],
 };
 let selected = "T2";
@@ -220,16 +233,20 @@ const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt
 const clamp = (v,a,b)=>Math.max(a,Math.min(b,v));
 const tableOf = id => snap.tables.find(t=>t.id===id);
 const tableName = id => { const t=tableOf(id); return t ? t.name : id; };
+const tableWaiter = id => tableOf(id)?.waiter ?? null;
 const dishName = p => p.dish ?? "Plato";
 function ago(iso){ if(!iso) return ""; const s=Math.max(0,Math.round((NOW-Date.parse(iso))/1000)); if(s<60) return `${s} s`; const m=Math.floor(s/60); return m<60?`${m} min`:`${Math.floor(m/60)} h ${m%60} min`; }
-function hhmm(iso){ const d=new Date(iso); return `${String(d.getHours()).padStart(2,"0")}:${String(d.getMinutes()).padStart(2,"0")}`; }
+const hhmm = iso => iso.slice(11,16);  // la hora del local, no la del que mira
 function hash(str){ let h=2166136261; for(const c of str) h=Math.imul(h^c.charCodeAt(0),16777619); return h>>>0; }
 function rand(seed){ return ()=>((seed=Math.imul(seed^(seed>>>15),2246822507)>>>0)%1000)/1000; }
 const alertsOf = id => snap.alerts.filter(a=>a.table_id===id);
 
+function halos(prefix){
+  let out="";
+  for (const s of Object.keys(COLOR)) out += `<radialGradient id="${prefix}halo-${s}"><stop offset=".45" stop-color="${COLOR[s]}" stop-opacity=".55"/><stop offset="1" stop-color="${COLOR[s]}" stop-opacity="0"/></radialGradient>`;
+  return out;
+}
 function defs(){
-  let halos="";
-  for (const s of Object.keys(COLOR)) halos += `<radialGradient id="halo-${s}"><stop offset=".45" stop-color="${COLOR[s]}" stop-opacity=".55"/><stop offset="1" stop-color="${COLOR[s]}" stop-opacity="0"/></radialGradient>`;
   return `<defs><radialGradient id="floorg" cx="50%" cy="45%" r="70%"><stop offset="0" stop-color="#22262c"/><stop offset="1" stop-color="#0c0d10"/></radialGradient>
 <linearGradient id="tableg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#3a3f47"/><stop offset=".55" stop-color="#2a2e34"/><stop offset="1" stop-color="#1f2227"/></linearGradient>
 <linearGradient id="chairg" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#2c3036"/><stop offset="1" stop-color="#1a1c20"/></linearGradient>
@@ -237,7 +254,7 @@ function defs(){
 <linearGradient id="bodyg" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#a7aeb8"/><stop offset="1" stop-color="#6c737d"/></linearGradient>
 <radialGradient id="headg" cx="40%" cy="35%" r="70%"><stop offset="0" stop-color="#eef1f4"/><stop offset="1" stop-color="#b3bac3"/></radialGradient>
 <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse"><path d="M40 0H0V40" fill="none" stroke="#ffffff" stroke-opacity=".035"/></pattern>
-<filter id="soft" x="-30%" y="-30%" width="160%" height="160%"><feGaussianBlur stdDeviation="14"/></filter>${halos}</defs>`;
+<filter id="soft" x="-30%" y="-30%" width="160%" height="160%"><feGaussianBlur stdDeviation="14"/></filter>${halos("")}</defs>`;
 }
 function person(x,y,rot,s){
   return `<g transform="translate(${x.toFixed(1)} ${y.toFixed(1)}) rotate(${rot}) scale(${(1.15*s).toFixed(2)})"><ellipse cx="0" cy="3" rx="24" ry="15" fill="#000" opacity=".35"/><path d="M-20 4 Q-20 -9 0 -9 Q20 -9 20 4 Q20 9 14 9 L-14 9 Q-20 9 -20 4Z" fill="url(#bodyg)" stroke="#ffffff" stroke-opacity=".1"/><circle cx="0" cy="1" r="8.5" fill="url(#headg)" stroke="#ffffff" stroke-opacity=".15"/></g>`;
@@ -275,8 +292,12 @@ function plate(p, x, y, r, changed) {
   return o + `</g></g>`;
 }
 function alertTag(x,y,text,col){
-  const w=text.length*7.2+22;
-  return `<g transform="translate(${x.toFixed(1)} ${y.toFixed(1)})"><rect x="0" y="-11" width="${w.toFixed(0)}" height="22" rx="11" fill="${col}"/><text x="${(w/2).toFixed(0)}" y="4" text-anchor="middle" class="svg-tag">${esc(text)}</text></g>`;
+  const w=text.length*7.2+22;  // estimado; `fitTags` lo ajusta al texto real
+  return `<g class="tag" transform="translate(${x.toFixed(1)} ${y.toFixed(1)})"><rect x="0" y="-11" width="${w.toFixed(0)}" height="22" rx="11" fill="${col}"/><text x="${(w/2).toFixed(0)}" y="4" text-anchor="middle" class="svg-tag">${esc(text)}</text></g>`;
+}
+function fitTags(svg){
+  for(const g of svg.querySelectorAll("g.tag")){ const t=g.querySelector("text"), r=g.querySelector("rect"); if(!t.getComputedTextLength) continue;
+    const w=t.getComputedTextLength()+22; r.setAttribute("width",w.toFixed(0)); t.setAttribute("x",(w/2).toFixed(0)); }
 }
 
 function renderFloor(){
@@ -312,13 +333,13 @@ function renderFloor(){
     for(const q of P) out+=plate(q.p,q.x,q.y,q.r,changed.has(q.p.id));
     for(const o of people) out+=person(o.x,o.y,o.rot,s);
     if(!P.length) out+=`<text x="${(x0+w/2).toFixed(1)}" y="${(y0+h/2+4).toFixed(1)}" text-anchor="middle" class="svg-free">LIBRE</text>`;
-    out+=`<text x="${x0.toFixed(1)}" y="${ly.toFixed(1)}" class="svg-label">${esc(t.name)}${mine?"":" · "+esc(t.waiter)}</text>`;
+    out+=`<text x="${x0.toFixed(1)}" y="${ly.toFixed(1)}" class="svg-label">${esc(t.name)}${t.waiter&&!mine?" · "+esc(t.waiter):""}</text>`;
     out+=`<text x="${(x0+w).toFixed(1)}" y="${ly.toFixed(1)}" text-anchor="end" class="svg-status${sel?" sel":""}">${esc(status)}</text>`;
     const al=alertsOf(t.id)[0];
     if(al) out+=alertTag(x0, y0+h+(people.some(o=>o.side==="b")?seat+26*s:22), ALERT_TITLE[al.type](t.name).toUpperCase()+" · "+ago(al.created_at).toUpperCase(), ALERT_COLOR[al.type]);
     out+=`</g>`;
   }
-  svg.setAttribute("viewBox",`0 0 ${W} ${H.toFixed(0)}`); svg.innerHTML=out;
+  svg.setAttribute("viewBox",`0 0 ${W} ${H.toFixed(0)}`); svg.innerHTML=out; fitTags(svg);
 }
 
 // Modo video: la imagen de la cámara (ya difuminada) con las capas encima. Solo se
@@ -326,11 +347,11 @@ function renderFloor(){
 function renderVideo(){
   const svg=$("overlay"); const [fw,fh]=snap.frame; const t=tableOf("T1"); const sel=t.id===selected;
   const x0=t.box[0]*fw,y0=t.box[1]*fh,w=t.box[2]*fw,h=t.box[3]*fh;
-  let out=defs()+`<g class="tbl" data-id="${t.id}" tabindex="0" role="button" aria-label="${esc(t.name)}, ${esc(TABLE_STATUS[t.status])}"><rect x="${x0}" y="${y0}" width="${w}" height="${h}" rx="10" fill="#3E8BFF" fill-opacity="${sel?.08:.03}" stroke="#3E8BFF" stroke-opacity="${sel?.9:.5}" stroke-width="2" stroke-dasharray="${sel?"0":"6 6"}"/>`;
-  out+=`<g transform="translate(${x0+10} ${y0+20})"><rect x="0" y="-13" width="150" height="24" rx="12" fill="#07080a" fill-opacity=".75"/><text x="10" y="4" class="svg-label" font-size="13">${esc(t.name)} · ${esc(t.waiter)}</text><text x="140" y="4" text-anchor="end" class="svg-status sel" font-size="11">${esc(TABLE_STATUS[t.status]).toUpperCase()}</text></g>`;
+  let out=`<defs>${halos("v")}</defs>`+`<g class="tbl" data-id="${t.id}" tabindex="0" role="button" aria-label="${esc(t.name)}, ${esc(TABLE_STATUS[t.status])}"><rect x="${x0}" y="${y0}" width="${w}" height="${h}" rx="10" fill="#3E8BFF" fill-opacity="${sel?.08:.03}" stroke="#3E8BFF" stroke-opacity="${sel?.9:.5}" stroke-width="2" stroke-dasharray="${sel?"0":"6 6"}"/>`;
+  out+=`<g transform="translate(${x0+10} ${y0+20})"><rect x="0" y="-13" width="150" height="24" rx="12" fill="#07080a" fill-opacity=".75"/><text x="10" y="4" class="svg-label" font-size="13">${esc(t.name)}${t.waiter?" · "+esc(t.waiter):""}</text><text x="140" y="4" text-anchor="end" class="svg-status sel" font-size="11">${esc(TABLE_STATUS[t.status]).toUpperCase()}</text></g>`;
   for(const p of t.plates){ const [bx,by,bw,bh]=p.bbox; const px=x0+(bx+bw/2)*w, py=y0+(by+bh/2)*h, r=Math.min(bw*w,bh*h)/2;
     const col=COLOR[p.state], R=r+6, circ=2*Math.PI*R, f=p.fill_ratio ?? FILL[p.state], name=dishName(p);
-    out+=`<g transform="translate(${px.toFixed(1)} ${py.toFixed(1)})"><circle r="${(R+10).toFixed(1)}" fill="url(#halo-${p.state})" opacity=".8"/><circle r="${R.toFixed(1)}" fill="none" stroke="${col}" stroke-opacity=".25" stroke-width="2.5"/>`;
+    out+=`<g transform="translate(${px.toFixed(1)} ${py.toFixed(1)})"><circle r="${(R+10).toFixed(1)}" fill="url(#vhalo-${p.state})" opacity=".8"/><circle r="${R.toFixed(1)}" fill="none" stroke="${col}" stroke-opacity=".25" stroke-width="2.5"/>`;
     if(f>.02) out+=`<circle r="${R.toFixed(1)}" fill="none" stroke="${col}" stroke-width="3" stroke-linecap="round" stroke-dasharray="${(circ*f).toFixed(1)} ${circ.toFixed(1)}" transform="rotate(-90)"/>`;
     out+=`<g transform="translate(${(R+8).toFixed(0)} -${(R-2).toFixed(0)})"><rect x="0" y="-11" width="${(name.length*6.3+40).toFixed(0)}" height="22" rx="11" fill="${col}"/><text x="10" y="4" class="svg-tag">${esc(name)} · ${STATE_NAME[p.state].toUpperCase()}</text></g></g>`;
   }
@@ -341,11 +362,11 @@ function renderSide(){
   const t=tableOf(selected);
   const rows=t.plates.map(p=>`<div class="prow"><i style="background:${COLOR[p.state]}"></i><span class="nm">${esc(dishName(p))}</span><span class="st">${STATE_NAME[p.state]}</span><div class="bar"><b style="width:${Math.round((p.fill_ratio ?? FILL[p.state])*100)}%;background:${COLOR[p.state]}"></b></div></div>`).join("")
     || `<p class="muted">Mesa libre.</p>`;
-  $("table-card").innerHTML=`<div class="card-h"><h2>${esc(t.name)}</h2><small>${esc(t.waiter)} · mozo${t.waiter===ME?" · tuya":""}</small></div>${rows}
+  $("table-card").innerHTML=`<div class="card-h"><h2>${esc(t.name)}</h2><small>${t.waiter?esc(t.waiter)+" · mozo"+(t.waiter===ME?" · tuya":""):"Sin mozo asignado"}</small></div>${rows}
 <div class="label num" style="margin-top:10px">${t.since?"Sentados desde las "+hhmm(t.since):(t.people?"Hay gente, sin platos":"Libre")} · ${t.plates.length} ${t.plates.length===1?"plato":"platos"}</div>`;
   const A=snap.alerts;
   $("alerts-card").innerHTML=`<div class="card-h"><h2>Avisos</h2><span class="label num">${A.length} abiertos</span></div>`+
-    A.map(a=>`<div class="alert"><span class="sev" style="background:${ALERT_COLOR[a.type]}"></span><p>${esc(ALERT_TITLE[a.type](tableName(a.table_id)))}<small>${esc(a.message)}</small>${a.taken_by?`<span class="taken">Voy · ${esc(a.taken_by)}</span>`:`<span class="taken" style="color:var(--por_terminar)">Nadie respondió · ${esc(a.waiter)}</span>`}</p><time class="num">${ago(a.created_at)}</time></div>`).join("");
+    A.map(a=>`<div class="alert"><span class="sev" style="background:${ALERT_COLOR[a.type]}"></span><p>${esc(ALERT_TITLE[a.type](tableName(a.table_id)))}<small>${esc(a.message)}</small>${a.taken_by?`<span class="taken">Voy · ${esc(a.taken_by)}</span>`:`<span class="taken" style="color:var(--por_terminar)">Nadie respondió${tableWaiter(a.table_id)?" · "+esc(tableWaiter(a.table_id)):""}</span>`}</p><time class="num">${ago(a.created_at)}</time></div>`).join("");
   const occ=snap.tables.filter(x=>x.plates.length), plates=snap.tables.reduce((n,x)=>n+x.plates.length,0);
   $("shift-card").innerHTML=`<div class="card-h"><h2>Ahora</h2><span class="label">En el salón</span></div><div class="metrics">
 <div class="metric"><div class="label">Mesas ocupadas</div><div class="v num">${occ.length}<small>de ${snap.tables.length}</small></div></div>

@@ -19,7 +19,7 @@ Los prototipos son documentos HTML completos (abrirlos desde el repo anda, tambi
 - **Reconstrucción** (el default, y el único que hay que mostrar a un cliente o al público): no se muestra el video. Se dibuja la mesa desde arriba con sus sillas, una figura por comensal y un ícono por plato. **Resuelve la privacidad de la pantalla**: ninguna cara, ninguna persona reconocible, y se puede proyectar en el salón. Es lo que ya corre en `/<local>/salon`.
 - **Video**: la imagen de la cámara, **ya con las caras difuminadas en la computadora** (C-3), con las capas encima: el recuadro de cada mesa y, por plato, el anillo del estado y una etiqueta con el nombre del plato. Sirve para armar la cámara, para confiar en lo que detecta y para depurar; no para dejarlo puesto. Solo dibuja lo que la cámara ve de verdad.
 
-El cambio de modo es un segmento en la barra de estado. Los dos modos comparten los datos de `/<local>/salon/estado`; el video necesita además el **último frame difuminado**, que hoy no se guarda en ningún lado sin `--record`. La forma simple: `SalonFeed.on_reading` se queda con los bytes del último `to_jpeg(frame)` **en memoria** (un solo frame, se pisa en cada lectura) y `salon_web.py` lo sirve en `/<local>/salon/frame.jpg`. Así el modo video anda en cualquier corrida y no depende de grabar a disco, que sigue siendo solo con `--record` (la garantía de privacidad de C-3 no cambia: a disco no va nada sin pedirlo).
+El cambio de modo es un segmento en la barra de estado. Los dos modos comparten los datos de `/<local>/salon/estado`; el video necesita además el **último frame difuminado**, que hoy no se guarda en ningún lado sin `--record`. La forma simple: el loop de `app.run` ya tiene el frame difuminado en la mano (el mismo que graba `_record`); se lo pasa a un método nuevo `SalonFeed.keep_frame(frame)`, que guarda los bytes de `to_jpeg(frame)` **en memoria** (un solo frame, se pisa en cada lectura), y `salon_web.py` los sirve en `/<local>/salon/frame.jpg`. (`on_reading` no sirve para esto: recibe las observaciones, no el frame.) Así el modo video anda en cualquier corrida y no depende de grabar a disco, que sigue siendo solo con `--record` (la garantía de privacidad de C-3 no cambia: a disco no va nada sin pedirlo).
 
 ### Los cuatro estados de un plato
 
@@ -42,7 +42,7 @@ El **arco del anillo es cuánto queda** (`fill_ratio`), así el estado se lee au
 
 ### En el celular del mozo
 
-Mismo contenido, otra composición: el salón arriba a todo el ancho, debajo la mesa elegida y los avisos, y el dock de estados **pegado al borde de abajo** (sticky, con `safe-area-inset-bottom`) como barra de mesas activas. Los números de «Ahora» en una fila de cuatro. Tocar una mesa en el salón la elige. El prototipo tiene el botón «Celular» para verlo así desde una computadora.
+Mismo contenido, otra composición: el salón arriba a todo el ancho, debajo la mesa elegida y los avisos, y el dock de estados **pegado al borde de abajo** (sticky, con `safe-area-inset-bottom`) como barra de mesas activas. Los números de «Ahora» en una fila de cuatro. Tocar una mesa en el salón la elige. En un celular sale así sola (`max-width: 620px`); el botón «Celular» del prototipo es para verlo desde una computadora.
 
 ### Qué cambia respecto de lo implementado (`salon.html`)
 
@@ -55,7 +55,7 @@ Mismo contenido, otra composición: el salón arriba a todo el ancho, debajo la 
 Lo que necesita del servidor, además de lo que `/estado` ya manda (`fill_ratio`, `since` y `created_at` en ISO, `dish` que puede ser `null`, `message`, `waiter` por mesa):
 
 - `GET /<local>/salon/frame.jpg`: el último frame difuminado (modo video).
-- `taken_by` en cada aviso: quién respondió «Voy» (C-5). Mientras no esté, el panel muestra «Nadie respondió · mozo».
+- `taken_by` en cada aviso: quién respondió «Voy» (C-5). Mientras no esté, el panel muestra «Nadie respondió · mozo» (el mozo sale de la mesa del aviso; el aviso no lo trae).
 - Quién mira (para marcar sus mesas): el usuario de R-1. Sin login, todas las mesas sin marca.
 
 Lo demás (colores, tipografías Barlow y Barlow Condensed, el dibujo de mesas, sillas, personas y platos, la animación de cambio) es lo que ya está: `plate()` está copiada tal cual de `salon.html`, y los datos de ejemplo del prototipo tienen la forma real de `/estado`, así que lo que se implemente a partir de él usa los campos que existen.
