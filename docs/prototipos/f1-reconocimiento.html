@@ -240,7 +240,7 @@ const tableWaiter = id => tableOf(id)?.waiter ?? null;
 const dishName = p => p.dish ?? "Plato";
 const stateOf = p => STATE_NAME[p.state] ? p.state : "comiendo";  // como plate(): un estado raro no rompe nada
 function ago(iso){ if(!iso) return ""; const s=Math.max(0,Math.round((NOW-Date.parse(iso))/1000)); if(s<60) return `${s} s`; const m=Math.floor(s/60); return m<60?`${m} min`:`${Math.floor(m/60)} h ${m%60} min`; }
-const hhmm = iso => new Date(iso).toLocaleTimeString("es-UY",{timeZone:TZ,hour:"2-digit",minute:"2-digit",hour12:false});
+const hhmm = iso => new Date(iso).toLocaleTimeString("es-UY",{timeZone:TZ,hour:"2-digit",minute:"2-digit",hourCycle:"h23"});
 const alertTitle = (type,name) => (ALERT_TITLE[type]||(n=>`${n}: aviso`))(name);
 const alertColor = type => ALERT_COLOR[type]||"#9aa3ad";
 const plainMessage = m => String(m??"").replace(/^[^\p{L}\p{N}]+/u,"");  // sin el emoji, como salon.html
@@ -392,13 +392,13 @@ function renderVideo(){
 }
 
 function renderSide(){
-  const t=tableOf(selected);
+  const t=tableOf(selected)||{id:null,name:"Sin mesa",waiter:null,plates:[],since:null,people:false};  // una mesa que ya no está (zonas redibujadas)
   const rows=t.plates.map(p=>{ const st=stateOf(p); return `<div class="prow"><i style="background:${COLOR[st]}"></i><span class="nm">${esc(dishName(p))}</span><span class="st">${STATE_NAME[st]}</span><div class="bar"><b style="width:${Math.round((p.fill_ratio ?? FILL[st])*100)}%;background:${COLOR[st]}"></b></div></div>`; }).join("")
     || `<p class="muted">Mesa libre.</p>`;
   $("table-card").innerHTML=`<div class="card-h"><h2>${esc(t.name)}</h2><small>${t.waiter?esc(t.waiter)+" · mozo"+(t.waiter===ME?" · tuya":""):"Sin mozo asignado"}</small></div>${rows}
 <div class="label num" style="margin-top:10px">${t.since?"Sentados desde las "+hhmm(t.since):(t.people?"Hay gente, sin platos":"Libre")} · ${t.plates.length} ${t.plates.length===1?"plato":"platos"}</div>`;
   const A=[...snap.alerts].sort((a,b)=>Date.parse(a.created_at)-Date.parse(b.created_at));  // el más viejo arriba
-  $("alerts-card").innerHTML=`<div class="card-h"><h2>Avisos</h2><span class="label num">${A.length} abiertos</span></div>`+
+  $("alerts-card").innerHTML=`<div class="card-h"><h2>Avisos</h2><span class="label num">${A.length} ${A.length===1?"abierto":"abiertos"}</span></div>`+(A.length?"":`<p class="muted">Nada pendiente: todas las mesas atendidas.</p>`)+
     A.map(a=>`<div class="alert"><span class="sev" style="background:${alertColor(a.type)}"></span><p>${esc(alertTitle(a.type,tableName(a.table_id)))}<small>${esc(plainMessage(a.message))}</small>${a.answered_by?`<span class="taken">Voy · ${esc(a.answered_by)}</span>`:a.answered_by===null?`<span class="taken" style="color:var(--por_terminar)">Nadie respondió${tableWaiter(a.table_id)?" · "+esc(tableWaiter(a.table_id)):""}</span>`:""}</p><time class="num">${ago(a.created_at)}</time></div>`).join("");
   const occ=snap.tables.filter(x=>x.plates.length), plates=Object.values(snap.counts).reduce((a,b)=>a+b,0);
   const since=snap.tables.filter(x=>x.since).map(x=>(NOW-Date.parse(x.since))/60000);  // promedio desde `since`, acá
@@ -463,6 +463,7 @@ $("sim").onclick=()=>{ const t=tableOf("T1"), [p0,p1]=t.plates, p=(p0.state==="v
   snap.alerts=snap.alerts.filter(a=>a.table_id!==t.id);  // el aviso de la mesa sigue a sus platos
   if(t.status==="terminada") snap.alerts.push({id:"sim-t", type:"mesa_terminada", table_id:t.id, message:`🍽️ ${t.name}: terminó.`, created_at:new Date(NOW).toISOString(), answered_by:null});
   else if(t.plates.some(x=>x.state==="vacio")) snap.alerts.push({id:"sim-v", type:"plato_vacio", table_id:t.id, message:`🧹 ${t.name}: hay platos vacíos para retirar.`, created_at:new Date(NOW).toISOString(), answered_by:null});
+  snap.ts=new Date(NOW).toISOString();  // una lectura nueva: ya no hay corte
   selected="T1"; render(); };
 $("sim-stale").onclick=()=>{ snap.ts=new Date(NOW-11*60*1000).toISOString(); render(); };  // 11 min sin lecturas
 try{ if(localStorage.getItem("f1-device")==="phone") setDevice(true); }catch(e){}

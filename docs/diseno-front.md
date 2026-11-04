@@ -53,6 +53,7 @@ Mismo contenido, otra composición: el salón arriba a todo el ancho, debajo la 
 3. La **marca de las mesas del mozo** (necesita saber quién mira: login de R-1).
 4. En el aviso, **quién lo tomó** («Voy · Juan») o que nadie respondió (necesita C-5).
 5. El dock sticky en celular.
+6. En el panel, los avisos del **más viejo al más nuevo** (hoy `salon.html` pone el más nuevo arriba): el que lleva más tiempo esperando es el que hay que atender.
 
 Lo que necesita del servidor, además de lo que `/estado` ya manda (`fill_ratio`, `since` y `created_at` en ISO, `dish` que puede ser `null`, `message`, `waiter` por mesa):
 
