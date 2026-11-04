@@ -48,7 +48,7 @@ body{color:var(--fg);font-family:var(--f-display);font-size:14px;font-weight:400
 .tbl{cursor:pointer}
 .tbl:focus{outline:none}
 .tbl:focus-visible .tbl-top{stroke:#3E8BFF;stroke-opacity:1}
-.changed{animation:pop 1.2s ease-out}
+.changed{animation:pop 1.2s ease-out;transform-box:fill-box;transform-origin:center}  /* sin esto escala desde el origen del SVG */
 @keyframes pop{0%{transform:scale(1.25)}100%{transform:scale(1)}}
 
 .side{display:grid;gap:16px;align-content:start;min-width:0}
