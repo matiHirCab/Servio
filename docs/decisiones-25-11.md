@@ -1,6 +1,6 @@
 # Decisiones de producto y negocio para llegar al 25/11
 
-Lo que el equipo tiene que decidir **en una reunión** para que lo que queda de las semanas 3 y 4 se pueda hacer de corrido, sin frenarse a preguntar. No es un reparto de tareas: la implementación la hace Claude tarjeta por tarjeta, y lo que necesita es que estas preguntas tengan respuesta. Cada punto trae el contexto en dos líneas, las opciones, la propuesta que se discutió y la **decisión del equipo** (respuestas del 8/11/2026). Este archivo manda: si una tarjeta choca con algo de acá, gana esto.
+Las decisiones de producto y negocio que el equipo tomó el 8/11/2026 para que lo que queda de las semanas 3 y 4 se haga de corrido, sin frenarse a preguntar. No es un reparto de tareas: la implementación la hacen agentes tarjeta por tarjeta, y lo que necesitan es que estas preguntas tengan respuesta. Cada punto trae el contexto en dos líneas, las opciones, la propuesta que se discutió y la **decisión del equipo** (respuestas del 8/11/2026). Este archivo manda: si una tarjeta choca con algo de acá, gana esto.
 
 Fuentes: [context/01-producto.md](context/01-producto.md), [context/05-reglas-alertas.md](context/05-reglas-alertas.md), [context/12-roles.md](context/12-roles.md), [context/13-metricas.md](context/13-metricas.md), [diseno-front.md](diseno-front.md), [legal-uruguay.md](legal-uruguay.md), [roadmap-producto.md](roadmap-producto.md) y el Trello.
 
@@ -21,7 +21,7 @@ Fuentes: [context/01-producto.md](context/01-producto.md), [context/05-reglas-al
 | 9 | Alguien se levanta (baño, fumar) con el plato lleno | Pausar el reloj de «sigue lleno» mientras no hay nadie |
 | 10 | Mesa con platos y sin gente (se fueron sin pagar / ya pagaron) | Configurable X: avisar si pasan X minutos sin gente y con platos |
 | 11 | Postre, café, vasos, tazas | Sin estado «sobremesa»; solo mesa vacía del todo |
-| 12 | Mesa grande (8 personas, platos que llegan de a tandas) | Estado «terminando» para mesas de N+ platos (default 4) al 80 %; pasa a «mesa terminó» tras un tiempo; todo configurable |
+| 12 | Mesa grande (8 personas, platos que llegan de a tandas) | Estado «terminando» para mesas de N+ personas (default 4; platos si no hay conteo) al 80 %; pasa a «mesa terminó» tras un tiempo; todo configurable |
 | 13 | Cliente que rechaza el plato (se lo llevan lleno) | Posible devolución sin preguntar motivo; detectar el acto de comer por los cubiertos |
 | 14 | Mesas que se juntan o se mueven | Detección automática de mesas; el admin corrige a mano desde la vista |
 | **Opciones técnicas con impacto en el negocio** | | |
@@ -38,7 +38,7 @@ Fuentes: [context/01-producto.md](context/01-producto.md), [context/05-reglas-al
 | 24 | Reloj: ¿se vende con reloj o con el celular en el bolsillo? | Reloj y celular, sin limitar |
 | 25 | Integración con la comanda (POS) | Sin POS en el piloto; el software preparado para integrar; sin comanda nada rompe |
 | 26 | Legal: cartel, inscripción en la URCDP, aviso a los mozos, abogado | Para después del 25/11 |
-| 27 | Datos de los mozos: ¿se muestran por nombre al dueño? | El mozo no ve métricas, ninguna; `/metricas` solo en los chats de encargado y dueño (C-7), nunca en el grupo |
+| 27 | Datos de los mozos: ¿se muestran por nombre al dueño? | El mozo no ve métricas, ninguna; `/metricas` solo en los chats de encargado y dueño (C-7), nunca en el grupo; sin configurar, en ninguno |
 | 28 | Piloto: modo sombra primero y cuánto dura | Para después del 25/11 |
 | **El 25/11** | | |
 | 29 | Qué muestra la demo | Sin decisión puntual: va la propuesta (comida real, 3 minutos) |
@@ -48,7 +48,7 @@ Fuentes: [context/01-producto.md](context/01-producto.md), [context/05-reglas-al
 
 ## A · Validar los diseños
 
-Los tres diseños están en [diseno-front.md](diseno-front.md) con un prototipo cada uno en `docs/prototipos/` (F-1 y F-3 además publicados, privados hasta que Jessica los comparta; F-2 se abre desde el repo). La reunión los abre y responde esto.
+Los tres diseños están en [diseno-front.md](diseno-front.md) con un prototipo cada uno en `docs/prototipos/` (F-1 y F-3 además publicados, privados hasta que Jessica los comparta; F-2 se abre desde el repo). Esto es lo que el equipo respondió sobre ellos.
 
 ### 1. F-1, el salón: ¿quién lo mira y dónde?
 
@@ -94,17 +94,17 @@ Los tres diseños están en [diseno-front.md](diseno-front.md) con un prototipo 
 
 **Propuesta.** La del diseño. Y una regla de negocio: contestar es opcional, la cámara cierra los avisos sola cuando ve el plato retirado. El mozo que no contesta nunca no rompe nada; solo no tiene métrica de tiempo de respuesta.
 
-**Decisión:** Botones («Voy», «Listo», «No hacía falta») más el texto libre de qué pasó con el plato, como hoy. El aviso se cierra solo cuando la cámara ve que el plato se sacó. Cada mozo recibe solo los avisos de **sus** mesas; si no hay mesas definidas por mozo, todo va a un solo chat. No hay pregunta «¿Mesa 2 o Mesa 3?»: «Mesa X» va en negrita al principio del mensaje para que resalte. *Cómo se aplica (completado al revisar, a confirmar):* una respuesta que **cita** el aviso (un botón, o una respuesta rápida del reloj y del celular, que Telegram manda como respuesta a ese mensaje) va a ese aviso, como hoy hace `feedback.py` con el texto libre. Una respuesta **suelta**, sin cita: en el chat privado de un mozo (C-7) va a su aviso abierto más reciente; en el grupo compartido se ignora, porque no se sabe de quién ni para qué mesa es y adivinar cobra el tiempo de respuesta al aviso equivocado. Si en el reloj no se ven los botones (lo que F-3 asume hasta probarlo), la respuesta rápida igual cita el mensaje.
+**Decisión:** Botones («Voy», «Listo», «No hacía falta») más el texto libre de qué pasó con el plato, como hoy. El aviso se cierra solo cuando la cámara ve que el plato se sacó. Cada mozo recibe solo los avisos de **sus** mesas; si no hay mesas definidas por mozo, todo va a un solo chat. No hay pregunta «¿Mesa 2 o Mesa 3?»: «Mesa X» va en negrita al principio del mensaje para que resalte. *Cómo se aplica (completado al revisar, a confirmar):* una respuesta que **cita** el aviso (un botón, o una respuesta rápida del reloj y del celular, que Telegram manda como respuesta a ese mensaje) va a ese aviso. Hoy `feedback.py` solo mira la cita a su propia pregunta «escribí qué pasó»; C-5 extiende eso a la cita del aviso. Que la respuesta rápida del reloj llegue como cita es lo que F-3 asume y hay que probar en un reloj real (punto 24). Una respuesta **suelta**, sin cita: en el chat privado de un mozo (C-7) va a su aviso abierto más reciente; en el grupo compartido se ignora, porque no se sabe de quién ni para qué mesa es y adivinar cobra el tiempo de respuesta al aviso equivocado. Si en el reloj no se ven los botones (lo que F-3 asume hasta probarlo), la respuesta rápida igual cita el mensaje.
 
 ### 6. F-3: tiempos de recordatorio y escalado
 
-**Contexto.** Hoy: aviso, recordatorio a los 3 min, otro a los 6, nada más. F-3 agrega: «Voy» frena los recordatorios; «Listo» sin que la cámara lo vea resuelto en 10 min insiste una vez y escala; sin respuesta, escalado al encargado a los 9 min. En un restaurante lleno, 9 minutos de una mesa terminada sin atender ya es mucho; en uno tranquilo, escalar a los 5 puede ser molesto.
+**Contexto.** Hoy: aviso, recordatorio a los 3 min, otro a los 6, nada más; el intervalo del recordatorio ya se configura (`ALERT_REMINDER`, `--reminder`, el toml). Lo que no existe es el escalado. F-3 agrega: «Voy» frena los recordatorios; «Listo» sin que la cámara lo vea resuelto en 10 min insiste una vez y escala; sin respuesta, escalado al encargado a los 9 min. En un restaurante lleno, 9 minutos de una mesa terminada sin atender ya es mucho; en uno tranquilo, escalar a los 5 puede ser molesto.
 
-**Opciones.** 9 min fijo; 5 min; configurable por local con default.
+**Opciones.** Para el escalado y los 10 min de «Listo», que son lo nuevo: 9 min fijo; 5 min; configurable por local con default.
 
 **Propuesta.** Configurable por local en `servio.toml` (junto con T1, T2 y R de `05-reglas-alertas.md`), default 9 min. El piloto dice si bajarlo.
 
-**Decisión:** Sí, configurables por local (recordatorio y escalado), con los valores de hoy como default.
+**Decisión:** Sí, configurables por local (recordatorio, cantidad de recordatorios, escalado y los 10 min de «Listo»), en el mismo lugar que T1, T2 y R, con los valores de hoy (y 9 min para el escalado) como default.
 
 ---
 
@@ -140,7 +140,7 @@ Lo que Servio tiene que hacer cuando pasa algo que no es «dos personas, dos pla
 
 **Propuesta.** Pausar el reloj mientras no hay nadie: si alguien se fue 8 minutos y vuelve, no le cae «¿está todo bien?» a los 2 minutos de sentarse. Aviso esperado: ninguno mientras no hay nadie; «sigue lleno» solo si el plato sigue lleno 10 minutos **con gente**.
 
-**Decisión:** Pausar el reloj del plato mientras no hay nadie, nada más. *Alcance (completado al revisar):* se pausa el reloj de «sigue lleno» (T2), que es el único que necesita gente; el de «retirar» (T1) sigue corriendo, porque un plato vacío sin gente igual hay que retirarlo (punto 10 y `05-reglas-alertas.md`).
+**Decisión:** Pausar el reloj del plato mientras no hay nadie, nada más. *Alcance (completado al revisar):* se pausa el reloj de «sigue lleno» (T2), que es el único que necesita gente; el de «retirar» (T1) sigue corriendo, porque un plato vacío sin gente igual hay que retirarlo (punto 10 y `05-reglas-alertas.md`). Pausar es pausar: el tiempo acumulado con gente se conserva (un plato lleno 9 min con gente, 8 min sin nadie y 1 min más con gente, avisa: estuvo 10 min lleno con gente). Un «sigue lleno» ya abierto **no se cierra** por falta de gente (reemplaza la regla de hoy de cerrarlo a las 2 lecturas sin gente, que lo cerraba y lo volvía a abrir); se cierra cuando el plato se va o la mesa queda libre.
 
 ### 10. Mesa con platos y sin gente
 
@@ -166,7 +166,7 @@ Lo que Servio tiene que hacer cuando pasa algo que no es «dos personas, dos pla
 
 **Propuesta.** Confirmar que así está bien. Un posible cambio: «mesa terminó» con el 80 % de los platos vacíos en mesas de 6 o más, para que el mozo vaya con la cuenta antes. Para el piloto, no.
 
-**Decisión:** Estado «terminando» solo para mesas grandes, de N o más (default 4): si terminó el 80 %, la mesa pasa a «terminando»; si está mucho tiempo así, pasa a «mesa terminó». El porcentaje, el N y el tiempo son configurables por el admin. *Ajuste al revisar:* el equipo dijo «personas», pero Servio no cuenta personas (solo sabe si hay alguien, `people_present`); **N se cuenta en platos de comida**, que es lo que la cámara ve. Contar personas sería una capacidad nueva y no está decidida. *Para implementar (completado al revisar):* default del tiempo 5 min; «terminando» es un estado de mesa nuevo al lado de `por_terminar` (que sigue siendo solo el color) y cambia cuándo se abre `mesa_terminada` en mesas grandes, así que el PR actualiza `03-contratos.md`, `05-reglas-alertas.md` y los fixtures en el mismo paso (regla 1 de `AGENTS.md`).
+**Decisión:** Estado «terminando» solo para mesas grandes, de N o más (default 4): si terminó el 80 %, la mesa pasa a «terminando»; si está mucho tiempo así, pasa a «mesa terminó». El porcentaje, el N y el tiempo son configurables por el admin. *Para implementar (completado al revisar):* el detector local de personas (`people.py`) ya devuelve una caja por persona, pero al contrato solo llega `people_present` (sí/no). C-1b propaga el **conteo** (`people_count` en la observación, `03-contratos.md`) y **N se cuenta en personas**; si no hay conteo (clasificador sin detector local), se cuenta en platos de comida. «Terminando» es un estado de **mesa**; el `FINISHED_AFTER` de hoy, que pasa un plato de `por_terminar` a `vacio` a los 6 min, es por **plato** y sigue igual. *Para implementar (completado al revisar):* default del tiempo 5 min; «terminando» es un estado de mesa nuevo al lado de `por_terminar` (que sigue siendo solo el color) y cambia cuándo se abre `mesa_terminada` en mesas grandes, así que el PR actualiza `03-contratos.md`, `05-reglas-alertas.md` y los fixtures en el mismo paso (regla 1 de `AGENTS.md`).
 
 ### 13. Cliente que rechaza el plato
 
@@ -176,7 +176,7 @@ Lo que Servio tiene que hacer cuando pasa algo que no es «dos personas, dos pla
 
 **Propuesta.** Las dos. Un plato lleno que desaparece queda como «posible devolución» y el mozo recibe la pregunta de motivo (los mismos botones de hoy). Sin respuesta, cuenta igual pero sin motivo.
 
-**Decisión:** Se marca como posible devolución y **no** se pregunta el motivo. Reconocer el acto de comer por el movimiento de los cubiertos (el utensilio entra y sale más de X veces): si la persona comió, un plato que se va aunque parezca lleno es retiro y no devolución, y el plato lleno que llega después es uno nuevo de otra cosa.
+**Decisión:** Se marca como posible devolución y **no** se pregunta el motivo. *Alcance (completado al revisar):* lo que no se pregunta es por el plato que **desaparece lleno**; la pregunta de motivo del aviso «sigue lleno» (A-4, con sus botones) sigue como está, y de ahí salen `desperdicio`, la mitad «por qué» de `platos_que_vuelven` y los motivos de D-4. La posible devolución suma al conteo de platos que vuelven, sin motivo. Reconocer el acto de comer por el movimiento de los cubiertos (el utensilio entra y sale más de X veces): si la persona comió, un plato que se va aunque parezca lleno es retiro y no devolución, y el plato lleno que llega después es uno nuevo de otra cosa.
 
 ### 14. Mesas que se juntan o se mueven
 
@@ -197,7 +197,7 @@ Lo que Servio tiene que hacer cuando pasa algo que no es «dos personas, dos pla
 | Opción | Qué da | Qué cuesta | Licencia |
 |---|---|---|---|
 | Seguir con `best.pt` y entrenarle más clases | Lo que etiquetemos, y conserva el plan B de estado | Etiquetar cientos de fotos por clase (B-3) | AGPL (ultralytics) |
-| **YOLO-World** o el YOLOE que ya está, con más palabras | Detecta lo que se le pide por texto: plato, bowl, fuente, tabla, canasta, vaso | Un día de prueba; **pierde el plan B de estado** si reemplaza a `best.pt` en vez de sumarse | GPL |
+| **YOLO-World** o el YOLOE que ya está, con más palabras | Detecta lo que se le pide por texto: plato, bowl, fuente, tabla, canasta, vaso | Un día de prueba; **pierde el plan B de estado** si reemplaza a `best.pt` en vez de sumarse | GPL (YOLO-World) / AGPL (YOLOE, y `ultralytics` en los dos casos) |
 | RF-DETR (Roboflow) | Más preciso que YOLO en datasets propios | Etiquetar igual que la primera | Apache 2.0 |
 | Claude mirando la mesa entera | Entiende la escena («picada al medio y tres platitos») | Más caro por lectura y manda la mesa con gente a la nube (punto 17) | — |
 
@@ -223,7 +223,7 @@ Lo que Servio tiene que hacer cuando pasa algo que no es «dos personas, dos pla
 
 ### 18. Cadencia y costo por mesa por hora
 
-**Contexto.** Una lectura cada 30 segundos por mesa, y hoy cada lectura llama al modelo (no hay detector de cambios; mandar solo lo que cambió es C-2). El costo por mesa por hora no está medido todavía (sale del tablero de B-3) y es lo que define el precio mínimo. C-2 lo baja a la mitad (caché por plato, no volver a preguntar por un plato vacío).
+**Contexto.** Una lectura cada 30 segundos por mesa. Hoy se saltea la llamada al modelo cuando la mesa entera no cambió (`CLAUDE_REUSE_UNCHANGED`, con refresco cada 4 lecturas); si cambió algo, va toda la mesa. Mandar solo los platos que cambiaron, con caché por plato, es C-2. El costo por mesa por hora no está medido todavía (sale del tablero de B-3) y es lo que define el precio mínimo. C-2 lo baja a la mitad (caché por plato, no volver a preguntar por un plato vacío).
 
 **Opciones.** 30 s; 60 s (la mitad del costo, avisos un minuto más tarde); adaptativo (rápido cuando la mesa cambia, lento cuando no).
 
@@ -237,7 +237,7 @@ Lo que Servio tiene que hacer cuando pasa algo que no es «dos personas, dos pla
 
 ### 19. Cliente objetivo del primer piloto
 
-**Contexto.** El problema que se vende sale de 297 reseñas de 14 restaurantes de Montevideo: el 18,5 % se queja del servicio y el 57 % de las de 1 y 2 estrellas. Pero el producto no sirve igual en todos lados: un bar de tapas con platos que van y vienen es el caso 7 todo el tiempo; un restaurante de menú de pasos tiene mesas que se quedan dos horas.
+**Contexto.** El problema que se vende sale de 297 reseñas de 14 restaurantes de Montevideo (`context/13-metricas.md`, sección «Externas»; las reseñas, en la carpeta compartida `servio-resenas/`): el 18,5 % se queja del servicio y el 57 % de las de 1 y 2 estrellas. Pero el producto no sirve igual en todos lados: un bar de tapas con platos que van y vienen es el caso 7 todo el tiempo; un restaurante de menú de pasos tiene mesas que se quedan dos horas.
 
 **Opciones.** Restaurante de 15 a 40 mesas con encargado y platos individuales; cadena chica con 2 o 3 locales (más mesas con una sola venta); bar o cervecería (rotación alta, el aviso de vasos vacíos vende más que el de platos).
 
@@ -315,7 +315,7 @@ Lo que Servio tiene que hacer cuando pasa algo que no es «dos personas, dos pla
 
 **Propuesta.** Métricas por nombre solo para encargado y dueño; el mozo ve las suyas si las pide; nunca comparativas en el grupo. En el pitch: «para que el encargado sepa a quién ayudar», no «para controlar».
 
-**Decisión:** El mozo no ve métricas, ninguna, ni aunque las pida. *Para implementar (completado al revisar):* `/metricas` deja de responderse en el grupo donde están los mozos; se responde solo en los chats de encargado y dueño. Esos chats **no existen hoy**: los define C-7 en `servio.toml` (`encargado_telegram`, `dueno_telegram`), igual que el chat de cada mozo. Sin configurar, `/metricas` responde solo en `TELEGRAM_ADMIN_CHAT_ID`; en el grupo, nunca. El escalado del punto 6 va al mismo `encargado_telegram`, y sin configurar, al chat admin.
+**Decisión:** El mozo no ve métricas, ninguna, ni aunque las pida. *Para implementar (completado al revisar):* `/metricas` deja de responderse en el grupo donde están los mozos; se responde solo en los chats de encargado y dueño. Esos chats **no existen hoy**: los define C-7 en `servio.toml` (`encargado_telegram`, `dueno_telegram`), igual que el chat de cada mozo; el bot, que hoy solo escucha el grupo, pasa a escuchar también esos chats. Sin configurar, `/metricas` **no responde en ningún chat** (las métricas quedan en `tools/metricas.py` y el dashboard); en el grupo, nunca. `TELEGRAM_ADMIN_CHAT_ID` sigue siendo el chat de operaciones (salud del sistema), no se mezcla. El escalado del punto 6 va a `encargado_telegram`; sin configurar, al grupo, como un recordatorio más.
 
 ### 28. Piloto: modo sombra y duración
 
@@ -363,7 +363,7 @@ Mientras no se actualicen, los docs de contexto dicen lo viejo; este archivo gan
 | 5, 6 | `diseno-front.md` F-3 (palabra suelta, `telegram` en `salon.json`), `context/05-reglas-alertas.md` | Botones, tiempos configurables, mozo ↔ mesas en `servio.toml` |
 | 9, 10, 12 | `context/05-reglas-alertas.md`, `context/03-contratos.md`, fixtures | Pausa de T2, aviso de mesa sin gente, estado «terminando» |
 | 7, 8 | `context/03-contratos.md` (`Item`), `context/05-reglas-alertas.md`, prompt | `kind` por plato; qué cuenta y qué no |
-| 13 | `context/05-reglas-alertas.md`, `context/13-metricas.md` | Posible devolución sin motivo |
+| 13 | `context/05-reglas-alertas.md`, `context/13-metricas.md`, `roadmap-producto.md` (D-4) | Posible devolución sin motivo; el motivo sigue en «sigue lleno» |
 | 14 | `diseno-front.md` F-1, `context/04-vision.md` | Mesas automáticas corregibles a mano |
 | 17 | `context/04-vision.md`, `legal-uruguay.md`, `.env.example` | Bloque de color en vez de pixelado, detrás del flag |
 | 27 | `context/12-roles.md` («Pendiente»), `context/06-notificaciones.md` | `/metricas` nunca en el grupo |
