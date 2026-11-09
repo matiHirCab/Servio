@@ -899,7 +899,7 @@ def test_release_cleans_a_stale_lock_on_a_card_moved_back_by_hand():
     board.take("cccccc05", "yo")
     api.cards["c5"]["idList"] = "L3"  # alguien la arrastró de vuelta sin comentar 🔓
     api.comments["c5"][-1]["date"] = "2026-01-01T00:00:00.000Z"  # el candado es viejo
-    with pytest.raises(SystemExit, match="la tomó yo justo antes"):
+    with pytest.raises(SystemExit, match="candado viejo de yo"):
         board.take("cccccc05", "otro")
     board.release("cccccc05", "quedó colgada")  # limpia el candado, no mueve nada
     assert api.list_of("cccccc05").startswith("Semana 3")
