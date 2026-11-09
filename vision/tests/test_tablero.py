@@ -943,6 +943,59 @@ def test_release_and_finish_refuse_foreign_cards():
         board.finish("ajenaaaa", 1, "", agent="yo")
 
 
+def test_human_check_mark_does_not_reset_locks():
+    comments = [
+        (
+            "2026-11-09T10:00:01Z",
+            tablero.lock_text("aaaaaaaaaaaa", "ana", "Semana 3", datetime.now(UTC)),
+        ),
+        ("2026-11-09T10:00:02Z", "✅ probado en casa, anda"),
+        ("2026-11-09T10:00:03Z", "🔓 ojo con esto"),
+    ]
+    assert tablero.winner(comments)[1] == "ana"
+    comments.append(("2026-11-09T10:00:04Z", "✅ Integrada en develop: https://…"))
+    assert tablero.winner(comments) is None
+
+
+def test_depende_without_links_warns():
+    _api, board = board_with(
+        card(
+            "c9",
+            "cccccc09",
+            "P2 · C-9 · X",
+            "**Toca:** `a/` · **Depende de:** C-5, A-4\n\nx",
+        )
+    )
+    cards = board.cards()
+    state, why = board.status(cards[0], cards)
+    assert state == "libre" and any("no trae enlaces" in w for w in why)
+
+
+def test_agent_name_must_be_a_single_word():
+    _api, board = board_with(card("c5", "cccccc05", "C-5", HEADER_C5))
+    with pytest.raises(SystemExit, match="una palabra sin espacios"):
+        board.take("cccccc05", "claude · jessica")
+
+
+def test_label_failure_after_the_move_is_a_note_not_an_error():
+    api, board = board_with(
+        card("a4", "aaaaaaa4", "A-4", "", "LD"),
+        card("c5", "cccccc05", "P1 · C-5 · Voy", HEADER_C5),
+    )
+    board.sync_labels(board.cards())  # C-5 queda con «Libre»
+    real_delete = api.delete
+
+    def failing(path, **params):
+        if "/idLabels/" in path:
+            raise SystemExit("Trello respondió 503")
+        return real_delete(path, **params)
+
+    api.delete = failing
+    taken = board.take("cccccc05", "yo")
+    assert api.list_of("cccccc05") == "In progress"
+    assert any("no se pudo etiquetar" in n for n in taken.notes)
+
+
 def test_credentials_from_env_files(tmp_path):
     repo = tmp_path / ".env"
     repo.write_text("TRELLO_KEY='k1'   # comentario\nTRELLO_TOKEN=\n", encoding="utf-8")

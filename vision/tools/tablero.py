@@ -79,6 +79,9 @@ LABEL_COLORS = {LABEL_FREE: "green", LABEL_BLOCKED: "red", LABEL_HUMAN: "yellow"
 LOCK = "🔒"
 UNLOCK = "🔓"
 DONE_MARK = "✅"
+# Lo que escribe la herramienta y borra los candados anteriores. Un «✅ probado» de una
+# persona no cuenta.
+RESET_PREFIXES = (f"{UNLOCK} soltada", f"{UNLOCK} candado", f"{DONE_MARK} Integrada")
 RETRIES_429 = 3  # reintentos cuando Trello devuelve «demasiadas llamadas»
 LOCK_READ_RETRIES = 4  # lecturas hasta ver el candado propio
 # La edad de un candado se mide con la hora de Trello cuando hay un comentario propio
@@ -114,6 +117,7 @@ class Header:
     """Lo que el encabezado de una tarjeta le dice al tablero."""
 
     depends_on: list[str] = field(default_factory=list)  # enlaces cortos
+    depends_text: str = ""  # lo escrito, para avisar si no trae enlaces
     touches: list[str] = field(default_factory=list)  # rutas del repo
     area: str = ""
     decisions: str = ""
@@ -163,6 +167,7 @@ def parse_header(desc: str) -> Header:
         seen.add(key)
         if key == "depende":
             header.depends_on = short_links(value)
+            header.depends_text = value
         elif key == "toca":
             header.touches = [p.strip() for p in _BACKTICKED.findall(value)]
         elif key == "area":
@@ -250,7 +255,7 @@ def active_claims(comments: list[tuple[str, str]]) -> list[tuple[str, str, str]]
     claims: list[tuple[str, str, str]] = []
     for _date, text in ordered:
         t = text.strip()
-        if t.startswith((UNLOCK, DONE_MARK)):
+        if t.startswith(RESET_PREFIXES):
             claims = []
         elif (lock := parse_lock(t)) is not None:
             claims.append(lock)
@@ -496,7 +501,7 @@ class Board:
             rows = self.api.get(f"/cards/{card.id}/actions", **params)
             out.extend((r["date"], r["data"]["text"]) for r in rows)
             if len(rows) < 100 or any(
-                r["data"]["text"].strip().startswith((UNLOCK, DONE_MARK)) for r in rows
+                r["data"]["text"].strip().startswith(RESET_PREFIXES) for r in rows
             ):
                 return out
             before = rows[-1]["id"]
@@ -572,6 +577,11 @@ class Board:
             return "choca", clashes + unknown
         if is_work_list(card.list_name, extra=True) and not card.header.touches:
             unknown.append("sin encabezado: no se sabe qué toca")
+        text = card.header.depends_text.strip().lower()
+        if text and text != "nada" and not card.header.depends_on:
+            unknown.append(
+                f"«Depende de: {card.header.depends_text}» no trae enlaces (XXXXXXXX): no bloquea"
+            )
         return "libre", unknown
 
     def clashes(self, card: Card, cards: list[Card]) -> list[str]:
@@ -662,7 +672,15 @@ class Board:
 
     # --- el protocolo
 
+    @staticmethod
+    def _check_agent(agent: str) -> None:
+        if not agent or any(ch in agent for ch in " ·«»\n"):
+            raise SystemExit(
+                f"--agente «{agent}»: una palabra sin espacios, por ejemplo claude-jessica."
+            )
+
     def take(self, short: str, agent: str, force: bool = False) -> Card:
+        self._check_agent(agent)
         cards = self.cards()
         card = next((c for c in cards if c.short == short or c.id == short), None)
         if card is None:
@@ -721,17 +739,31 @@ class Board:
                         "y no está en curso: `soltar --agente <quién>` lo limpia, o "
                         "`tomar --forzar` lo pisa."
                     )
+                if won is None:
+                    raise SystemExit(
+                        (
+                            f"{card.name}: cambió de manos dos veces seguidas; probá de nuevo.",
+                            2,
+                        )
+                    )
                 raise SystemExit((f"{card.name}: la tomó {who} justo antes.", 2))
             self._still_there(card, origin)  # alguien pudo moverla a mano en el medio
             self.move(card, LIST_IN_PROGRESS)
         except BaseException:
             # cualquier cosa que falle entre el candado y el movimiento (red, Ctrl-C, una
             # carrera perdida) no deja el candado puesto en una tarjeta que no se movió
-            if card.list_name != LIST_IN_PROGRESS and mine:
+            if mine:
                 try:
-                    self.api.delete(f"/actions/{mine}")
-                except SystemExit:
-                    pass
+                    moved = self.card(card.id).list_name == LIST_IN_PROGRESS
+                except (
+                    SystemExit
+                ):  # sin red no se sabe: mejor un candado de más que una
+                    moved = True  # tarjeta en curso sin candado
+                if not moved:
+                    try:
+                        self.api.delete(f"/actions/{mine}")
+                    except SystemExit:
+                        pass
             raise
         # Ya en curso, los choques de archivos se miran de nuevo: otro agente pudo tomar
         # una tarjeta que toca lo mismo en el medio. Si las dos entraron a la vez, retrocede
@@ -791,14 +823,14 @@ class Board:
                 finally:
                     self.move(card, origin)
             raise
-        self.set_label(card, LABEL_FREE, False)
-        self.set_label(card, LABEL_BLOCKED, False)
-        me = self.me()
-        if me not in card.member_ids:
-            try:
+        try:  # la tarjeta ya es nuestra: lo de acá abajo es cosmético
+            self.set_label(card, LABEL_FREE, False)
+            self.set_label(card, LABEL_BLOCKED, False)
+            me = self.me()
+            if me not in card.member_ids:
                 self.api.post(f"/cards/{card.id}/idMembers", value=me)
-            except SystemExit:  # ya estaba, o el token no puede asignar: no es grave
-                pass
+        except SystemExit as e:
+            card.notes.append(f"tomada, pero no se pudo etiquetar o asignar: {e.code}")
         return card
 
     def release(
