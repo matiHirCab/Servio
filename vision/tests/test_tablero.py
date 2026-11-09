@@ -37,7 +37,11 @@ class FakeTrello:
 
     def get(self, path, **params):
         if path.endswith("/lists"):
-            return [{"id": lid, "name": name} for name, lid in LISTS.items()]
+            closed = getattr(self, "closed_lists", set())
+            return [
+                {"id": lid, "name": name, "closed": lid in closed}
+                for name, lid in LISTS.items()
+            ]
         if path.endswith("/labels"):
             return list(self.labels.values())
         if path.endswith("/members"):
@@ -233,8 +237,10 @@ def test_winner_is_oldest_active_lock_and_unlock_resets():
     assert tablero.winner(comments) is None
 
 
-def test_short_links_ignores_plain_words():
+def test_short_links_takes_every_eight_char_token():
+    # «opcional» no es tarjeta: el tablero lo avisa sin bloquear (ver test_unknown_reference…)
     assert tablero.short_links("A-4 (opcional), C-5 (9oDZRoKz), X (aaaaaaa4)") == [
+        "opcional",
         "9oDZRoKz",
         "aaaaaaa4",
     ]
@@ -332,9 +338,108 @@ def test_take_backs_off_if_an_overlapping_card_was_taken_meanwhile():
     api.before_comment_read = sneak
     with pytest.raises(SystemExit) as e:
         board.take("cccccc05", "yo")
-    assert e.value.code[1] == 2 and "toca lo mismo que C-9" in e.value.code[0]
+    assert e.value.code[1] == 2 and "C-9 toca lo mismo" in e.value.code[0]
     assert api.list_of("cccccc05").startswith("Semana 3")
     assert api.comments["c5"][-1]["data"]["text"].startswith("🔓")
+
+
+def test_header_with_paths_as_bullets_under_toca():
+    desc = "**Toca:**\n- `a.py`\n- `b/`\n**Depende de:** X (aaaaaaa4)\n\ntexto"
+    h = tablero.parse_header(desc)
+    assert h.touches == ["a.py", "b/"]
+    assert h.depends_on == ["aaaaaaa4"]
+
+
+def test_card_in_an_archived_list_counts_as_done():
+    api, board = board_with(
+        card("a4", "aaaaaaa4", "A-4", "", "L4"),
+        card("c5", "cccccc05", "P1 · C-5 · Voy", HEADER_C5),
+    )
+    api.closed_lists = {"L4"}
+    board._lists = None  # releer las listas
+    cards = board.cards()
+    c5 = next(c for c in cards if c.short == "cccccc05")
+    assert board.status(c5, cards) == ("libre", [])
+
+
+def test_release_refuses_other_agents_card_unless_forced():
+    api, board = board_with(
+        card("a4", "aaaaaaa4", "A-4", "", "LD"),
+        card("c5", "cccccc05", "P1 · C-5 · Voy", HEADER_C5),
+    )
+    board.take("cccccc05", "ana")
+    with pytest.raises(SystemExit, match="la tiene tomada ana"):
+        board.release("cccccc05", "", agent="beto")
+    board.release("cccccc05", "", agent="beto", force=True)
+    assert api.list_of("cccccc05").startswith("Semana 3")
+
+
+def test_freed_only_lists_cards_that_were_blocked():
+    api, board = board_with(
+        card("a4", "aaaaaaa4", "A-4", "", "LD"),
+        card("c5", "cccccc05", "P1 · C-5 · Voy", HEADER_C5, "LP"),
+        card("c7", "cccccc07", "P1 · C-7 · Por mozo", HEADER_C7),
+        card(
+            "n1", "nuevaaa1", "P2 · N-1 · Nueva sin etiquetas", "**Toca:** `x.py`\n\nx"
+        ),
+    )
+    board.sync_labels(board.cards())
+    assert api.label_names("nuevaaa1") == {"Libre"}
+    _done, freed = board.finish("cccccc05", 72, "")
+    assert [c.short for c in freed] == ["cccccc07"]  # la nueva nunca estuvo bloqueada
+
+
+def test_two_overlapping_cards_taken_at_once_the_newer_lock_backs_off():
+    api, board = board_with(
+        card("a4", "aaaaaaa4", "A-4", "", "LD"),
+        card("c5", "cccccc05", "P1 · C-5 · Voy", HEADER_C5),
+        card(
+            "c9",
+            "cccccc09",
+            "P2 · C-9 · Otra",
+            "**Toca:** `vision/servio_vision/alerts/engine.py`\n\nx",
+        ),
+    )
+
+    def sneak(cid):  # C-9 entró a In progress con un candado anterior al nuestro
+        api.cards["c9"]["idList"] = "LP"
+        api.add_comment(
+            "c9",
+            tablero.lock_text("eeeeeeeeeeee", "otro", "Semana 3", datetime.now(UTC)),
+        )
+        api.comments["c9"][-1]["date"] = "2026-11-09T09:00:00.000Z"
+
+    api.before_comment_read = sneak
+    with pytest.raises(SystemExit) as e:
+        board.take("cccccc05", "yo")
+    assert e.value.code[1] == 2 and "entró antes" in e.value.code[0]
+    assert api.list_of("cccccc05").startswith("Semana 3")  # volvió a su lista
+    assert api.list_of("cccccc09") == "In progress"
+
+
+def test_two_overlapping_cards_taken_at_once_the_older_lock_keeps_going():
+    api, board = board_with(
+        card("a4", "aaaaaaa4", "A-4", "", "LD"),
+        card("c5", "cccccc05", "P1 · C-5 · Voy", HEADER_C5),
+        card(
+            "c9",
+            "cccccc09",
+            "P2 · C-9 · Otra",
+            "**Toca:** `vision/servio_vision/alerts/engine.py`\n\nx",
+        ),
+    )
+
+    def sneak(cid):  # C-9 entró a In progress pero su candado es posterior al nuestro
+        api.cards["c9"]["idList"] = "LP"
+        api.add_comment(
+            "c9",
+            tablero.lock_text("eeeeeeeeeeee", "otro", "Semana 3", datetime.now(UTC)),
+        )
+        api.comments["c9"][-1]["date"] = "2026-11-09T11:00:00.000Z"
+
+    api.before_comment_read = sneak
+    board.take("cccccc05", "yo")
+    assert api.list_of("cccccc05") == "In progress"
 
 
 def test_credentials_from_env_files(tmp_path):

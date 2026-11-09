@@ -84,6 +84,7 @@ CARD_FIELDS = "name,desc,idList,labels,shortLink,idMembers,closed"
 
 _PAREN_TOKEN = re.compile(r"\(([A-Za-z0-9_-]{8})\)")
 _BACKTICKED = re.compile(r"`([^`]+)`")
+_ONLY_PATHS = re.compile(r"(?:`[^`]+`[\s,;·]*)+")  # una línea que son solo rutas
 _HEADER_FIELD = re.compile(
     r"\*\*(?P<key>[^*:]+):\*\*(?P<value>.*?)(?=\*\*[^*:]+:\*\*|$)"
 )
@@ -107,9 +108,9 @@ class Header:
 
 
 def short_links(value: str) -> list[str]:
-    """Los enlaces cortos de Trello entre paréntesis. Una palabra de 8 letras en
-    minúscula («(opcional)») no lo es: un enlace trae mayúsculas o dígitos."""
-    return [tok for tok in _PAREN_TOKEN.findall(value) if re.search(r"[A-Z0-9]", tok)]
+    """Lo que parece un enlace corto de Trello entre paréntesis (8 caracteres). Si
+    es una palabra («(opcional)») y no una tarjeta, el tablero lo avisa y no bloquea."""
+    return _PAREN_TOKEN.findall(value)
 
 
 def header_lines(desc: str) -> str:
@@ -122,7 +123,9 @@ def header_lines(desc: str) -> str:
         stripped = re.sub(r"^(?:[-*•]\s+|#+\s+)", "", line.strip())  # viñeta o título
         if not stripped:
             continue
-        if _HEADER_FIELD.search(stripped):
+        if _HEADER_FIELD.search(stripped) or (
+            taken and _ONLY_PATHS.fullmatch(stripped)
+        ):
             taken.append(stripped)
         elif taken:
             break
@@ -220,6 +223,15 @@ def winner(comments: list[tuple[str, str]]) -> tuple[str, str, str] | None:
     """Quién se quedó con la tarjeta: el primer candado vigente."""
     claims = active_claims(comments)
     return claims[0] if claims else None
+
+
+def lock_date(comments: list[tuple[str, str]], token: str) -> datetime:
+    """Cuándo se puso el candado con ese token (la fecha del comentario)."""
+    for date, text in comments:
+        lock = parse_lock(text)
+        if lock and lock[0] == token:
+            return datetime.fromisoformat(date)
+    return datetime.now(UTC)
 
 
 def lock_age_minutes(
@@ -337,15 +349,30 @@ class Board:
         self._lists: dict[str, str] | None = None  # nombre → id
         self._labels: dict[str, str] | None = None  # nombre → id
         self._members: dict[str, str] | None = None  # id → usuario
+        self._closed_lists: set[str] = set()
 
     # --- lectura
 
     @property
     def lists(self) -> dict[str, str]:
+        """Las listas abiertas (nombre → id); las archivadas van a `closed_lists`."""
         if self._lists is None:
-            rows = self.api.get(f"/boards/{self.board_id}/lists", fields="name")
-            self._lists = {r["name"]: r["id"] for r in rows}
+            rows = self.api.get(
+                f"/boards/{self.board_id}/lists", fields="name,closed", filter="all"
+            )
+            self._lists = {r["name"]: r["id"] for r in rows if not r.get("closed")}
+            self._closed_lists = {r["id"] for r in rows if r.get("closed")}
+            for needed in (LIST_IN_PROGRESS, LIST_DONE):
+                if needed not in self._lists:
+                    raise SystemExit(
+                        f"El tablero no tiene una lista «{needed}»: el protocolo la necesita tal cual."
+                    )
         return self._lists
+
+    @property
+    def closed_lists(self) -> set[str]:
+        _ = self.lists
+        return self._closed_lists
 
     @property
     def labels(self) -> dict[str, str]:
@@ -391,6 +418,7 @@ class Board:
             desc=r.get("desc", ""),
             list_name=self.list_name(r["idList"]),
             labels=[lb["name"] for lb in r.get("labels", []) if lb.get("name")],
+            closed=bool(r.get("closed", False)) or r["idList"] in self.closed_lists,
             label_ids={
                 lb["name"]: lb["id"]
                 for lb in r.get("labels", [])
@@ -398,7 +426,6 @@ class Board:
             },
             members=[self.members.get(m, m) for m in r.get("idMembers", [])],
             member_ids=list(r.get("idMembers", [])),
-            closed=bool(r.get("closed", False)),
         )
 
     def comments(self, card: Card) -> list[tuple[str, str]]:
@@ -414,7 +441,11 @@ class Board:
     # --- estado de cada tarjeta
 
     def status(
-        self, card: Card, cards: list[Card], done: set[str] | None = None
+        self,
+        card: Card,
+        cards: list[Card],
+        done: set[str] | None = None,
+        known: set[str] | None = None,
     ) -> tuple[str, list[str]]:
         """('libre' | 'bloqueada' | 'humano' | 'en curso' | 'hecha' | 'choca', motivos)."""
         if card.list_name == LIST_DONE or card.closed:
@@ -424,7 +455,7 @@ class Board:
             return "en curso", [who]
         if LABEL_HUMAN in card.labels:
             return "humano", ["la hace una persona"]
-        known = {c.short for c in cards}
+        known = {c.short for c in cards} if known is None else known
         missing = missing_deps(
             card.header, self.done_links(cards) if done is None else done
         )
@@ -503,6 +534,7 @@ class Board:
         """Pone Libre / Bloqueada según las dependencias. Devuelve las recién liberadas."""
         self.ensure_labels()
         done = self.done_links(cards)
+        known = {c.short for c in cards}
         freed = []
         for card in cards:
             if card.closed or not is_work_list(card.list_name, extra=True):
@@ -511,12 +543,11 @@ class Board:
                 self.set_label(card, LABEL_FREE, False)
                 self.set_label(card, LABEL_BLOCKED, False)
                 continue
-            known = {c.short for c in cards}
             blocked = any(d in known for d in missing_deps(card.header, done))
-            was_free = LABEL_FREE in card.labels
+            was_blocked = LABEL_BLOCKED in card.labels
             self.set_label(card, LABEL_BLOCKED, blocked)
             self.set_label(card, LABEL_FREE, not blocked)
-            if not blocked and not was_free:
+            if was_blocked and not blocked:
                 freed.append(card)
         return freed
 
@@ -554,15 +585,36 @@ class Board:
                     "`soltar` lo limpia, o `tomar --forzar` lo pisa."
                 )
             raise SystemExit((f"{card.name}: la tomó {who} justo antes.", 2))
-        # con el candado ganado, los choques de archivos se miran de nuevo: otro agente
-        # pudo tomar una tarjeta que toca lo mismo en el medio
-        if not force:
-            fresh = [c for c in self.cards() if c.id != card.id]
-            late = self.clashes(card, fresh)
-            if late:
-                self.comment(card, f"{UNLOCK} soltada: {late[0]}")
-                raise SystemExit((f"{card.name}: {late[0]}.", 2))
         self.move(card, LIST_IN_PROGRESS)
+        # Ya en curso, los choques de archivos se miran de nuevo: otro agente pudo tomar
+        # una tarjeta que toca lo mismo en el medio. Si las dos entraron a la vez, retrocede
+        # la del candado más nuevo (la otra, al mirar, ve que la suya es la vieja y sigue).
+        if state != "choca":
+            mine_at = lock_date(comments, token)
+            for other in self.cards():
+                if (
+                    other.id == card.id
+                    or other.list_name != LIST_IN_PROGRESS
+                    or other.closed
+                ):
+                    continue
+                hit = paths_overlap(card.header.touches, other.header.touches)
+                if not hit:
+                    continue
+                theirs = winner(other_comments := self.comments(other))
+                theirs_at = lock_date(other_comments, theirs[0]) if theirs else None
+                if theirs_at is None or theirs_at <= mine_at:
+                    self.comment(
+                        card,
+                        f"{UNLOCK} soltada: toca lo mismo que {other.code or other.short}",
+                    )
+                    self.move(card, origin)
+                    raise SystemExit(
+                        (
+                            f"{card.name}: {other.code or other.short} toca lo mismo y entró antes ({hit[0]}).",
+                            2,
+                        )
+                    )
         self.set_label(card, LABEL_FREE, False)
         self.set_label(card, LABEL_BLOCKED, False)
         me = self.me()
@@ -573,10 +625,17 @@ class Board:
                 pass
         return card
 
-    def release(self, short: str, reason: str) -> Card:
+    def release(
+        self, short: str, reason: str, agent: str = "", force: bool = False
+    ) -> Card:
         card = self.card(short)
+        won = winner(self.comments(card))
+        if won is not None and agent and won[1] != agent and not force:
+            raise SystemExit(
+                f"{card.name}: la tiene tomada {won[1]}, no {agent}. Con --forzar se suelta igual."
+            )
         if card.list_name != LIST_IN_PROGRESS:
-            if winner(self.comments(card)) is None:
+            if won is None:
                 raise SystemExit(
                     f"{card.name}: no está en curso (está en «{card.list_name}»)."
                 )
@@ -585,7 +644,6 @@ class Board:
                 card, f"{UNLOCK} candado viejo limpiado: {reason or 'sin motivo'}"
             )
             return card
-        won = winner(self.comments(card))
         origin = won[2] if won and won[2] in self.lists else None
         if origin is None:  # la pusieron en curso a mano: a la primera lista de trabajo
             work = self.work_lists()
@@ -732,7 +790,7 @@ def cmd_tomar(board: Board, args: argparse.Namespace) -> int:
 
 
 def cmd_soltar(board: Board, args: argparse.Namespace) -> int:
-    card = board.release(args.tarjeta, args.motivo)
+    card = board.release(args.tarjeta, args.motivo, args.agente or "", args.forzar)
     print(f"Soltada: {card.name} → «{card.list_name}»")
     return 0
 
@@ -791,6 +849,10 @@ def build_parser() -> argparse.ArgumentParser:
     )
     s.add_argument("tarjeta")
     s.add_argument("--motivo", default="")
+    s.add_argument(
+        "--agente", help="quién la suelta; si no es quien la tomó, hace falta --forzar"
+    )
+    s.add_argument("--forzar", action="store_true", help="aunque la haya tomado otro")
     s.set_defaults(fn=cmd_soltar)
 
     s = sub.add_parser("terminar", help="pasarla a Done y liberar las que dependían")
