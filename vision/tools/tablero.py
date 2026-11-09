@@ -29,7 +29,8 @@ movieron a mano, se cortó la red), `soltar` lo limpia y `tomar --forzar` lo pis
 
 Credenciales: TRELLO_KEY y TRELLO_TOKEN en el entorno o en el `.env` del repo (ver
 `.env.example`; también se busca en el `.env` de la carpeta de arriba del repo).
-Cada persona usa las suyas; son de su cuenta de Trello. Sale con 0 si hizo lo
+Cada persona usa las suyas; son de su cuenta de Trello. Se corre desde `vision/` con
+el venv del repo (usa `python-dotenv`, como `settings.py`; nada más). Sale con 0 si hizo lo
 pedido, 1 si no se puede (tarjeta bloqueada, ocupada, sin permiso), 2 si otro
 agente la tomó justo antes.
 """
@@ -75,6 +76,9 @@ LABEL_COLORS = {LABEL_FREE: "green", LABEL_BLOCKED: "red", LABEL_HUMAN: "yellow"
 LOCK = "🔒"
 UNLOCK = "🔓"
 DONE_MARK = "✅"
+STALE_LOCK_MIN = (
+    10  # un candado de más que esto en una tarjeta que no está en curso es viejo
+)
 
 CARD_FIELDS = "name,desc,idList,labels,shortLink,idMembers,closed"
 
@@ -109,17 +113,19 @@ def short_links(value: str) -> list[str]:
 
 
 def header_lines(desc: str) -> str:
-    """Las líneas del encabezado, juntas. Son las primeras que empiezan con `**`;
-    las líneas en blanco entre ellas no cortan (el editor de Trello guarda cada
-    Enter como un párrafo), la primera línea de texto común sí."""
-    taken = []
+    """Las líneas del encabezado, juntas: las primeras con un campo `**Clave:**`.
+    Las líneas en blanco no cortan (el editor de Trello guarda cada Enter como un
+    párrafo), y tampoco un título o una viñeta antes del primer campo («## Contexto»,
+    «- **Toca:** …»); la primera línea de texto común después de un campo, sí."""
+    taken: list[str] = []
     for line in desc.replace("\r", "").split("\n"):
-        stripped = line.strip()
+        stripped = re.sub(r"^(?:[-*•]\s+|#+\s+)", "", line.strip())  # viñeta o título
         if not stripped:
             continue
-        if not stripped.startswith("**"):
+        if _HEADER_FIELD.search(stripped):
+            taken.append(stripped)
+        elif taken:
             break
-        taken.append(stripped)
     return " ".join(taken)
 
 
@@ -216,6 +222,19 @@ def winner(comments: list[tuple[str, str]]) -> tuple[str, str, str] | None:
     return claims[0] if claims else None
 
 
+def lock_age_minutes(
+    comments: list[tuple[str, str]], token: str, now: datetime | None = None
+) -> float:
+    """Minutos desde que se puso el candado con ese token (por la fecha del comentario)."""
+    now = now or datetime.now(UTC)
+    for date, text in comments:
+        lock = parse_lock(text)
+        if lock and lock[0] == token:
+            when = datetime.fromisoformat(date)  # Python 3.11 entiende la Z
+            return (now - when).total_seconds() / 60
+    return 0.0
+
+
 def credentials(
     env_files: Iterable[Path] = DEFAULT_ENV_FILES,
     environ: Mapping[str, str] = os.environ,
@@ -245,8 +264,8 @@ def credentials(
 
 
 class Api:
-    """Lo mínimo de la API REST de Trello, con urllib: sin dependencias. La clave
-    y el token van siempre en la URL, que es como Trello los documenta."""
+    """Lo mínimo de la API REST de Trello, con urllib. La clave y el token van
+    siempre en la URL, que es como Trello los documenta."""
 
     def __init__(self, key: str, token: str) -> None:
         self.auth = {"key": key, "token": token}
@@ -296,6 +315,9 @@ class Card:
     members: list[str]  # usuarios
     member_ids: list[str]
     closed: bool = False
+    label_ids: dict[str, str] = field(
+        default_factory=dict
+    )  # nombre → id de la etiqueta puesta
 
     @cached_property
     def header(self) -> Header:
@@ -346,7 +368,10 @@ class Board:
         return "?"
 
     def work_lists(self, extra: bool = False) -> list[str]:
-        return sorted(n for n in self.lists if is_work_list(n, extra))
+        """«Semana 3 …» antes que «Semana 10 …»: se ordena por el número."""
+        return sorted(
+            (n for n in self.lists if is_work_list(n, extra)), key=_list_order
+        )
 
     def cards(self) -> list[Card]:
         """Todas, archivadas incluidas: una dependencia hecha y archivada sigue hecha."""
@@ -366,6 +391,11 @@ class Board:
             desc=r.get("desc", ""),
             list_name=self.list_name(r["idList"]),
             labels=[lb["name"] for lb in r.get("labels", []) if lb.get("name")],
+            label_ids={
+                lb["name"]: lb["id"]
+                for lb in r.get("labels", [])
+                if lb.get("name") and lb.get("id")
+            },
             members=[self.members.get(m, m) for m in r.get("idMembers", [])],
             member_ids=list(r.get("idMembers", [])),
             closed=bool(r.get("closed", False)),
@@ -394,16 +424,25 @@ class Board:
             return "en curso", [who]
         if LABEL_HUMAN in card.labels:
             return "humano", ["la hace una persona"]
+        known = {c.short for c in cards}
         missing = missing_deps(
             card.header, self.done_links(cards) if done is None else done
         )
+        unknown = [
+            f"«{m}» no es ninguna tarjeta: revisar el encabezado"
+            for m in missing
+            if m not in known
+        ]
+        missing = [m for m in missing if m in known]
         if missing:
             names = [self._name_of(m, cards) for m in missing]
-            return "bloqueada", [f"espera {n}" for n in names]
+            return "bloqueada", [f"espera {n}" for n in names] + unknown
         clashes = self.clashes(card, cards)
         if clashes:
-            return "choca", clashes
-        return "libre", []
+            return "choca", clashes + unknown
+        if is_work_list(card.list_name, extra=True) and not card.header.touches:
+            unknown.append("sin encabezado: no se sabe qué toca")
+        return "libre", unknown
 
     def clashes(self, card: Card, cards: list[Card]) -> list[str]:
         """Con qué tarjetas en curso comparte archivos."""
@@ -445,7 +484,8 @@ class Board:
             self.api.post(f"/cards/{card.id}/idLabels", value=self.labels[name])
             card.labels.append(name)
         elif not on and has:
-            self.api.delete(f"/cards/{card.id}/idLabels/{self.labels[name]}")
+            label_id = card.label_ids.get(name, self.labels[name])
+            self.api.delete(f"/cards/{card.id}/idLabels/{label_id}")
             card.labels.remove(name)
 
     def move(self, card: Card, list_name: str) -> None:
@@ -471,7 +511,8 @@ class Board:
                 self.set_label(card, LABEL_FREE, False)
                 self.set_label(card, LABEL_BLOCKED, False)
                 continue
-            blocked = bool(missing_deps(card.header, done))
+            known = {c.short for c in cards}
+            blocked = any(d in known for d in missing_deps(card.header, done))
             was_free = LABEL_FREE in card.labels
             self.set_label(card, LABEL_BLOCKED, blocked)
             self.set_label(card, LABEL_FREE, not blocked)
@@ -500,11 +541,27 @@ class Board:
             self.comment(card, f"{UNLOCK} candado viejo pisado por {agent}")
         token = uuid.uuid4().hex[:12]
         origin = card.list_name
-        self.comment(card, lock_text(token, agent, origin, datetime.now(UTC)))
-        won = winner(self.comments(card))
+        mine = self.comment(card, lock_text(token, agent, origin, datetime.now(UTC)))
+        comments = self.comments(card)
+        won = winner(comments)
         if won is None or won[0] != token:
+            self.api.delete(f"/actions/{mine}")  # no dejar candados huérfanos
             who = won[1] if won else "otro"
+            if won is not None and lock_age_minutes(comments, won[0]) > STALE_LOCK_MIN:
+                raise SystemExit(
+                    f"{card.name}: tiene un candado viejo de {who} (hace "
+                    f"{lock_age_minutes(comments, won[0]):.0f} min) y no está en curso: "
+                    "`soltar` lo limpia, o `tomar --forzar` lo pisa."
+                )
             raise SystemExit((f"{card.name}: la tomó {who} justo antes.", 2))
+        # con el candado ganado, los choques de archivos se miran de nuevo: otro agente
+        # pudo tomar una tarjeta que toca lo mismo en el medio
+        if not force:
+            fresh = [c for c in self.cards() if c.id != card.id]
+            late = self.clashes(card, fresh)
+            if late:
+                self.comment(card, f"{UNLOCK} soltada: {late[0]}")
+                raise SystemExit((f"{card.name}: {late[0]}.", 2))
         self.move(card, LIST_IN_PROGRESS)
         self.set_label(card, LABEL_FREE, False)
         self.set_label(card, LABEL_BLOCKED, False)
@@ -531,14 +588,38 @@ class Board:
         won = winner(self.comments(card))
         origin = won[2] if won and won[2] in self.lists else None
         if origin is None:  # la pusieron en curso a mano: a la primera lista de trabajo
-            origin = self.work_lists()[0]
+            work = self.work_lists()
+            if not work:
+                raise SystemExit(
+                    f"{card.name}: no hay ninguna lista «Semana…» adonde devolverla."
+                )
+            origin = work[0]
         self.comment(card, f"{UNLOCK} soltada: {reason or 'sin terminar'}")
         self.move(card, origin)
         self.sync_labels(self.cards())
         return card
 
-    def finish(self, short: str, pr: int | None, note: str) -> tuple[Card, list[Card]]:
+    def finish(
+        self,
+        short: str,
+        pr: int | None,
+        note: str,
+        agent: str = "",
+        force: bool = False,
+    ) -> tuple[Card, list[Card]]:
         card = self.card(short)
+        if card.list_name == LIST_DONE or card.closed:
+            raise SystemExit(f"{card.name}: ya está hecha.")
+        if card.list_name != LIST_IN_PROGRESS and not force:
+            raise SystemExit(
+                f"{card.name}: no está en curso (está en «{card.list_name}»); "
+                "¿es la tarjeta correcta? Con --forzar se termina igual."
+            )
+        won = winner(self.comments(card))
+        if won is not None and agent and won[1] != agent and not force:
+            raise SystemExit(
+                f"{card.name}: la tiene tomada {won[1]}, no {agent}. Con --forzar se termina igual."
+            )
         text = f"{DONE_MARK} Integrada en develop"
         if pr:
             text += f": https://github.com/matiHirCab/Servio/pull/{pr}"
@@ -550,6 +631,11 @@ class Board:
         self.set_label(card, LABEL_BLOCKED, False)
         freed = self.sync_labels(self.cards())
         return card, freed
+
+
+def _list_order(name: str) -> tuple[int, str]:
+    m = re.search(r"\d+", name)
+    return (int(m.group(0)) if m else 10**6, name)
 
 
 def is_work_list(name: str, extra: bool = False) -> bool:
@@ -607,7 +693,7 @@ def cmd_listar(board: Board, args: argparse.Namespace) -> int:
             continue
         print(f"\n== {list_name}")
         for card, state, why in group:
-            line = f"  {marks.get(state, '·')} {card.short}  {card.name}"
+            line = f"  {marks.get(state, '·')} {state:9} {card.short}  {card.name}"
             if why:
                 line += f"  ← {'; '.join(why)}"
             print(line)
@@ -652,7 +738,9 @@ def cmd_soltar(board: Board, args: argparse.Namespace) -> int:
 
 
 def cmd_terminar(board: Board, args: argparse.Namespace) -> int:
-    card, freed = board.finish(args.tarjeta, args.pr, args.nota)
+    card, freed = board.finish(
+        args.tarjeta, args.pr, args.nota, args.agente or "", args.forzar
+    )
     print(f"Terminada: {card.name}")
     for c in freed:
         print(f"  🟢 se liberó {c.code or c.short}: {c.name}")
@@ -709,6 +797,14 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("tarjeta")
     s.add_argument("--pr", type=int, help="número del PR mergeado en develop")
     s.add_argument("--nota", default="")
+    s.add_argument(
+        "--agente", help="quién la termina; si no es quien la tomó, hace falta --forzar"
+    )
+    s.add_argument(
+        "--forzar",
+        action="store_true",
+        help="aunque no esté en curso o la haya tomado otro",
+    )
     s.set_defaults(fn=cmd_terminar)
 
     s = sub.add_parser("sincronizar", help="recalcular Libre / Bloqueada")
@@ -717,13 +813,16 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
-    for stream in (sys.stdout, sys.stderr):  # la consola de Windows no siempre es UTF-8
+    for stream in (
+        sys.stdout,
+        sys.stderr,
+    ):  # por un pipe en Windows sale cp1252: UTF-8 siempre
         if hasattr(stream, "reconfigure"):
-            stream.reconfigure(errors="replace")
+            stream.reconfigure(encoding="utf-8", errors="replace")
     args = build_parser().parse_args(argv)
-    key, token = credentials()
-    board = Board(Api(key, token))
     try:
+        key, token = credentials()
+        board = Board(Api(key, token))
         return args.fn(board, args)
     except SystemExit as e:
         if isinstance(e.code, tuple):  # (mensaje, código)

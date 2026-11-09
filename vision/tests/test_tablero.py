@@ -91,6 +91,10 @@ class FakeTrello:
 
     def delete(self, path, **params):
         parts = path.split("/")
+        if parts[1] == "actions":  # borrar un comentario propio
+            for rows in self.comments.values():
+                rows[:] = [r for r in rows if r["id"] != parts[2]]
+            return {}
         cid = self._card_id(parts[2])
         self.cards[cid]["idLabels"].remove(parts[4])
         return {}
@@ -244,6 +248,95 @@ def test_parse_header_survives_trello_paragraphs():
     assert h.touches == ["a/b.py"]
 
 
+def test_parse_header_allows_a_heading_or_bullets_before_the_fields():
+    desc = "## Contexto\n\n- **Área:** x\n- **Depende de:** C-5 (9oDZRoKz)\n\ntexto (cccccc07)"
+    h = tablero.parse_header(desc)
+    assert h.area == "x"
+    assert h.depends_on == ["9oDZRoKz"]
+
+
+def test_unknown_reference_warns_but_does_not_block():
+    api, board = board_with(
+        card(
+            "c9",
+            "cccccc09",
+            "P2 · C-9 · X",
+            "**Toca:** `a.py`\n**Depende de:** B-4 (Telegram)\n\nx",
+        ),
+    )
+    cards = board.cards()
+    state, why = board.status(cards[0], cards)
+    assert state == "libre"
+    assert any("no es ninguna tarjeta" in w for w in why)
+    board.sync_labels(cards)
+    assert api.label_names("cccccc09") == {"Libre"}
+
+
+def test_card_without_header_is_flagged():
+    _api, board = board_with(card("c9", "cccccc09", "P2 · C-9 · X", "solo texto"))
+    cards = board.cards()
+    assert board.status(cards[0], cards) == (
+        "libre",
+        ["sin encabezado: no se sabe qué toca"],
+    )
+
+
+def test_finish_refuses_wrong_card_or_other_agents_card():
+    api, board = board_with(
+        card("a4", "aaaaaaa4", "A-4", "", "LD"),
+        card("c5", "cccccc05", "P1 · C-5 · Voy", HEADER_C5),
+        card("c7", "cccccc07", "P1 · C-7 · Por mozo", HEADER_C7),
+    )
+    with pytest.raises(SystemExit, match="no está en curso"):
+        board.finish("cccccc07", 80, "")
+    with pytest.raises(SystemExit, match="ya está hecha"):
+        board.finish("aaaaaaa4", 80, "")
+    board.take("cccccc05", "ana")
+    with pytest.raises(SystemExit, match="la tiene tomada ana"):
+        board.finish("cccccc05", 80, "", agent="beto")
+    board.finish("cccccc05", 80, "", agent="ana")
+    assert api.list_of("cccccc05") == "Done"
+
+
+def test_loser_deletes_its_own_lock_and_stale_lock_is_reported():
+    api, board = board_with(
+        card("a4", "aaaaaaa4", "A-4", "", "LD"),
+        card("c5", "cccccc05", "P1 · C-5 · Voy", HEADER_C5),
+    )
+    old = tablero.lock_text("ffffffffffff", "viejo", "Semana 3", datetime.now(UTC))
+    api.add_comment("c5", old)
+    api.comments["c5"][-1]["date"] = "2026-01-01T00:00:00.000Z"  # hace meses
+    with pytest.raises(SystemExit, match="candado viejo de viejo"):
+        board.take("cccccc05", "yo")
+    texts = [c["data"]["text"] for c in api.comments["c5"]]
+    assert texts == [old]  # el perdedor no dejó su candado
+
+
+def test_take_backs_off_if_an_overlapping_card_was_taken_meanwhile():
+    api, board = board_with(
+        card("a4", "aaaaaaa4", "A-4", "", "LD"),
+        card("c5", "cccccc05", "P1 · C-5 · Voy", HEADER_C5),
+        card(
+            "c9",
+            "cccccc09",
+            "P2 · C-9 · Otra",
+            "**Toca:** `vision/servio_vision/alerts/engine.py`\n\nx",
+        ),
+    )
+
+    def sneak(
+        cid,
+    ):  # entre el candado y la segunda mirada, otro tomó C-9, que toca lo mismo
+        api.cards["c9"]["idList"] = "LP"
+
+    api.before_comment_read = sneak
+    with pytest.raises(SystemExit) as e:
+        board.take("cccccc05", "yo")
+    assert e.value.code[1] == 2 and "toca lo mismo que C-9" in e.value.code[0]
+    assert api.list_of("cccccc05").startswith("Semana 3")
+    assert api.comments["c5"][-1]["data"]["text"].startswith("🔓")
+
+
 def test_credentials_from_env_files(tmp_path):
     repo = tmp_path / ".env"
     repo.write_text("TRELLO_KEY='k1'   # comentario\nTRELLO_TOKEN=\n", encoding="utf-8")
@@ -335,7 +428,8 @@ def test_take_moves_to_in_progress_and_assigns_me():
 
 def test_take_refuses_blocked_unless_forced():
     api, board = board_with(
-        card("c5", "cccccc05", "P1 · C-5 · Voy", HEADER_C5),  # A-4 no está en Done
+        card("a4", "aaaaaaa4", "A-4", "", "L3"),  # A-4 existe pero no está en Done
+        card("c5", "cccccc05", "P1 · C-5 · Voy", HEADER_C5),
     )
     with pytest.raises(SystemExit, match="bloqueada"):
         board.take("cccccc05", "x")

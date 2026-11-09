@@ -37,8 +37,8 @@ cd vision
 python tools/tablero.py listar                      # 🟢 libre · 🔴 bloqueada (espera otra) · 🟠 choca (toca archivos de una en curso) · 🟡 humano
 python tools/tablero.py ver <enlace>                # la descripción completa
 python tools/tablero.py tomar <enlace> --agente <quién> --rama <prefijo>   # la reclama; si otro llegó antes, sale con 2
-python tools/tablero.py terminar <enlace> --pr <N>  # a Done, y libera las que dependían de ella
-python tools/tablero.py soltar <enlace> --motivo "…" # si no la vas a terminar: vuelve a su lista
+python tools/tablero.py terminar <enlace> --pr <N> --agente <quién>  # a Done, y libera las que dependían de ella
+python tools/tablero.py soltar <enlace> --motivo "…" # si no la vas a terminar: vuelve a su lista (y limpia un candado viejo)
 ```
 
 El `<enlace>` es lo que va en `trello.com/c/XXXXXXXX`. Hacen falta `TRELLO_KEY` y `TRELLO_TOKEN` en el `.env` (de la cuenta de la persona que corre el agente; ver `.env.example`).
@@ -53,6 +53,7 @@ El ciclo de una tarjeta:
 Reglas del tablero:
 
 - Una tarjeta por agente a la vez. Si no la vas a terminar, `soltar`: una tarjeta en curso que nadie trabaja bloquea a las demás.
+- `terminar` solo acepta una tarjeta en curso y, con `--agente`, solo la de quien la tomó; `--forzar` salta las dos guardas. Si `tomar` dice que hay un candado viejo (la tarjeta volvió a su lista sin pasar por `soltar`), `soltar` lo limpia o `tomar --forzar` lo pisa.
 - El encabezado de cada tarjeta (las primeras líneas de la descripción) es lo que lee el programa: `**Área:**`, `**Toca:**` (rutas entre acentos graves), `**Depende de:**` (otras tarjetas con su enlace entre paréntesis), `**Decisiones:**`. Si creás una tarjeta, ponéselo; si partís una en dos, las dos lo llevan.
 - Si al trabajar una tarjeta hace falta tocar archivos de otra que está en curso, no lo hagas en esa rama: terminá la tuya y abrí otra tarjeta, o esperá.
 - Lo que una tarjeta decide y no está en `docs/decisiones-25-11.md` ni en los docs de contexto, se escribe en el PR y, si cambia reglas, en el doc de contexto que corresponde (ver el mapa de arriba).
