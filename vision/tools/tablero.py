@@ -97,7 +97,7 @@ _PAREN_TOKEN = re.compile(r"\(([A-Za-z0-9_-]{8})\)")
 _BACKTICKED = re.compile(r"`([^`]+)`")
 # una línea que son solo rutas o solo referencias a tarjetas («C-5 (9oDZRoKz)»)
 _ONLY_PATHS = re.compile(
-    r"(?:(?:`[^`]+`(?:\s*\([^()`]*\))?|[A-Z][A-Za-z0-9-]*\s*\([A-Za-z0-9_-]{8}\))[\s,;·]*)+"
+    r"(?:(?:`[^`]+`(?:\s*\([^()`]*\))?|[A-Z][A-Za-z0-9-]*\s*\([^()]*\))[\s,;·]*)+"
 )
 # `**Clave:** valor` o `**Clave**: valor`
 _HEADER_FIELD = re.compile(
@@ -508,14 +508,22 @@ class Board:
                 return out
             before = rows[-1]["id"]
 
-    def _still_there(self, card: Card, origin: str) -> None:
-        """La tarjeta sigue en la lista de la que se la vio; si no, no se toca."""
+    def _still_there(self, card: Card, origin: str, token: str) -> None:
+        """La tarjeta sigue en la lista de la que se la vio (o ya está en curso pero con
+        nuestro candado como el más viejo); si no, no se toca."""
         fresh_card = self.card(card.id)
-        if fresh_card.list_name != origin or fresh_card.closed:
-            msg = f"{card.name}: mientras tanto pasó a «{fresh_card.list_name}»; no se toma."
-            if fresh_card.list_name == LIST_IN_PROGRESS:  # otro la tomó: es la carrera
-                raise SystemExit((msg, 2))
-            raise SystemExit(msg)
+        if fresh_card.list_name == origin and not fresh_card.closed:
+            return
+        msg = (
+            f"{card.name}: mientras tanto pasó a «{fresh_card.list_name}»; no se toma."
+        )
+        if fresh_card.list_name == LIST_IN_PROGRESS and not fresh_card.closed:
+            # Pudo moverla otro agente que leyó tarde y se cree ganador; si nuestro candado
+            # es el más viejo, la tarjeta es nuestra igual (él se va a dar cuenta y se baja).
+            if (won := winner(self.comments(card))) is not None and won[0] == token:
+                return
+            raise SystemExit((msg, 2))
+        raise SystemExit(msg)
 
     def _find(self, short: str, cards: list[Card]) -> Card:
         """La tarjeta de este tablero con ese enlace o id; un enlace ajeno no sirve."""
@@ -558,8 +566,10 @@ class Board:
         known: set[str] | None = None,
     ) -> tuple[str, list[str]]:
         """('libre' | 'bloqueada' | 'humano' | 'en curso' | 'hecha' | 'choca', motivos)."""
-        if card.list_name == LIST_DONE or card.closed:
+        if card.list_name == LIST_DONE or (card.closed and card.list_name == "?"):
             return "hecha", []
+        if card.closed:
+            return "archivada", ["archivada sin terminar (descartada)"]
         if card.list_name == LIST_IN_PROGRESS:
             who = ", ".join(card.members) or "alguien"
             return "en curso", [who]
@@ -695,7 +705,7 @@ class Board:
         cards = self.cards()
         card = self._find(short, cards)
         state, why = self.status(card, cards)
-        if state in ("en curso", "hecha"):
+        if state in ("en curso", "hecha", "archivada"):
             raise SystemExit(f"{card.name}: ya está {state} ({'; '.join(why)}).")
         if state == "humano":
             raise SystemExit(f"{card.name}: la hace una persona, no se toma desde acá.")
@@ -706,6 +716,11 @@ class Board:
         if not is_work_list(card.list_name, extra=True) and not force:
             raise SystemExit(
                 f"{card.name}: está en «{card.list_name}», que no es una lista de trabajo."
+            )
+        if not card.header.touches and not force:
+            raise SystemExit(
+                f"{card.name}: el encabezado no dice qué toca (`**Toca:**`); sin eso no se "
+                "puede cuidar que nadie edite lo mismo. Agregalo, o --forzar."
             )
         card.notes = why
         # Con --forzar, un candado viejo (la movieron a mano, se cortó la red) se pisa a
@@ -729,7 +744,7 @@ class Board:
             if won is None:
                 # un 🔓 o ✅ cayó justo después del nuestro. Si fue un ✅ (otro la terminó)
                 # o alguien la movió, la tarjeta ya no es la que miramos: no se toca.
-                self._still_there(card, origin)
+                self._still_there(card, origin, token)
                 self.api.delete(f"/actions/{mine}")
                 mine = None
                 mine = self.comment(
@@ -757,18 +772,17 @@ class Board:
                         )
                     )
                 raise SystemExit((f"{card.name}: la tomó {who} justo antes.", 2))
-            self._still_there(card, origin)  # alguien pudo moverla a mano en el medio
+            self._still_there(card, origin, token)  # alguien pudo moverla en el medio
             self.move(card, LIST_IN_PROGRESS)
-            moved_by_me = True
             # Trello pudo tardar en listar el candado de otro: ya movida, se confirma que
-            # el nuestro sigue siendo el más viejo; si no, se devuelve.
+            # el nuestro sigue siendo el más viejo. Si no, somos el perdedor tardío: se
+            # borra solo nuestro candado (lo hace el except) y la tarjeta queda en curso
+            # para el ganador, que es quien la tiene.
             again = winner(comments := self.comments(card))
             if again is None or again[0] != token:
                 who = again[1] if again else "otro"
-                self.comment(card, f"{UNLOCK} soltada: la tomó {who} justo antes")
-                self.move(card, origin)
-                moved_by_me = False
                 raise SystemExit((f"{card.name}: la tomó {who} justo antes.", 2))
+            moved_by_me = True
         except BaseException:
             # Cualquier cosa que falle entre el candado y el movimiento (red, Ctrl-C, una
             # carrera perdida) borra nuestro candado. Solo se conserva si el movimiento fue
@@ -784,57 +798,55 @@ class Board:
         # la del candado más nuevo (la otra, al mirar, ve que la suya es la vieja y sigue).
         rolled_back = False
         try:
-            if True:  # (la sangría se mantiene para no mover el bloque entero)
-                known_clash = (
-                    {c.id for c in cards if c.list_name == LIST_IN_PROGRESS}
-                    if state == "choca"
-                    else set()
-                )
-                mine_at = lock_date(comments, token)
-                for other in self.cards():
-                    if (
-                        other.id == card.id
-                        or other.id
-                        in known_clash  # ya se aceptó ese choque con --forzar
-                        or other.closed
-                        or not (
-                            other.list_name == LIST_IN_PROGRESS
-                            or is_work_list(other.list_name, extra=True)
+            known_clash = (
+                {c.id for c in cards if c.list_name == LIST_IN_PROGRESS}
+                if force
+                else set()
+            )
+            mine_at = lock_date(comments, token)
+            for other in self.cards():
+                if (
+                    other.id == card.id
+                    or other.id in known_clash  # ya se aceptó ese choque con --forzar
+                    or other.closed
+                    or not (
+                        other.list_name == LIST_IN_PROGRESS
+                        or is_work_list(other.list_name, extra=True)
+                    )
+                ):
+                    continue
+                hit = paths_overlap(card.header.touches, other.header.touches)
+                if not hit:
+                    continue
+                # en curso, o con un candado reciente (la está tomando y todavía no la movió)
+                theirs = winner(other_comments := self.comments(other))
+                theirs_at = lock_date(other_comments, theirs[0]) if theirs else None
+                if other.list_name != LIST_IN_PROGRESS and (
+                    theirs is None
+                    or lock_age_minutes(other_comments, theirs[0], mine_at)
+                    > STALE_LOCK_MIN
+                ):
+                    continue
+                # retrocede la del candado más nuevo; a igual hora, la del token mayor
+                if theirs_at is None or (
+                    theirs_at,
+                    theirs[0] if theirs else "",
+                ) <= (
+                    mine_at,
+                    token,
+                ):
+                    self.comment(
+                        card,
+                        f"{UNLOCK} soltada: toca lo mismo que {other.code or other.short}",
+                    )
+                    self.move(card, origin)
+                    rolled_back = True
+                    raise SystemExit(
+                        (
+                            f"{card.name}: {other.code or other.short} toca lo mismo y entró antes ({hit[0]}).",
+                            2,
                         )
-                    ):
-                        continue
-                    hit = paths_overlap(card.header.touches, other.header.touches)
-                    if not hit:
-                        continue
-                    # en curso, o con un candado reciente (la está tomando y todavía no la movió)
-                    theirs = winner(other_comments := self.comments(other))
-                    theirs_at = lock_date(other_comments, theirs[0]) if theirs else None
-                    if other.list_name != LIST_IN_PROGRESS and (
-                        theirs is None
-                        or lock_age_minutes(other_comments, theirs[0], mine_at)
-                        > STALE_LOCK_MIN
-                    ):
-                        continue
-                    # retrocede la del candado más nuevo; a igual hora, la del token mayor
-                    if theirs_at is None or (
-                        theirs_at,
-                        theirs[0] if theirs else "",
-                    ) <= (
-                        mine_at,
-                        token,
-                    ):
-                        self.comment(
-                            card,
-                            f"{UNLOCK} soltada: toca lo mismo que {other.code or other.short}",
-                        )
-                        self.move(card, origin)
-                        rolled_back = True
-                        raise SystemExit(
-                            (
-                                f"{card.name}: {other.code or other.short} toca lo mismo y entró antes ({hit[0]}).",
-                                2,
-                            )
-                        )
+                    )
         except BaseException:
             if (
                 not rolled_back
@@ -896,8 +908,10 @@ class Board:
                     f"{card.name}: no hay ninguna lista «Semana…» adonde devolverla."
                 )
             origin = work[0]
+        self.move(
+            card, origin
+        )  # primero mover: si falla, el candado sigue y se reintenta
         self.comment(card, f"{UNLOCK} soltada: {reason or 'sin terminar'}")
-        self.move(card, origin)
         self.sync_labels(cards, only_dependents_of=card.short)
         return card
 
@@ -930,8 +944,8 @@ class Board:
             text += f": https://github.com/matiHirCab/Servio/pull/{pr}"
         if note:
             text += f". {note}"
+        self.move(card, LIST_DONE)  # primero mover: si falla, el candado sigue
         self.comment(card, text)
-        self.move(card, LIST_DONE)
         self.set_label(card, LABEL_FREE, False)
         self.set_label(card, LABEL_BLOCKED, False)
         freed = self.sync_labels(cards, only_dependents_of=card.short)

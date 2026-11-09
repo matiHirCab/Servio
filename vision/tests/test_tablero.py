@@ -1001,7 +1001,7 @@ def test_body_fields_after_free_text_are_not_a_header():
     assert tablero.parse_header(desc) == tablero.Header()
 
 
-def test_lost_lock_is_removed_even_if_someone_else_moved_the_card():
+def test_older_lock_wins_even_if_a_late_loser_moved_the_card_first():
     api, board = board_with(
         card("a4", "aaaaaaa4", "A-4", "", "LD"),
         card("c5", "cccccc05", "P1 · C-5 · Voy", HEADER_C5),
@@ -1017,11 +1017,12 @@ def test_lost_lock_is_removed_even_if_someone_else_moved_the_card():
         )
 
     api.before_comment_read = sneak
-    with pytest.raises(SystemExit) as e:
-        board.take("cccccc05", "yo")
-    assert e.value.code[1] == 2
-    locks = [c for c in api.comments["c5"] if c["data"]["text"].startswith("🔒")]
-    assert len(locks) == 1 and "otro" in locks[0]["data"]["text"]  # el nuestro no quedó
+    # el candado de «otro» es más nuevo que el nuestro: la tarjeta es nuestra aunque él la
+    # haya movido primero (él, al confirmar, ve que perdió y borra el suyo)
+    board.take("cccccc05", "yo")
+    assert api.list_of("cccccc05") == "In progress"
+    won = tablero.winner([(c["date"], c["data"]["text"]) for c in api.comments["c5"]])
+    assert won[1] == "yo"
 
 
 def test_release_refuses_archived_card():
@@ -1061,7 +1062,7 @@ def test_late_listed_older_lock_makes_us_back_off_after_the_move():
     with pytest.raises(SystemExit) as e:
         board.take("cccccc05", "yo")
     assert e.value.code == ("P1 · C-5 · Voy: la tomó otro justo antes.", 2)
-    assert api.list_of("cccccc05").startswith("Semana 3")
+    assert api.list_of("cccccc05") == "In progress"  # queda para el ganador
     locks = [c for c in api.comments["c5"] if c["data"]["text"].startswith("🔒")]
     assert len(locks) == 1 and "otro" in locks[0]["data"]["text"]
 
@@ -1120,6 +1121,106 @@ def test_finish_validates_agent_name():
     _api, board = board_with(card("c5", "cccccc05", "C-5", HEADER_C5, "LP"))
     with pytest.raises(SystemExit, match="una palabra sin espacios"):
         board.finish("cccccc05", 1, "", agent="claude jessica")
+
+
+def test_late_loser_only_removes_its_lock_and_leaves_the_card_to_the_winner():
+    api, board = board_with(
+        card("a4", "aaaaaaa4", "A-4", "", "LD"),
+        card("c5", "cccccc05", "P1 · C-5 · Voy", HEADER_C5),
+    )
+    real_get = api.get
+    reads = {"n": 0}
+
+    def late_listing(path, **params):
+        rows = real_get(path, **params)
+        if path.endswith("/actions"):
+            reads["n"] += 1
+            if (
+                reads["n"] == 1
+            ):  # el candado de «otro» aparece recién en la segunda lectura
+                api.add_comment(
+                    "c5",
+                    tablero.lock_text(
+                        "ffffffffffff", "otro", "Semana 3", datetime.now(UTC)
+                    ),
+                )
+                api.comments["c5"][-1]["date"] = "2026-11-09T10:00:00.500Z"
+        return rows
+
+    api.get = late_listing
+    with pytest.raises(SystemExit) as e:
+        board.take("cccccc05", "yo")
+    assert e.value.code[1] == 2
+    assert api.list_of("cccccc05") == "In progress"  # se la dejó al ganador
+    texts = [c["data"]["text"] for c in api.comments["c5"]]
+    assert (
+        len(texts) == 1 and "otro" in texts[0]
+    )  # solo queda el candado del ganador, sin 🔓
+
+
+def test_winner_accepts_a_card_already_moved_by_a_late_loser():
+    api, board = board_with(
+        card("a4", "aaaaaaa4", "A-4", "", "LD"),
+        card("c5", "cccccc05", "P1 · C-5 · Voy", HEADER_C5),
+    )
+
+    def sneak(
+        cid,
+    ):  # un perdedor tardío ya la movió a In progress con un candado más nuevo
+        api.cards[cid]["idList"] = "LP"
+        api.add_comment(
+            cid,
+            tablero.lock_text("ffffffffffff", "tarde", "Semana 3", datetime.now(UTC)),
+        )
+
+    api.before_comment_read = sneak
+    taken = board.take("cccccc05", "yo")
+    assert api.list_of("cccccc05") == "In progress"
+    assert (
+        tablero.winner([(c["date"], c["data"]["text"]) for c in api.comments["c5"]])[1]
+        == "yo"
+    )
+    assert taken.short == "cccccc05"
+
+
+def test_forced_take_of_a_blocked_card_that_also_clashes_goes_through():
+    api, board = board_with(
+        card("a4", "aaaaaaa4", "A-4", "", "L3"),
+        card("c5", "cccccc05", "P1 · C-5 · Voy", HEADER_C5),
+        card(
+            "c9",
+            "cccccc09",
+            "P2 · C-9 · Otra",
+            "**Toca:** `vision/servio_vision/alerts/engine.py`\n\nx",
+            "LP",
+        ),
+    )
+    board.take("cccccc05", "yo", force=True)
+    assert api.list_of("cccccc05") == "In progress"
+
+
+def test_header_continuation_with_hecha_marker_keeps_toca():
+    desc = "**Depende de:**\n\nC-5 (9oDZRoKz), A-4 (hecha)\n\n**Toca:** `vision/servio_vision/alerts/`\n\ntexto"
+    h = tablero.parse_header(desc)
+    assert h.depends_on == ["9oDZRoKz"]
+    assert h.touches == ["vision/servio_vision/alerts/"]
+
+
+def test_card_without_toca_needs_force():
+    api, board = board_with(card("c9", "cccccc09", "P2 · C-9 · X", "solo texto"))
+    with pytest.raises(SystemExit, match="no dice qué toca"):
+        board.take("cccccc09", "yo")
+    board.take("cccccc09", "yo", force=True)
+    assert api.list_of("cccccc09") == "In progress"
+
+
+def test_discarded_archived_card_is_reported_as_such():
+    api, board = board_with(
+        card("d8", "dddddd08", "D-8 · Descartada", "**Toca:** `x`\n\nx", "LI")
+    )
+    api.cards["d8"]["closed"] = True
+    cards = board.cards()
+    assert board.status(cards[0], cards)[0] == "archivada"
 
 
 def test_credentials_from_env_files(tmp_path):
