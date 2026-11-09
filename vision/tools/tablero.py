@@ -42,6 +42,7 @@ import json
 import os
 import re
 import sys
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -51,7 +52,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from functools import cached_property
 from pathlib import Path
-from typing import Any
+from typing import Any, NoReturn
 
 from dotenv import dotenv_values
 
@@ -76,6 +77,7 @@ LABEL_COLORS = {LABEL_FREE: "green", LABEL_BLOCKED: "red", LABEL_HUMAN: "yellow"
 LOCK = "🔒"
 UNLOCK = "🔓"
 DONE_MARK = "✅"
+RETRIES_429 = 3  # reintentos cuando Trello devuelve «demasiadas llamadas»
 STALE_LOCK_MIN = (
     10  # un candado de más que esto en una tarjeta que no está en curso es viejo
 )
@@ -84,9 +86,13 @@ CARD_FIELDS = "name,desc,idList,labels,shortLink,idMembers,closed"
 
 _PAREN_TOKEN = re.compile(r"\(([A-Za-z0-9_-]{8})\)")
 _BACKTICKED = re.compile(r"`([^`]+)`")
-_ONLY_PATHS = re.compile(r"(?:`[^`]+`[\s,;·]*)+")  # una línea que son solo rutas
+# una línea que son solo rutas o solo referencias a tarjetas («C-5 (9oDZRoKz)»)
+_ONLY_PATHS = re.compile(
+    r"(?:(?:`[^`]+`|[A-Z][A-Za-z0-9-]*\s*\([A-Za-z0-9_-]{8}\))[\s,;·]*)+"
+)
+# `**Clave:** valor` o `**Clave**: valor`
 _HEADER_FIELD = re.compile(
-    r"\*\*(?P<key>[^*:]+):\*\*(?P<value>.*?)(?=\*\*[^*:]+:\*\*|$)"
+    r"\*\*(?P<key>[^*:]+?):?\*\*:?(?P<value>.*?)(?=\*\*[^*:]+?:?\*\*:?|$)"
 )
 _CODE = re.compile(r"\b([A-Z]{1,2}-\d+[a-z]?)\b")
 _LOCK_LINE = re.compile(
@@ -230,7 +236,7 @@ def lock_date(comments: list[tuple[str, str]], token: str) -> datetime:
     for date, text in comments:
         lock = parse_lock(text)
         if lock and lock[0] == token:
-            return datetime.fromisoformat(date)
+            return datetime.fromisoformat(date)  # Python 3.11 entiende la Z
     return datetime.now(UTC)
 
 
@@ -239,12 +245,7 @@ def lock_age_minutes(
 ) -> float:
     """Minutos desde que se puso el candado con ese token (por la fecha del comentario)."""
     now = now or datetime.now(UTC)
-    for date, text in comments:
-        lock = parse_lock(text)
-        if lock and lock[0] == token:
-            when = datetime.fromisoformat(date)  # Python 3.11 entiende la Z
-            return (now - when).total_seconds() / 60
-    return 0.0
+    return (now - lock_date(comments, token)).total_seconds() / 60
 
 
 def credentials(
@@ -303,17 +304,24 @@ class Api:
         else:
             data = urllib.parse.urlencode(params).encode()
         req = urllib.request.Request(url, data=data, method=method)
-        try:
-            with urllib.request.urlopen(req, timeout=30) as resp:
-                body = resp.read()
-        except urllib.error.HTTPError as e:
-            detail = e.read().decode(errors="replace")[:200]
-            raise SystemExit(
-                f"Trello respondió {e.code} a {method} {path}: {detail}"
-            ) from e
-        except urllib.error.URLError as e:
-            raise SystemExit(f"No se pudo hablar con Trello: {e.reason}") from e
-        return json.loads(body) if body else None
+        for attempt in range(RETRIES_429 + 1):
+            try:
+                with urllib.request.urlopen(req, timeout=30) as resp:
+                    body = resp.read()
+                return json.loads(body) if body else None
+            except urllib.error.HTTPError as e:
+                if (
+                    e.code == 429 and attempt < RETRIES_429
+                ):  # tope de Trello: esperar y seguir
+                    time.sleep(float(e.headers.get("Retry-After") or 2))
+                    continue
+                detail = e.read().decode(errors="replace")[:200]
+                raise SystemExit(
+                    f"Trello respondió {e.code} a {method} {path}: {detail}"
+                ) from e
+            except urllib.error.URLError as e:
+                raise SystemExit(f"No se pudo hablar con Trello: {e.reason}") from e
+        return None  # no se llega: el for devuelve o levanta
 
 
 @dataclass
@@ -575,6 +583,15 @@ class Board:
         mine = self.comment(card, lock_text(token, agent, origin, datetime.now(UTC)))
         comments = self.comments(card)
         won = winner(comments)
+        if (
+            won is None
+        ):  # un 🔓 o ✅ cayó justo después del nuestro: la tarjeta está libre
+            self.api.delete(f"/actions/{mine}")
+            mine = self.comment(
+                card, lock_text(token, agent, origin, datetime.now(UTC))
+            )
+            comments = self.comments(card)
+            won = winner(comments)
         if won is None or won[0] != token:
             self.api.delete(f"/actions/{mine}")  # no dejar candados huérfanos
             who = won[1] if won else "otro"
@@ -592,17 +609,19 @@ class Board:
         if state != "choca":
             mine_at = lock_date(comments, token)
             for other in self.cards():
-                if (
-                    other.id == card.id
-                    or other.list_name != LIST_IN_PROGRESS
-                    or other.closed
-                ):
+                if other.id == card.id or other.closed or other.list_name == LIST_DONE:
                     continue
                 hit = paths_overlap(card.header.touches, other.header.touches)
                 if not hit:
                     continue
+                # en curso, o con un candado reciente (la está tomando y todavía no la movió)
                 theirs = winner(other_comments := self.comments(other))
                 theirs_at = lock_date(other_comments, theirs[0]) if theirs else None
+                if other.list_name != LIST_IN_PROGRESS and (
+                    theirs is None
+                    or lock_age_minutes(other_comments, theirs[0]) > STALE_LOCK_MIN
+                ):
+                    continue
                 if theirs_at is None or theirs_at <= mine_at:
                     self.comment(
                         card,
@@ -707,6 +726,7 @@ def is_work_list(name: str, extra: bool = False) -> bool:
 def cmd_listar(board: Board, args: argparse.Namespace) -> int:
     cards = board.cards()
     done = board.done_links(cards)
+    known = {c.short for c in cards}
     rows = []
     for card in cards:
         if card.closed:
@@ -714,7 +734,7 @@ def cmd_listar(board: Board, args: argparse.Namespace) -> int:
         if card.list_name == LIST_IN_PROGRESS or is_work_list(
             card.list_name, args.todas
         ):
-            state, why = board.status(card, cards, done)
+            state, why = board.status(card, cards, done, known)
             rows.append((card, state, why))
     if args.json:
         print(
@@ -771,6 +791,11 @@ def cmd_ver(board: Board, args: argparse.Namespace) -> int:
     )
     if why:
         print("  " + "; ".join(why))
+    comments = board.comments(card)
+    if (lock := winner(comments)) is not None:
+        print(
+            f"  🔒 candado de {lock[1]} (hace {lock_age_minutes(comments, lock[0]):.0f} min)"
+        )
     print()
     print(card.desc)
     return 0
@@ -813,8 +838,16 @@ def cmd_sincronizar(board: Board, args: argparse.Namespace) -> int:
     return 0
 
 
+class _Parser(argparse.ArgumentParser):
+    def error(
+        self, message: str
+    ) -> NoReturn:  # argparse sale con 2; acá el 2 es la carrera
+        self.print_usage(sys.stderr)
+        raise SystemExit(f"{self.prog}: {message}")
+
+
 def build_parser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(
+    p = _Parser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -850,7 +883,9 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("tarjeta")
     s.add_argument("--motivo", default="")
     s.add_argument(
-        "--agente", help="quién la suelta; si no es quien la tomó, hace falta --forzar"
+        "--agente",
+        required=True,
+        help="quién la suelta; si no es quien la tomó, hace falta --forzar",
     )
     s.add_argument("--forzar", action="store_true", help="aunque la haya tomado otro")
     s.set_defaults(fn=cmd_soltar)
@@ -860,7 +895,9 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--pr", type=int, help="número del PR mergeado en develop")
     s.add_argument("--nota", default="")
     s.add_argument(
-        "--agente", help="quién la termina; si no es quien la tomó, hace falta --forzar"
+        "--agente",
+        required=True,
+        help="quién la termina; si no es quien la tomó, hace falta --forzar",
     )
     s.add_argument(
         "--forzar",
@@ -881,8 +918,8 @@ def main(argv: list[str] | None = None) -> int:
     ):  # por un pipe en Windows sale cp1252: UTF-8 siempre
         if hasattr(stream, "reconfigure"):
             stream.reconfigure(encoding="utf-8", errors="replace")
-    args = build_parser().parse_args(argv)
     try:
+        args = build_parser().parse_args(argv)
         key, token = credentials()
         board = Board(Api(key, token))
         return args.fn(board, args)

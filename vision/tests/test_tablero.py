@@ -442,6 +442,94 @@ def test_two_overlapping_cards_taken_at_once_the_older_lock_keeps_going():
     assert api.list_of("cccccc05") == "In progress"
 
 
+def test_header_accepts_colon_outside_bold_and_bulleted_dependencies():
+    desc = (
+        "**Toca**: `a.py`\n**Depende de:**\n- C-5 (cccccc05)\n- A-4 (aaaaaaa4)\n\ntexto"
+    )
+    h = tablero.parse_header(desc)
+    assert h.touches == ["a.py"]
+    assert h.depends_on == ["cccccc05", "aaaaaaa4"]
+
+
+def test_usage_error_exits_with_one_not_two(capsys, monkeypatch):
+    monkeypatch.setattr(tablero, "credentials", lambda *a, **k: ("k", "t"))
+    assert tablero.main(["tomar", "cccccc05"]) == 1  # falta --agente
+    assert "--agente" in capsys.readouterr().err
+
+
+def test_take_when_an_unlock_lands_right_after_our_lock():
+    api, board = board_with(
+        card("a4", "aaaaaaa4", "A-4", "", "LD"),
+        card("c5", "cccccc05", "P1 · C-5 · Voy", HEADER_C5),
+    )
+
+    def sneak(cid):  # alguien soltó la tarjeta justo después de nuestro candado
+        api.add_comment(cid, "🔓 soltada: tarde")
+
+    api.before_comment_read = sneak
+    board.take("cccccc05", "yo")
+    assert api.list_of("cccccc05") == "In progress"
+    texts = [c["data"]["text"] for c in api.comments["c5"]]
+    assert texts[-1].startswith("🔒") and "yo" in texts[-1]
+
+
+def test_overlapping_card_locked_but_not_yet_moved_counts():
+    api, board = board_with(
+        card("a4", "aaaaaaa4", "A-4", "", "LD"),
+        card("c5", "cccccc05", "P1 · C-5 · Voy", HEADER_C5),
+        card(
+            "c9",
+            "cccccc09",
+            "P2 · C-9 · Otra",
+            "**Toca:** `vision/servio_vision/alerts/engine.py`\n\nx",
+        ),
+    )
+
+    def sneak(
+        cid,
+    ):  # C-9 tiene candado anterior al nuestro pero su agente aún no la movió
+        api.add_comment(
+            "c9",
+            tablero.lock_text("eeeeeeeeeeee", "otro", "Semana 3", datetime.now(UTC)),
+        )
+        api.comments["c9"][-1]["date"] = "2026-11-09T09:00:00.000Z"
+
+    api.before_comment_read = sneak
+    with pytest.raises(SystemExit) as e:
+        board.take("cccccc05", "yo")
+    assert e.value.code[1] == 2
+    assert api.list_of("cccccc05").startswith("Semana 3")
+
+
+def test_api_retries_on_429(monkeypatch):
+    import urllib.error
+
+    calls = []
+
+    class Resp:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def read(self):
+            return b'{"ok": true}'
+
+    def fake_urlopen(req, timeout):
+        calls.append(req.full_url)
+        if len(calls) == 1:
+            raise urllib.error.HTTPError(
+                req.full_url, 429, "Too Many", {"Retry-After": "0"}, None
+            )
+        return Resp()
+
+    monkeypatch.setattr(tablero.urllib.request, "urlopen", fake_urlopen)
+    monkeypatch.setattr(tablero.time, "sleep", lambda s: None)
+    assert tablero.Api("K", "T").get("/x") == {"ok": True}
+    assert len(calls) == 2
+
+
 def test_credentials_from_env_files(tmp_path):
     repo = tmp_path / ".env"
     repo.write_text("TRELLO_KEY='k1'   # comentario\nTRELLO_TOKEN=\n", encoding="utf-8")
