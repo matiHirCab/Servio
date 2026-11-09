@@ -80,6 +80,9 @@ UNLOCK = "🔓"
 DONE_MARK = "✅"
 RETRIES_429 = 3  # reintentos cuando Trello devuelve «demasiadas llamadas»
 LOCK_READ_RETRIES = 4  # lecturas hasta ver el candado propio
+# La edad de un candado se mide con la hora de Trello cuando hay un comentario propio
+# para comparar (tomar); en soltar y en --forzar se usa el reloj de esta máquina, que se
+# supone en hora (NTP). Con un reloj 10 minutos corrido, un candado fresco parece viejo.
 STALE_LOCK_MIN = (
     10  # un candado de más que esto en una tarjeta que no está en curso es viejo
 )
@@ -90,11 +93,11 @@ _PAREN_TOKEN = re.compile(r"\(([A-Za-z0-9_-]{8})\)")
 _BACKTICKED = re.compile(r"`([^`]+)`")
 # una línea que son solo rutas o solo referencias a tarjetas («C-5 (9oDZRoKz)»)
 _ONLY_PATHS = re.compile(
-    r"(?:(?:`[^`]+`|[A-Z][A-Za-z0-9-]*\s*\([A-Za-z0-9_-]{8}\))[\s,;·]*)+"
+    r"(?:(?:`[^`]+`(?:\s*\([^()`]*\))?|[A-Z][A-Za-z0-9-]*\s*\([A-Za-z0-9_-]{8}\))[\s,;·]*)+"
 )
 # `**Clave:** valor` o `**Clave**: valor`
 _HEADER_FIELD = re.compile(
-    r"\*\*(?P<key>[^*:]+?):?\*\*:?(?P<value>.*?)(?=\*\*[^*:]+?:?\*\*:?|$)"
+    r"\*\*(?P<key>[^*:]+?)(?::\*\*|\*\*:)(?P<value>.*?)(?=\*\*[^*:]+?(?::\*\*|\*\*:)|$)"
 )
 _CODE = re.compile(r"\b([A-Z]{1,2}-\d+[a-z]?)\b")
 _LOCK_LINE = re.compile(
@@ -127,18 +130,16 @@ def header_lines(desc: str) -> str:
     párrafo), y tampoco un título o una viñeta antes del primer campo («## Contexto»,
     «- **Toca:** …»); la primera línea de texto común después de un campo, sí."""
     taken: list[str] = []
-    previous_was_header = False
     for line in desc.replace("\r", "").split("\n"):
         stripped = re.sub(r"^(?:[-*•]\s+|#+\s+)", "", line.strip())  # viñeta o título
         if not stripped:
             continue
         if _HEADER_FIELD.search(stripped) or (
-            previous_was_header and _ONLY_PATHS.fullmatch(stripped)
+            taken and _ONLY_PATHS.fullmatch(stripped)
         ):
             taken.append(stripped)
-            previous_was_header = True
-        else:
-            previous_was_header = False
+        elif taken:
+            break  # la primera línea de texto común cierra el encabezado
     return " ".join(taken)
 
 
@@ -194,10 +195,18 @@ def paths_overlap(a: list[str], b: list[str]) -> list[str]:
 
 def _norm(path: str) -> str:
     """`./vision/tools/*.py` → `vision/tools`: lo que hay antes del comodín es la carpeta."""
-    path = path.replace("\\", "/").strip()
-    path = re.split(r"[*?\[]", path, maxsplit=1)[0]
-    path = path.removeprefix("./")
-    return path.rstrip("/")
+    path = path.replace("\\", "/").strip().removeprefix("./")
+    head, glob, _rest = _split_glob(path)
+    if glob and not head.endswith("/"):  # `tests/test_*.py` → la carpeta `tests`
+        head = head.rsplit("/", 1)[0] if "/" in head else ""
+    return head.rstrip("/")
+
+
+def _split_glob(path: str) -> tuple[str, str, str]:
+    m = re.search(r"[*?\[]", path)
+    if not m:
+        return path, "", ""
+    return path[: m.start()], m.group(0), path[m.end() :]
 
 
 def card_code(name: str) -> str | None:
@@ -467,19 +476,34 @@ class Board:
         )
 
     def comments(self, card: Card) -> list[tuple[str, str]]:
-        rows = self.api.get(
-            f"/cards/{card.id}/actions", filter="commentCard", limit=100
-        )
-        return [(r["date"], r["data"]["text"]) for r in rows]
+        """Los comentarios, del más nuevo al más viejo, paginados hasta encontrar un 🔓 o
+        un ✅ (lo anterior no cuenta para el candado) o hasta que no haya más."""
+        out: list[tuple[str, str]] = []
+        before: str | None = None
+        while True:
+            params: dict[str, Any] = {"filter": "commentCard", "limit": 100}
+            if before:
+                params["before"] = before
+            rows = self.api.get(f"/cards/{card.id}/actions", **params)
+            out.extend((r["date"], r["data"]["text"]) for r in rows)
+            if len(rows) < 100 or any(
+                r["data"]["text"].strip().startswith((UNLOCK, DONE_MARK)) for r in rows
+            ):
+                return out
+            before = rows[-1]["id"]
 
-    def _comments_with(self, card: Card, token: str) -> list[tuple[str, str]]:
-        """Los comentarios, esperando a que el candado propio aparezca (Trello puede
-        tardar un instante en listar un comentario recién hecho)."""
+    def _comments_with(
+        self, card: Card, token: str, mine: str
+    ) -> list[tuple[str, str]]:
+        """Los comentarios, esperando a que el candado propio (`mine`) aparezca: Trello
+        puede tardar un instante en listar un comentario recién hecho. Si nunca
+        aparece, se borra para no dejarlo huérfano."""
         for attempt in range(LOCK_READ_RETRIES):
             comments = self.comments(card)
             if any((lock := parse_lock(t)) and lock[0] == token for _d, t in comments):
                 return comments
             time.sleep(0.5 * (attempt + 1))
+        self.api.delete(f"/actions/{mine}")
         raise SystemExit(
             f"{card.name}: Trello no muestra el candado recién puesto; probá de nuevo en un rato."
         )
@@ -564,8 +588,9 @@ class Board:
         if on and not has:
             self.api.post(f"/cards/{card.id}/idLabels", value=self.labels[name])
             card.labels.append(name)
+            card.label_ids[name] = self.labels[name]
         elif not on and has:
-            label_id = card.label_ids.get(name, self.labels[name])
+            label_id = card.label_ids.pop(name, self.labels[name])
             self.api.delete(f"/cards/{card.id}/idLabels/{label_id}")
             card.labels.remove(name)
 
@@ -580,14 +605,23 @@ class Board:
     def me(self) -> str:
         return self.api.get("/members/me", fields="id")["id"]
 
-    def sync_labels(self, cards: list[Card]) -> list[Card]:
-        """Pone Libre / Bloqueada según las dependencias. Devuelve las recién liberadas."""
+    def sync_labels(
+        self, cards: list[Card], only_dependents_of: str | None = None
+    ) -> list[Card]:
+        """Pone Libre / Bloqueada según las dependencias. Devuelve las recién liberadas.
+        Con `only_dependents_of`, solo mira las tarjetas que dependen de ese enlace."""
         self.ensure_labels()
         done = self.done_links(cards)
         known = {c.short for c in cards}
         freed = []
         for card in cards:
             if card.closed or not is_work_list(card.list_name, extra=True):
+                continue
+            if (
+                only_dependents_of
+                and only_dependents_of not in card.header.depends_on
+                and card.short != only_dependents_of  # la propia, al soltarla
+            ):
                 continue
             if LABEL_HUMAN in card.labels:
                 self.set_label(card, LABEL_FREE, False)
@@ -628,7 +662,7 @@ class Board:
         token = uuid.uuid4().hex[:12]
         origin = card.list_name
         mine = self.comment(card, lock_text(token, agent, origin, datetime.now(UTC)))
-        comments = self._comments_with(card, token)
+        comments = self._comments_with(card, token, mine)
         won = winner(comments)
         if (
             won is None
@@ -637,7 +671,7 @@ class Board:
             mine = self.comment(
                 card, lock_text(token, agent, origin, datetime.now(UTC))
             )
-            comments = self._comments_with(card, token)
+            comments = self._comments_with(card, token, mine)
             won = winner(comments)
         if won is None or won[0] != token:
             self.api.delete(f"/actions/{mine}")  # no dejar candados huérfanos
@@ -693,7 +727,7 @@ class Board:
                                 2,
                             )
                         )
-        except SystemExit:
+        except (SystemExit, Exception):
             if (
                 not rolled_back
             ):  # un error de red en la segunda mirada no deja la tarjeta colgada
@@ -744,7 +778,7 @@ class Board:
             origin = work[0]
         self.comment(card, f"{UNLOCK} soltada: {reason or 'sin terminar'}")
         self.move(card, origin)
-        self.sync_labels(self.cards())
+        self.sync_labels(self.cards(), only_dependents_of=card.short)
         return card
 
     def finish(
@@ -777,7 +811,7 @@ class Board:
         self.move(card, LIST_DONE)
         self.set_label(card, LABEL_FREE, False)
         self.set_label(card, LABEL_BLOCKED, False)
-        freed = self.sync_labels(self.cards())
+        freed = self.sync_labels(self.cards(), only_dependents_of=card.short)
         return card, freed
 
 

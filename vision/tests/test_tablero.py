@@ -696,6 +696,108 @@ def test_take_fails_clearly_if_the_lock_never_shows_up(monkeypatch):
     assert api.list_of("cccccc05").startswith("Semana 3")
 
 
+def test_body_bold_fields_do_not_reach_the_header():
+    desc = "**Área:** x · **Toca:** `a/`\n\nTexto.\n**Depende de:** C-9 (zzzzzzz9) para el futuro"
+    assert tablero.parse_header(desc).depends_on == []
+
+
+def test_bold_word_inside_a_value_does_not_cut_it():
+    h = tablero.parse_header(
+        "**Toca:** `a/`, **importante** `b/`\n**Depende de**: nada"
+    )
+    assert h.touches == ["a/", "b/"]
+
+
+def test_glob_with_a_name_stem_means_its_folder():
+    assert tablero.paths_overlap(
+        ["vision/tests/test_*.py"], ["vision/tests/test_tablero.py"]
+    )
+    assert not tablero.paths_overlap(["vision/tests/test_*.py"], ["vision/tools/x.py"])
+
+
+def test_take_gives_up_cleanly_and_removes_its_lock(monkeypatch):
+    api, board = board_with(
+        card("a4", "aaaaaaa4", "A-4", "", "LD"),
+        card("c5", "cccccc05", "P1 · C-5 · Voy", HEADER_C5),
+    )
+    real_get = api.get
+    api.get = lambda path, **p: [] if path.endswith("/actions") else real_get(path, **p)
+    monkeypatch.setattr(tablero.time, "sleep", lambda s: None)
+    with pytest.raises(SystemExit, match="no muestra el candado"):
+        board.take("cccccc05", "yo")
+    assert api.comments["c5"] == []  # no dejó su candado
+
+
+def test_second_look_rolls_back_on_any_error():
+    api, board = board_with(
+        card("a4", "aaaaaaa4", "A-4", "", "LD"),
+        card("c5", "cccccc05", "P1 · C-5 · Voy", HEADER_C5),
+        card(
+            "c9",
+            "cccccc09",
+            "P2 · C-9 · Otra",
+            "**Toca:** `vision/servio_vision/alerts/engine.py`\n\nx",
+        ),
+    )
+    real_get = api.get
+
+    def flaky(path, **params):
+        if path == "/cards/c9/actions":
+            raise TimeoutError("read timed out")
+        return real_get(path, **params)
+
+    def arm(cid):
+        api.cards["c9"]["idList"] = "LP"
+        api.get = flaky
+
+    api.before_comment_read = arm
+    with pytest.raises(TimeoutError):
+        board.take("cccccc05", "yo")
+    assert api.list_of("cccccc05").startswith("Semana 3")
+
+
+def test_comments_are_paged_until_a_reset_marker():
+    api, board = board_with(card("c5", "cccccc05", "C-5", HEADER_C5))
+    for n in range(250):
+        api.add_comment("c5", f"charla {n}")
+    api.add_comment(
+        "c5", tablero.lock_text("aaaaaaaaaaaa", "ana", "Semana 3", datetime.now(UTC))
+    )
+    real_get = api.get
+
+    def paged(path, **params):
+        rows = real_get(path, **params)
+        if path.endswith("/actions"):
+            rows = sorted(
+                rows, key=lambda r: r["date"], reverse=True
+            )  # Trello: del más nuevo al más viejo
+            if params.get("before"):
+                ids = [r["id"] for r in rows]
+                rows = rows[ids.index(params["before"]) + 1 :]
+            return rows[: params.get("limit", 100)]
+        return rows
+
+    api.get = paged
+    c5 = board.card("cccccc05")
+    assert len(board.comments(c5)) == 251  # llegó al final: no hay 🔓
+    api.add_comment("c5", "🔓 soltada")
+    assert (
+        len(board.comments(c5)) <= 100
+    )  # se frenó en la primera página, que trae el 🔓
+
+
+def test_finish_only_resyncs_dependents():
+    api, board = board_with(
+        card("a4", "aaaaaaa4", "A-4", "", "LD"),
+        card("c5", "cccccc05", "P1 · C-5 · Voy", HEADER_C5, "LP"),
+        card("c7", "cccccc07", "P1 · C-7 · Por mozo", HEADER_C7),
+        card("n1", "nuevaaa1", "P2 · N-1 · Nueva", "**Toca:** `x.py`\n\nx"),
+    )
+    board.finish("cccccc05", 72, "")
+    assert api.label_names("cccccc07") == {"Libre"}
+    assert api.label_names("nuevaaa1") == set()  # no se tocó: no depende de C-5
+
+
 def test_credentials_from_env_files(tmp_path):
     repo = tmp_path / ".env"
     repo.write_text("TRELLO_KEY='k1'   # comentario\nTRELLO_TOKEN=\n", encoding="utf-8")
