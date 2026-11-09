@@ -185,7 +185,9 @@ let prevStates = {};      // track_id → estado de la foto anterior, para marca
 let selected = null;      // table_id elegida
 let connected = false;
 let everConnected = false;  // para distinguir «conectando» de «se cortó»
-let mode = "recon";       // "recon" | "video"; el video solo si el servidor lo ofrece (snap.video)
+let mode = "recon";       // lo que se ve: "recon" | "video"; el video solo si el servidor lo ofrece (snap.video)
+let wanted = "recon";     // lo que eligió la persona, recordado en el navegador
+try { wanted = localStorage.getItem("salon-mode") === "video" ? "video" : "recon"; } catch (e) {}
 const dirty = {floor:false, video:false};        // el modo oculto se dibuja recién al mostrarlo
 const pending = {floor:new Set(), video:new Set()}; // los platos que tienen que latir en cada modo
 
@@ -279,9 +281,12 @@ function plate(p, x, y, r, changed) {
 
 // Una etiqueta de color (el aviso de una mesa, el nombre de un plato). El ancho se
 // estima por la cantidad de letras; `fitTags` lo ajusta al texto real ya dibujado.
-function tag(x, y, text, col, opacity = 1, anchor = "start") {
+function tag(x, y, text, col, opacity = 1, anchor = "start", age = null, alt = null) {
+  // `age` (ISO): la etiqueta termina en « · HACE X» y se actualiza cada segundo (refreshAges).
+  // `alt`: otra `y` para cuando pisa a una etiqueta ya puesta (fitTags la baja ahí).
+  if (age) text = `${text} · ${ago(age).toUpperCase()}`;
   const w = text.length * 7.2 + 22, x0 = anchor === "end" ? -w : 0;
-  return `<g class="tag" data-x="${x.toFixed(1)}" data-y="${y.toFixed(1)}" data-anchor="${anchor}" transform="translate(${x.toFixed(1)} ${y.toFixed(1)})"><rect x="${x0.toFixed(0)}" y="-11" width="${w.toFixed(0)}" height="22" rx="11" fill="${col}" fill-opacity="${opacity}"/><text x="${(x0 + w / 2).toFixed(0)}" y="4" text-anchor="middle" class="svg-tag">${esc(text)}</text></g>`;
+  return `<g class="tag" data-x="${x.toFixed(1)}" data-y="${y.toFixed(1)}" data-anchor="${anchor}"${alt !== null ? ` data-alt="${alt.toFixed(1)}"` : ""}${age ? ` data-age="${esc(age)}" data-base="${esc(text.slice(0, text.lastIndexOf(" · ")))}"` : ""} transform="translate(${x.toFixed(1)} ${y.toFixed(1)})"><rect x="${x0.toFixed(0)}" y="-11" width="${w.toFixed(0)}" height="22" rx="11" fill="${col}" fill-opacity="${opacity}"/><text x="${(x0 + w / 2).toFixed(0)}" y="4" text-anchor="middle" class="svg-tag">${esc(text)}</text></g>`;
 }
 function fitTags(svg) {
   for (let e = svg; e; e = e.parentElement) if (e.hasAttribute && e.hasAttribute("hidden")) return;  // oculto: no se puede medir
@@ -297,8 +302,34 @@ function fitTags(svg) {
     if (absX + shift < 4) shift = 4 - absX;      // ni contra el izquierdo
     if (shift) g.setAttribute("transform", `translate(${(+g.dataset.x + shift).toFixed(1)} ${g.dataset.y})`);
   }
+  // dos etiquetas que se pisan (ya medidas y corridas): la segunda baja a su `alt`, si lo tiene
+  const placed = [];
+  for (const g of svg.querySelectorAll("g.tag")) {
+    let box = tagBox(svg, g);
+    if (!box) continue;
+    if (g.dataset.alt !== undefined && placed.some(b => b.x < box.x + box.w && b.x + b.w > box.x && b.y < box.y + box.h && b.y + b.h > box.y)) {
+      const x = g.getAttribute("transform").match(/translate\(([-\d.]+)/)[1];
+      g.setAttribute("transform", `translate(${x} ${g.dataset.alt})`);
+      box = tagBox(svg, g) || box;
+    }
+    placed.push(box);
+  }
 }
-const alertTagText = (al, name) => alertTitle(al.type, name).toUpperCase() + " · " + ago(al.created_at).toUpperCase();
+// el rectángulo de una etiqueta en las unidades del viewBox del svg
+function tagBox(svg, g) {
+  if (!g.getCTM || !svg.getCTM) return null;
+  const m = svg.getCTM().inverse().multiply(g.getCTM()), r = g.querySelector("rect");
+  return {x: m.e + +r.getAttribute("x"), y: m.f + +r.getAttribute("y"), w: +r.getAttribute("width"), h: +r.getAttribute("height")};
+}
+const alertTagText = (al, name) => alertTitle(al.type, name).toUpperCase();
+// las edades de las etiquetas de aviso, cada segundo (el dibujo solo se rehace con una lectura)
+function refreshAges(svg) {
+  if (svg.hasAttribute("hidden")) return;
+  const tags = svg.querySelectorAll("g.tag[data-age]");
+  if (!tags.length) return;
+  for (const g of tags) g.querySelector("text").textContent = `${g.dataset.base} · ${ago(g.dataset.age).toUpperCase()}`;
+  fitTags(svg);
+}
 
 // ---------- reconstrucción ----------
 function renderFloor() {
@@ -372,7 +403,7 @@ function renderFloor() {
     out += `<text x="${x0.toFixed(1)}" y="${ly.toFixed(1)}" class="svg-label">${esc(t.name)}${t.waiter ? " · " + esc(t.waiter) : ""}</text>`;
     out += `<text x="${(x0 + w).toFixed(1)}" y="${ly.toFixed(1)}" text-anchor="end" class="svg-status${sel ? " sel" : ""}">${esc(status)}</text>`;
     const al = alertsOf(t.id)[0];  // el aviso más viejo de la mesa, debajo
-    if (al) out += tag(x0, y0 + h + (people.some(o => o.side === "b") ? seat + 26 * s : 22), alertTagText(al, t.name), alertColor(al.type));
+    if (al) out += tag(x0, y0 + h + (people.some(o => o.side === "b") ? seat + 26 * s : 22), alertTagText(al, t.name), alertColor(al.type), 1, "start", al.created_at);
     out += `</g>`;
   }
   svg.setAttribute("viewBox", `0 0 ${W} ${H.toFixed(0)}`);
@@ -390,9 +421,13 @@ function renderVideo() {
   const svg = $("overlay");
   if (!snap) { svg.innerHTML = ""; return; }
   const [fw, fh] = snap.frame;
+  // el viewBox no es la resolución de la cámara: una unidad es un píxel de la pantalla
+  // (el ancho con que se muestra el video), así los trazos y las etiquetas miden lo mismo
+  // con una webcam de 640 que con una de 1920, y en una cámara vertical angosta
+  const VW = $("video").clientWidth || 1000, VH = VW * fh / fw;
   $("video").style.aspectRatio = `${fw} / ${fh}`;
   $("video").style.width = `min(100%, calc(72vh * ${(fw / fh).toFixed(4)}))`;  // una cámara vertical no más alta que la pantalla
-  svg.setAttribute("viewBox", `0 0 ${fw} ${fh}`);
+  svg.setAttribute("viewBox", `0 0 ${VW} ${VH.toFixed(1)}`);
   $("cam-cap").textContent = `Cámara ${snap.camera} · caras difuminadas en la computadora`;
   if (snap.version !== camVersion) {  // el frame de esta lectura; el navegador no lo cachea (no-store)
     camVersion = snap.version;
@@ -400,29 +435,24 @@ function renderVideo() {
   }
   let out = `<defs>${halos("v")}</defs>`;
   for (const t of snap.tables) {
-    const sel = t.id === selected, x0 = t.box[0] * fw, y0 = t.box[1] * fh, w = t.box[2] * fw, h = t.box[3] * fh;
+    const sel = t.id === selected, x0 = t.box[0] * VW, y0 = t.box[1] * VH, w = t.box[2] * VW, h = t.box[3] * VH;
     const status = TABLE_STATUS[t.status] || t.status;
     out += `<g class="tbl" data-id="${esc(t.id)}" tabindex="0" role="button" aria-label="${esc(t.name)}, ${esc(status)}">`;
     out += `<rect class="tbl-top" x="${x0.toFixed(1)}" y="${y0.toFixed(1)}" width="${w.toFixed(1)}" height="${h.toFixed(1)}" rx="10" fill="#3E8BFF" fill-opacity="${sel ? .08 : .02}" stroke="#ffffff" stroke-opacity="${sel ? .9 : .35}" stroke-width="2" stroke-dasharray="${sel ? "0" : "6 6"}"/>`;
     out += tag(x0 + 8, y0 + 16, `${t.name}${t.waiter ? " · " + t.waiter : ""} · ${status.toUpperCase()}`, "#e9edf2", .92);
     const al = alertsOf(t.id)[0];
-    if (al) out += tag(x0 + 8, y0 + h - 16, alertTagText(al, t.name), alertColor(al.type));
-    const labels = [];  // las etiquetas ya puestas en esta mesa [x0, x1, y], para no pisarlas
+    if (al) out += tag(x0 + 8, y0 + h - 16, alertTagText(al, t.name), alertColor(al.type), 1, "start", al.created_at);
     for (const p of t.plates) {
       if (!p.bbox) continue;
       const [bx, by, bw, bh] = p.bbox;
-      const px = (bx + bw / 2) * fw, py = (by + bh / 2) * fh, r = Math.min(bw * fw, bh * fh) / 2;
+      const px = (bx + bw / 2) * VW, py = (by + bh / 2) * VH, r = Math.min(bw * VW, bh * VH) / 2;
       const st = stateOf(p), col = COLOR[st], R = r + 6, circ = 2 * Math.PI * R, f = p.fill_ratio ?? FILL[st];
       out += `<g transform="translate(${px.toFixed(1)} ${py.toFixed(1)})"><g class="${pending.video.has(p.id) ? "changed" : ""}"><circle r="${(R + 10).toFixed(1)}" fill="url(#vhalo-${st})" opacity=".8"/><circle r="${R.toFixed(1)}" fill="none" stroke="${col}" stroke-opacity=".25" stroke-width="2.5"/>`;
       if (f > .02) out += `<circle r="${R.toFixed(1)}" fill="none" stroke="${col}" stroke-width="3" stroke-linecap="round" stroke-dasharray="${(circ * f).toFixed(1)} ${circ.toFixed(1)}" transform="rotate(-90)"/>`;
-      const label = `${dishName(p)} · ${STATE_NAME[st].toUpperCase()}`, lw = label.length * 7.2 + 22;
-      const left = px + R + 8 + lw > fw;  // a la izquierda si a la derecha no entra
-      const lx0 = left ? px - R - 8 - lw : px + R + 8, lx1 = lx0 + lw;
-      // arriba del anillo; si ahí pisa la etiqueta de un plato vecino, abajo
-      let ly = py - (R - 2);
-      if (labels.some(([a, b, y]) => Math.abs(y - ly) < 24 && lx0 < b && lx1 > a)) ly = py + R + 14;
-      labels.push([lx0, lx1, ly]);
-      out += `</g>` + tag(left ? -(R + 8) : R + 8, ly - py, label, col, 1, left ? "end" : "start") + `</g>`;
+      const label = `${dishName(p)} · ${STATE_NAME[st].toUpperCase()}`;
+      const left = px + R + 8 + label.length * 7.2 + 22 > VW;  // a la izquierda si a la derecha no entra
+      // arriba del anillo; si ahí pisa la etiqueta de un plato vecino, fitTags la baja (`alt`)
+      out += `</g>` + tag(left ? -(R + 8) : R + 8, -(R - 2), label, col, 1, left ? "end" : "start", null, R + 14) + `</g>`;
     }
     out += `</g>`;
   }
@@ -497,12 +527,13 @@ function pickTable() {
 
 function render() {
   pickTable();
+  // antes de redibujar: después el nodo ya no está en el documento
   const focused = document.activeElement && document.activeElement.closest ? document.activeElement.closest(".tbl") : null;
-  const focusedSvg = focused ? focused.closest("svg") : null;  // antes de redibujar: después el nodo ya no está
-  if ($("floor").hasAttribute("hidden")) dirty.floor = true; else renderFloor();
-  if ($("video").hasAttribute("hidden")) dirty.video = true; else renderVideo();
+  const focusedSvg = focused ? focused.closest("svg") : null, focusedId = focused ? focused.dataset.id : null;
+  if ($("floor").hasAttribute("hidden")) dirty.floor = true; else { renderFloor(); dirty.floor = false; }
+  if ($("video").hasAttribute("hidden")) dirty.video = true; else { renderVideo(); dirty.video = false; }
   renderSide();
-  if (focusedSvg) { const g = focusedSvg.querySelector(`.tbl[data-id="${CSS.escape(selected ?? "")}"]`); if (g && g.focus) g.focus(); }
+  if (focusedSvg && focusedId !== null) { const g = focusedSvg.querySelector(`.tbl[data-id="${CSS.escape(focusedId)}"]`); if (g && g.focus) g.focus(); }
 }
 
 function apply(data) {
@@ -516,27 +547,35 @@ function apply(data) {
   }
   prevStates = {};
   for (const t of snap.tables) for (const p of t.plates) prevStates[p.id] = p.state;
-  // el segmento de modo solo si el servidor ofrece el frame (--web-video)
+  // el segmento de modo solo si el servidor ofrece el frame (--web-video); el modo que
+  // se muestra es el que eligió la persona (`wanted`) si el servidor lo ofrece
   $("modes").hidden = !snap.video;
-  if (!snap.video && mode === "video") setMode("recon");
-  render();
+  showMode(wanted === "video" && snap.video ? "video" : "recon");
+  render();  // dibuja el modo visible (y marca el otro para cuando se muestre)
 }
 
-function setMode(m) {
-  if (m === "video" && !(snap && snap.video)) m = "recon";
+// qué modo se ve (sin dibujar nada)
+function showMode(m) {
   mode = m;
   $("floor").toggleAttribute("hidden", m !== "recon");
   $("video").toggleAttribute("hidden", m !== "video");
-  if (m === "recon" && dirty.floor) { renderFloor(); dirty.floor = false; }
-  if (m === "video" && dirty.video) { renderVideo(); dirty.video = false; }
-  fitTags($("floor")); fitTags($("overlay"));
   $("mode-recon").setAttribute("aria-pressed", String(m === "recon"));
   $("mode-video").setAttribute("aria-pressed", String(m === "video"));
-  try { localStorage.setItem("salon-mode", m); } catch (e) {}
 }
-$("mode-recon").onclick = () => setMode("recon");
-$("mode-video").onclick = () => setMode("video");
+// la persona eligió un modo: se recuerda (aunque el servidor hoy no ofrezca el video) y
+// se dibuja lo que estaba pendiente en el que se muestra
+function chooseMode(m) {
+  wanted = m;
+  try { localStorage.setItem("salon-mode", m); } catch (e) {}
+  showMode(m === "video" && snap && snap.video ? "video" : "recon");
+  if (mode === "recon" && dirty.floor) { renderFloor(); dirty.floor = false; }
+  if (mode === "video" && dirty.video) { renderVideo(); dirty.video = false; }
+  fitTags($("floor")); fitTags($("overlay"));
+}
+$("mode-recon").onclick = () => chooseMode("recon");
+$("mode-video").onclick = () => chooseMode("video");
 
+window.addEventListener("resize", () => { if (mode === "video" && snap) renderVideo(); });  // el viewBox del video sigue al ancho
 for (const id of ["floor", "overlay"]) {
   $(id).addEventListener("click", e => { const g = e.target.closest(".tbl"); if (!g) return; selected = g.dataset.id; render(); });
   $(id).addEventListener("keydown", e => {
@@ -546,15 +585,13 @@ for (const id of ["floor", "overlay"]) {
   });
 }
 
-let wanted = "recon";
-try { wanted = localStorage.getItem("salon-mode") || "recon"; } catch (e) {}
-fetch(base + "/estado").then(r => r.json()).then(d => { connected = everConnected = true; apply(d); if (wanted === "video") setMode("video"); renderSide(); }).catch(() => {});
+fetch(base + "/estado").then(r => r.json()).then(d => { connected = everConnected = true; apply(d); renderSide(); }).catch(() => {});
 const events = new EventSource(base + "/eventos");
 events.onopen = () => { connected = everConnected = true; renderSide(); };
 events.onmessage = e => { connected = everConnected = true; apply(JSON.parse(e.data)); };
 events.onerror = () => { connected = false; renderSide(); };
 render();
-setInterval(renderSide, 1000);
+setInterval(() => { renderSide(); refreshAges($("floor")); refreshAges($("overlay")); }, 1000);
 // las etiquetas se midieron con la fuente de reserva: al llegar Barlow Condensed, de nuevo
 if (document.fonts) document.fonts.ready.then(() => { fitTags($("floor")); fitTags($("overlay")); });
 </script>

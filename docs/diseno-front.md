@@ -60,7 +60,7 @@ Hecho en F-1b (sobre `salon.html` y `salon_web.py`; `vista_demo.py` queda como h
 Lo que el servidor manda, además de lo que `/estado` ya mandaba (`fill_ratio`, `since` y `created_at` en ISO, `dish` que puede ser `null`, `message`, `waiter` por mesa):
 
 - `"video"` en la foto: si la página puede pedir `frame.jpg`.
-- `GET /<local>/salon/frame.jpg`: el último frame difuminado (modo video), solo con `--web-video` (ver arriba); sin el flag, 404. El loop de `app.run` se lo deja a `SalonFeed.keep_frame` antes de procesar la lectura, así cuando la página recibe la foto nueva el frame que pide ya es el de esa lectura. La página lo pide con `?v=<version>` para que el navegador no reuse el anterior.
+- `GET /<local>/salon/frame.jpg`: el último frame difuminado (modo video), solo con `--web-video` (ver arriba); sin el flag, 404. El loop de `app.run` se lo deja a `SalonFeed.keep_frame` antes de procesar la lectura y `on_reading` lo publica junto con la foto de esa lectura: el frame que sirve `frame.jpg` y las capas que la página dibuja encima son siempre del mismo cuadro. Se codifica a JPEG recién cuando alguien lo pide (una vez por lectura; con un solo navegador en reconstrucción no se codifica nada). La página lo pide con `?v=<version>` para que el navegador no reuse el anterior.
 - `answered_by` en cada aviso (el nombre que ya usa `alert_feedback` en el log): quién respondió «Voy» (C-5); `null` si nadie respondió todavía. Con `null` el panel muestra «Nadie respondió · mozo» (el mozo sale de la mesa del aviso; el aviso no lo trae); si el campo no viene (el servidor de hoy), no dice nada: no sabe. **Pendiente de C-5.**
 - Las horas (`since`, `created_at`, `ts`) vienen en UTC y la pantalla las muestra en la hora del navegador, que es la del local.
 

@@ -175,22 +175,8 @@ def test_loop_keeps_the_frame_for_the_video_mode_only_with_web_video(loop):
         pipeline = Pipeline(
             FakeClassifier(), ZONES, lambda o: None, on_reading=feed.on_reading
         )
+        pipeline.salon = feed  # lo que hace build_pipeline con --web
         loop(pipeline=pipeline)
         assert app.run(Settings.load(source="0")) == 0
         assert (feed.frame_jpeg() is not None) is video
         assert feed.snapshot()["video"] is video
-
-
-def test_salon_feed_is_found_only_when_the_view_is_on():
-    from servio_vision.salon import SalonFeed
-
-    feed = SalonFeed("casa-1")
-    with_view = Pipeline(
-        FakeClassifier(), ZONES, lambda o: None, on_reading=feed.on_reading
-    )
-    without = Pipeline(
-        FakeClassifier(), ZONES, lambda o: None, on_reading=lambda *a: None
-    )
-    assert app.salon_feed(with_view) is feed
-    assert app.salon_feed(without) is None
-    assert app.salon_feed(Pipeline(FakeClassifier(), ZONES, lambda o: None)) is None

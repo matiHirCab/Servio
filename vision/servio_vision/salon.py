@@ -9,20 +9,24 @@ atiende, si hay gente y los avisos abiertos. `salon_web.py` la sirve en
 La foto se arma en el hilo del pipeline y queda inmutable: el servidor web solo
 la lee, así no comparte nada con las reglas de avisos.
 
-Modo video (F-1b, decisión 2): con `video=True` el feed guarda además el último
-frame **en memoria** como JPEG (`keep_frame`, lo llama el loop de `app.run` con el
-frame ya difuminado; uno solo, se pisa en cada lectura) y `salon_web.py` lo sirve
-en `/<local>/salon/frame.jpg`. Apagado, no se guarda ni se sirve nada.
+Modo video (F-1b, decisión 2): con `video=True` el feed guarda además el frame de
+la última lectura **en memoria** (`keep_frame`, lo llama el loop de `app.run` con el
+frame ya difuminado, antes de procesarlo; `on_reading` lo publica junto con la foto,
+así el frame y las capas que se dibujan encima son del mismo cuadro). Se codifica a
+JPEG recién cuando alguien pide `/<local>/salon/frame.jpg` (`frame_jpeg`), una vez
+por lectura. Apagado, no se guarda ni se sirve nada.
 
 Coordenadas: todo normalizado 0–1 en la imagen de la cámara ([x, y, w, h]).
 """
 
+import logging
 import threading
 from collections import Counter
 from collections.abc import Iterable
 from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
+import cv2
 import numpy as np
 
 from servio_vision.alerts.models import TableObservation
@@ -34,6 +38,8 @@ from servio_vision.zones import to_jpeg
 if TYPE_CHECKING:
     from servio_vision.alerts.processor import AlertProcessor
     from servio_vision.pipeline import Pipeline
+
+logger = logging.getLogger("servio")
 
 PLATE_STATES = ("lleno", "comiendo", "por_terminar", "vacio")
 Box = tuple[float, float, float, float]
@@ -165,21 +171,38 @@ class SalonFeed:
         self._snapshot: dict[str, Any] | None = None
         self._version = 0
         self._changed = threading.Condition()
-        self._frame: bytes | None = None
+        self._pending: np.ndarray | None = None  # el frame de la lectura en curso
+        self._frame: np.ndarray | None = None  # el de la última foto publicada
+        self._jpeg: bytes | None = None  # ese frame codificado, si alguien lo pidió
+        self._encode_failed = False
 
     def keep_frame(self, frame: np.ndarray) -> None:
-        """Guarda el frame (BGR, ya difuminado) como el JPEG que sirve `frame.jpg`.
-        Solo con `video`; si no, no se guarda nada (ni se codifica)."""
+        """El frame (BGR, ya difuminado) de la lectura que está por procesarse; lo
+        publica `on_reading` con la foto. Solo con `video`; si no, no se guarda."""
         if not self.video:
             return
-        jpeg = to_jpeg(frame)
-        with self._changed:
-            self._frame = jpeg
+        self._pending = frame.copy()  # el loop puede reusar el buffer de la cámara
 
     def frame_jpeg(self) -> bytes | None:
-        """El último frame guardado, o `None` (modo video apagado o sin lecturas)."""
+        """El frame de la última foto como JPEG (se codifica la primera vez que se
+        pide), o `None`: modo video apagado, sin lecturas, o un frame que no se pudo
+        codificar (queda logueado; la vista sigue sin imagen, el pipeline sigue)."""
         with self._changed:
-            return self._frame
+            frame, jpeg = self._frame, self._jpeg
+        if frame is None or jpeg is not None:
+            return jpeg
+        try:
+            jpeg = to_jpeg(frame)
+        except (ValueError, cv2.error) as e:
+            if not self._encode_failed:
+                logger.warning("No se pudo codificar el frame para la vista: %s", e)
+                self._encode_failed = True
+            return None
+        self._encode_failed = False
+        with self._changed:
+            if self._frame is frame:  # si ya hay otra lectura, el suyo se codifica solo
+                self._jpeg = jpeg
+        return jpeg
 
     def on_reading(
         self, pipeline: "Pipeline", observations: list[TableObservation], ts: datetime
@@ -202,6 +225,8 @@ class SalonFeed:
             self._version += 1
             snapshot["version"] = self._version
             self._snapshot = snapshot
+            if self._pending is not None:
+                self._frame, self._pending, self._jpeg = self._pending, None, None
             self._changed.notify_all()
 
     def snapshot(self) -> dict[str, Any] | None:

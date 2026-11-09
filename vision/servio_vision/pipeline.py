@@ -15,6 +15,7 @@ import time
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
+from typing import TYPE_CHECKING
 
 import numpy as np
 
@@ -28,6 +29,9 @@ from servio_vision.schemas import Item, TableReport
 from servio_vision.smoothing import TableSmoother
 from servio_vision.tables import TableTracker
 from servio_vision.zones import Zones, crop_table, remap_bbox, table_rect, to_jpeg
+
+if TYPE_CHECKING:
+    from servio_vision.salon import SalonFeed
 
 logger = logging.getLogger("servio")
 
@@ -73,6 +77,9 @@ class Pipeline:
         self.dish_matcher = dish_matcher
         self.on_observation = on_observation
         self.on_reading = on_reading
+        # la vista del salón en vivo (--web), si la hay: la engancha app.build_pipeline
+        # y el loop de app.run le deja el frame para el modo video
+        self.salon: SalonFeed | None = None
         self.finished_after = finished_after
         self._new_smoother = smoother_factory or (
             lambda: TableSmoother(self.finished_after)
