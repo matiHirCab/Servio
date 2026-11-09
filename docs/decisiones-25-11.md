@@ -1,6 +1,6 @@
 # Decisiones de producto y negocio para llegar al 25/11
 
-Lo que el equipo tiene que decidir **en una reunión** para que lo que queda de las semanas 3 y 4 se pueda hacer de corrido, sin frenarse a preguntar. No es un reparto de tareas: la implementación la hace Claude tarjeta por tarjeta, y lo que necesita es que estas preguntas tengan respuesta. Cada punto trae el contexto en dos líneas, las opciones, una propuesta para discutir y un renglón «Decisión» para completar. Después de la reunión, este archivo manda: si una tarjeta choca con algo de acá, gana esto.
+Lo que el equipo tiene que decidir **en una reunión** para que lo que queda de las semanas 3 y 4 se pueda hacer de corrido, sin frenarse a preguntar. No es un reparto de tareas: la implementación la hace Claude tarjeta por tarjeta, y lo que necesita es que estas preguntas tengan respuesta. Cada punto trae el contexto en dos líneas, las opciones, la propuesta que se discutió y la **decisión del equipo** (respuestas del 8/11/2026). Este archivo manda: si una tarjeta choca con algo de acá, gana esto.
 
 Fuentes: [context/01-producto.md](context/01-producto.md), [context/05-reglas-alertas.md](context/05-reglas-alertas.md), [context/12-roles.md](context/12-roles.md), [context/13-metricas.md](context/13-metricas.md), [diseno-front.md](diseno-front.md), [legal-uruguay.md](legal-uruguay.md), [roadmap-producto.md](roadmap-producto.md) y el Trello.
 
@@ -58,7 +58,7 @@ Los tres diseños están en [diseno-front.md](diseno-front.md) con un prototipo 
 
 **Propuesta.** (a) más la venta: es «lo que ve Servio» en una reunión con un dueño. En el celular del mozo va solo el aviso (F-3). Si se confirma, F-1b prioriza pantalla grande sobre celular.
 
-**Decisión:** ___
+**Decisión:** (a) Pantalla fija en la barra o la cocina para el encargado. El mozo no la mira: recibe el aviso en el reloj o el celular.
 
 ### 2. F-1: ¿modo video o solo reconstrucción?
 
@@ -66,7 +66,7 @@ Los tres diseños están en [diseno-front.md](diseno-front.md) con un prototipo 
 
 **Propuesta.** Reconstrucción por defecto en el local. Video solo con un flag explícito (`--web-video`), para la demo y para calibrar la cámara. En la web pública y el pitch, mostrar la reconstrucción como el producto y el video como «así lo ve».
 
-**Decisión:** ___
+**Decisión:** La propuesta: reconstrucción por defecto; el video solo con el flag, para la demo y para calibrar.
 
 ### 3. F-2, el dashboard: ¿son estas las métricas? ¿cuál es el titular?
 
@@ -76,7 +76,7 @@ Los tres diseños están en [diseno-front.md](diseno-front.md) con un prototipo 
 
 **Propuesta.** El titular es «tus mesas esperan X minutos menos después de terminar» (es lo que se mide en M-2 y lo que un dueño entiende sin explicación). Rotación y ROI, debajo, como consecuencia. Las 17 quedan, pero se confirma que ninguna sobra ni falta: ¿propinas? ¿reseñas del local?
 
-**Decisión:** titular ___ · sacar ___ · agregar ___
+**Decisión:** Las 17 quedan. Lo de la plata necesita la carta con precios: al principio la cargamos nosotros y después la edita el local (precios de temporada, platos que salen de la carta). Mientras no se identifique qué plato es, el desperdicio se informa como «X platos volvieron llenos», sin decir cuáles.
 
 ### 4. F-2: qué se muestra el primer día
 
@@ -86,7 +86,7 @@ Los tres diseños están en [diseno-front.md](diseno-front.md) con un prototipo 
 
 **Propuesta.** Lo del diseño. Un dashboard que se va llenando le muestra al dueño qué va a tener, y evita vender un cero.
 
-**Decisión:** ___
+**Decisión:** Las tarjetas se muestran igual, con un texto tipo «falta recolectar datos». Además, el dashboard tiene selector de período: hoy, un día, la última semana, el último mes, o un rango a mano de días o meses hacia atrás.
 
 ### 5. F-3: ¿respuesta con una palabra o botones?
 
@@ -94,7 +94,7 @@ Los tres diseños están en [diseno-front.md](diseno-front.md) con un prototipo 
 
 **Propuesta.** La del diseño. Y una regla de negocio: contestar es opcional, la cámara cierra los avisos sola cuando ve el plato retirado. El mozo que no contesta nunca no rompe nada; solo no tiene métrica de tiempo de respuesta.
 
-**Decisión:** ___
+**Decisión:** Botones («Voy», «Listo», «No hacía falta») más el texto libre de qué pasó con el plato, como hoy. El aviso se cierra solo cuando la cámara ve que el plato se sacó. Cada mozo recibe solo los avisos de **sus** mesas; si no hay mesas definidas por mozo, todo va a un solo chat. No hay pregunta «¿Mesa 2 o Mesa 3?»: «Mesa X» va en negrita al principio del mensaje para que resalte.
 
 ### 6. F-3: tiempos de recordatorio y escalado
 
@@ -104,7 +104,7 @@ Los tres diseños están en [diseno-front.md](diseno-front.md) con un prototipo 
 
 **Propuesta.** Configurable por local en `servio.toml` (junto con los umbrales del punto 18), default 9 min. El piloto dice si bajarlo.
 
-**Decisión:** recordatorio ___ min · escalado ___ min
+**Decisión:** Sí, configurables por local (recordatorio y escalado), con los valores de hoy como default.
 
 ---
 
@@ -120,7 +120,7 @@ Lo que Servio tiene que hacer cuando pasa algo que no es «dos personas, dos pla
 
 **Propuesta.** (a) siempre; (b) si el escenario grabado sigue fallando; (c) solo si lo anterior no alcanza. Aviso esperado del escenario: nada mientras alguien tenga comida en su plato; «retirar» por la fuente vacía se acepta; «mesa terminó» recién sin comida en ningún plato.
 
-**Decisión:** ___
+**Decisión:** (b) + (c): el comportamiento (la comida baja de a saltos mientras otros platos suben) y además el modelo dice si el recorte parece fuente o tabla, para darle más seguridad.
 
 ### 8. Pan, guarnición, salsas, lo que se deja a propósito
 
@@ -130,7 +130,7 @@ Lo que Servio tiene que hacer cuando pasa algo que no es «dos personas, dos pla
 
 **Propuesta.** No cuentan. Aviso esperado del escenario «dejar el pan»: ninguno.
 
-**Decisión:** ___
+**Decisión:** No contar bowls ni canastas. Duda a resolver al implementar: una ensalada en un bowl tiene que contar. La regla va por contenido (comida del pedido sí; pan, guarnición y canasta no), no por la forma del recipiente.
 
 ### 9. Alguien se levanta con el plato lleno
 
@@ -140,7 +140,7 @@ Lo que Servio tiene que hacer cuando pasa algo que no es «dos personas, dos pla
 
 **Propuesta.** Pausar el reloj mientras no hay nadie: si alguien se fue 8 minutos y vuelve, no le cae «¿está todo bien?» a los 2 minutos de sentarse. Aviso esperado: ninguno mientras no hay nadie; «sigue lleno» solo si el plato sigue lleno 10 minutos **con gente**.
 
-**Decisión:** ___
+**Decisión:** Pausar el reloj del plato mientras no hay nadie, nada más.
 
 ### 10. Mesa con platos y sin gente
 
@@ -148,7 +148,7 @@ Lo que Servio tiene que hacer cuando pasa algo que no es «dos personas, dos pla
 
 **Propuesta.** Mesa sin gente dos lecturas seguidas y con platos: aviso de «retirar» a los 2 minutos, haya o no comida. Es la rotación: esa mesa no se puede volver a ocupar hasta que la limpien.
 
-**Decisión:** ___
+**Decisión:** Configurable un X: avisar si después de X minutos la mesa sigue sin gente y con platos.
 
 ### 11. Postre, café, vasos, tazas
 
@@ -158,7 +158,7 @@ Lo que Servio tiene que hacer cuando pasa algo que no es «dos personas, dos pla
 
 **Propuesta.** Estado «sobremesa» solo para la métrica de tiempo de mesa, sin aviso. Vasos vacíos es el primer aviso nuevo de D-7 (es el que más vende: una bebida más por mesa).
 
-**Decisión:** ___
+**Decisión:** Sin estado «sobremesa»: traería conflictos (una mesa tomando tragos no clasifica). Se identifica la mesa vacía del todo (sin gente y sin platos) y nada más.
 
 ### 12. Mesa grande, platos que llegan de a tandas
 
@@ -166,7 +166,7 @@ Lo que Servio tiene que hacer cuando pasa algo que no es «dos personas, dos pla
 
 **Propuesta.** Confirmar que así está bien. Un posible cambio: «mesa terminó» con el 80 % de los platos vacíos en mesas de 6 o más, para que el mozo vaya con la cuenta antes. Para el piloto, no.
 
-**Decisión:** ___
+**Decisión:** Estado «terminando» solo para mesas de N o más personas (default 4): si terminó el 80 %, la mesa pasa a «terminando»; si está mucho tiempo así, pasa a «mesa terminó». El porcentaje, el N y el tiempo son configurables por el admin.
 
 ### 13. Cliente que rechaza el plato
 
@@ -176,7 +176,7 @@ Lo que Servio tiene que hacer cuando pasa algo que no es «dos personas, dos pla
 
 **Propuesta.** Las dos. Un plato lleno que desaparece queda como «posible devolución» y el mozo recibe la pregunta de motivo (los mismos botones de hoy). Sin respuesta, cuenta igual pero sin motivo.
 
-**Decisión:** ___
+**Decisión:** Se marca como posible devolución y **no** se pregunta el motivo. Reconocer el acto de comer por el movimiento de los cubiertos (el utensilio entra y sale más de X veces): si la persona comió, un plato que se va aunque parezca lleno es retiro y no devolución, y el plato lleno que llega después es uno nuevo de otra cosa.
 
 ### 14. Mesas que se juntan o se mueven
 
@@ -184,7 +184,7 @@ Lo que Servio tiene que hacer cuando pasa algo que no es «dos personas, dos pla
 
 **Propuesta.** En el piloto, zonas fijas dibujadas al instalar (más estable que la detección automática) y las mesas que se juntan se tratan como lo que son, dos mesas con el mismo mozo. Juntar y separar desde la web es parte de D-2.
 
-**Decisión:** ___
+**Decisión:** Detección automática de mesas en el piloto. Si falla, el admin lo ve desde la vista en la computadora y lo arregla a mano.
 
 ---
 
@@ -203,7 +203,7 @@ Lo que Servio tiene que hacer cuando pasa algo que no es «dos personas, dos pla
 
 **Propuesta.** Probar YOLO-World sobre las sesiones grabadas y adoptarlo si no empeora el acierto por estado. Entrenar solo con fotos de nuestras cámaras cuando B-3 tenga etiquetas. La licencia GPL/AGPL se revisa antes de cobrar (hoy ya es así con `ultralytics`).
 
-**Decisión:** ___
+**Decisión:** Benchmark de detectores en paralelo, sin frenar nada (no es showstopper). La solución tiene que ser agnóstica al modelo de detección, para cambiarlo y escalar como queramos.
 
 ### 16. Modelo que estima cuánta comida queda
 
@@ -211,7 +211,7 @@ Lo que Servio tiene que hacer cuando pasa algo que no es «dos personas, dos pla
 
 **Propuesta.** Haiku hasta el 25/11; comparar con Sonnet en el tablero de números (B-3) solo si el acierto por estado queda abajo del 85 %. Modelo propio cuando haya 1.000 recortes etiquetados, no antes.
 
-**Decisión:** modelo ___ · umbral de acierto para cambiar ___
+**Decisión:** Haiku. Sonnet queda descartado por costo (analizamos imágenes todo el rato). El modelo propio también queda descartado.
 
 ### 17. Qué va a la nube
 
@@ -219,7 +219,7 @@ Lo que Servio tiene que hacer cuando pasa algo que no es «dos personas, dos pla
 
 **Propuesta.** Solo recortes de platos, siempre, en producción. El modo mesa entera se queda para experimentar en casa y no se vende. Esto es un argumento de venta y va en el cartel: «ninguna imagen de personas sale del local».
 
-**Decisión:** ___
+**Decisión:** Mandar la mesa entera, pero sacando a las personas: se tapan con un bloque de un color que el modelo sepa que es censura de persona. Las manos no se tapan. (La parte legal del envío se revisa con el punto 26.)
 
 ### 18. Cadencia y costo por mesa por hora
 
@@ -229,7 +229,7 @@ Lo que Servio tiene que hacer cuando pasa algo que no es «dos personas, dos pla
 
 **Propuesta.** 30 s y C-2. Decidir ahora el tope de costo que aceptamos por mesa por hora (por ejemplo, 2 centavos de dólar), para que el precio del punto 21 cierre.
 
-**Decisión:** cadencia ___ · tope de costo ___ por mesa por hora
+**Decisión:** Sin decisión por ahora: si se mide el cubierto (punto 13) hay que sacar fotos más rápido; para eso podría usarse un modelo local chico que solo detecte el cubierto entrando y saliendo.
 
 ---
 
@@ -243,7 +243,7 @@ Lo que Servio tiene que hacer cuando pasa algo que no es «dos personas, dos pla
 
 **Propuesta.** Restaurante de 15 a 40 mesas en Montevideo, con encargado en el salón (es quien mira F-1 y recibe los escalados) y platos individuales. Es donde las tres alertas de hoy aciertan más.
 
-**Decisión:** ___
+**Decisión:** No se define el cliente ahora: casi todo es configurable, así que da igual si la mesa se queda 1 h o 2 h.
 
 ### 20. Qué se vende: el número de cabecera
 
@@ -251,7 +251,7 @@ Lo que Servio tiene que hacer cuando pasa algo que no es «dos personas, dos pla
 
 **Propuesta.** «Tus mesas esperan X minutos menos» como número de cabecera, con «eso son Y mesas más por mes» calculado con un ticket promedio que el dueño carga. Platos que vuelven llenos es el segundo argumento, el que ningún competidor tiene.
 
-**Decisión:** ___
+**Decisión:** Para después del 25/11.
 
 ### 21. Precio y modelo de cobro
 
@@ -261,7 +261,7 @@ Lo que Servio tiene que hacer cuando pasa algo que no es «dos personas, dos pla
 
 **Propuesta.** Por mes por local, tres escalones por cantidad de mesas (hasta 15, hasta 40, más), piloto gratis 4 semanas a cambio del caso de éxito con nombre. Precio objetivo: menos que un día de un mozo por semana.
 
-**Decisión:** modelo ___ · precio ___ · piloto ___
+**Decisión:** Para después del 25/11.
 
 ### 22. Hardware: qué cámara y quién la pone
 
@@ -271,7 +271,7 @@ Lo que Servio tiene que hacer cuando pasa algo que no es «dos personas, dos pla
 
 **Propuesta.** Cámara IP que ponemos nosotros, con la guía de montaje de B-4, y una mini PC en el local. Las cámaras de seguridad existentes se evalúan caso por caso, nunca se promete.
 
-**Decisión:** ___
+**Decisión:** Para después del 25/11.
 
 ### 23. Canal al mozo
 
@@ -279,7 +279,7 @@ Lo que Servio tiene que hacer cuando pasa algo que no es «dos personas, dos pla
 
 **Propuesta.** Telegram para el piloto. WhatsApp cuando un cliente lo ponga como condición; su costo por conversación se suma al precio.
 
-**Decisión:** ___
+**Decisión:** Sí, Telegram.
 
 ### 24. Reloj o celular
 
@@ -289,7 +289,7 @@ Lo que Servio tiene que hacer cuando pasa algo que no es «dos personas, dos pla
 
 **Propuesta.** El celular en el bolsillo con vibración alcanza para el piloto y para vender. El reloj es el «premium» y se prueba cuando alguien consiga uno. Si nadie del equipo tiene reloj antes del 17/11, la demo del 25/11 va con celular.
 
-**Decisión:** ___ · quién tiene reloj: ___
+**Decisión:** Lo ideal es el reloj, pero no se limita: tiene que servir para reloj y para celular.
 
 ### 25. Integración con la comanda (POS)
 
@@ -299,7 +299,7 @@ Lo que Servio tiene que hacer cuando pasa algo que no es «dos personas, dos pla
 
 **Propuesta.** Sin POS en el piloto. La carta y los mozos se cargan una vez; el aviso de «sigue lleno» nombra el plato solo si el POS lo da. La métrica por plato de la carta (D-4) se vende como «con tu POS conectado».
 
-**Decisión:** ___
+**Decisión:** Sin integración en el piloto, pero con el software preparado para integrar: si no hay comanda, nada se rompe; las métricas pierden detalle y un par faltan; con la integración se enriquece todo.
 
 ### 26. Legal antes del piloto
 
@@ -307,7 +307,7 @@ Lo que Servio tiene que hacer cuando pasa algo que no es «dos personas, dos pla
 
 **Propuesta.** Paquete mínimo antes del primer piloto: cartel, texto de aviso a los mozos firmado, inscripción de la base. Abogado antes de cobrar el primer peso. Esto es un costo y un tiempo que entra en el plan de venta.
 
-**Decisión:** ___
+**Decisión:** Para después del 25/11.
 
 ### 27. Datos de los mozos
 
@@ -315,7 +315,7 @@ Lo que Servio tiene que hacer cuando pasa algo que no es «dos personas, dos pla
 
 **Propuesta.** Métricas por nombre solo para encargado y dueño; el mozo ve las suyas si las pide; nunca comparativas en el grupo. En el pitch: «para que el encargado sepa a quién ayudar», no «para controlar».
 
-**Decisión:** ___
+**Decisión:** El mozo no ve métricas, ninguna, ni aunque las pida.
 
 ### 28. Piloto: modo sombra y duración
 
@@ -323,7 +323,7 @@ Lo que Servio tiene que hacer cuando pasa algo que no es «dos personas, dos pla
 
 **Propuesta.** 1 semana en sombra (línea de base sin que nadie cambie nada), 3 semanas con avisos, una hoja de una página al final con el antes/después. Gratis, a cambio de poder contarlo.
 
-**Decisión:** sombra ___ · con avisos ___
+**Decisión:** Para después del 25/11.
 
 ---
 
@@ -335,7 +335,7 @@ Lo que Servio tiene que hacer cuando pasa algo que no es «dos personas, dos pla
 
 **Propuesta.** Una comida real en una casa, grabada en pantalla y celular: el salón en reconstrucción, una mesa que termina, el aviso que llega y se contesta «Voy», el «✅ ya resuelto» cuando se retiran los platos, y el dashboard del encargado al final. Tres minutos.
 
-**Decisión:** ___
+**Decisión:** Para después del 25/11.
 
 ### 30. Qué tiene que decir la hoja de métricas
 
@@ -343,9 +343,15 @@ Lo que Servio tiene que hacer cuando pasa algo que no es «dos personas, dos pla
 
 **Propuesta.** Tres números y nada más: minutos de mesa terminada sin atender antes vs. después (al menos 3 casas), costo por mesa por hora, acierto por estado. Con la aclaración de que es en casas, no en un local.
 
-**Decisión:** ___
+**Decisión:** Sin decisión puntual: lo que se espera de las métricas quedó dicho en los puntos 3 y 4.
 
 ---
+
+## Agregado en la reunión
+
+- **RAG sobre las métricas y los datos del negocio:** poder consultar en lenguaje natural lo que Servio recolecta (avisos, tiempos, platos, respuestas), sin depender de las pantallas fijas del dashboard. Va al Trello como tarjeta nueva.
+- **Detectar el acto de comer** (punto 13) es una capacidad nueva de visión: cubiertos que entran y salen del plato. Pide fotos más seguidas que cada 30 s (punto 18); se investiga aparte antes de prometerlo.
+- **La implementación no se reparte entre personas:** la hacen agentes tarjeta por tarjeta, y el tablero marca cuáles se pueden tomar (ver «Tablero y trabajo en paralelo» en `AGENTS.md`).
 
 ## Lo que Claude no puede hacer solo
 
