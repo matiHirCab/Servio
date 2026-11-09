@@ -872,6 +872,77 @@ def test_tomar_prints_the_card_notes(capsys, monkeypatch):
     assert "no es ninguna tarjeta" in capsys.readouterr().out
 
 
+def test_failed_read_right_after_the_lock_removes_it():
+    api, board = board_with(
+        card("a4", "aaaaaaa4", "A-4", "", "LD"),
+        card("c5", "cccccc05", "P1 · C-5 · Voy", HEADER_C5),
+    )
+    real_get = api.get
+
+    def flaky(path, **params):
+        if path.endswith("/actions"):
+            raise SystemExit("Trello respondió 503")
+        return real_get(path, **params)
+
+    api.get = flaky
+    with pytest.raises(SystemExit, match="503"):
+        board.take("cccccc05", "yo")
+    assert api.comments["c5"] == []
+
+
+def test_card_moved_by_hand_before_the_move_is_not_dragged_back():
+    api, board = board_with(
+        card("a4", "aaaaaaa4", "A-4", "", "LD"),
+        card("c5", "cccccc05", "P1 · C-5 · Voy", HEADER_C5),
+    )
+
+    def sneak(cid):  # un humano la arrastró a Done sin comentar nada
+        api.cards[cid]["idList"] = "LD"
+
+    api.before_comment_read = sneak
+    with pytest.raises(SystemExit, match="pasó a «Done»"):
+        board.take("cccccc05", "yo")
+    assert api.list_of("cccccc05") == "Done"
+    assert api.comments["c5"] == []
+
+
+def test_lost_race_deletes_own_lock_once():
+    api, board = board_with(
+        card("a4", "aaaaaaa4", "A-4", "", "LD"),
+        card("c5", "cccccc05", "P1 · C-5 · Voy", HEADER_C5),
+    )
+    deletes = []
+    real_delete = api.delete
+
+    def counting(path, **params):
+        deletes.append(path)
+        return real_delete(path, **params)
+
+    api.delete = counting
+
+    def sneak(cid):
+        mine = api.comments[cid].pop()
+        api.add_comment(
+            cid,
+            tablero.lock_text("ffffffffffff", "otro", "Semana 3", datetime.now(UTC)),
+        )
+        mine["date"] = "2026-11-09T10:00:59.000Z"
+        api.comments[cid].append(mine)
+
+    api.before_comment_read = sneak
+    with pytest.raises(SystemExit):
+        board.take("cccccc05", "yo")
+    assert len([d for d in deletes if d.startswith("/actions/")]) == 1
+
+
+def test_release_and_finish_refuse_foreign_cards():
+    _api, board = board_with(card("c5", "cccccc05", "C-5", HEADER_C5, "LP"))
+    with pytest.raises(SystemExit, match="No hay una tarjeta"):
+        board.release("ajenaaaa", "", agent="yo")
+    with pytest.raises(SystemExit, match="No hay una tarjeta"):
+        board.finish("ajenaaaa", 1, "", agent="yo")
+
+
 def test_credentials_from_env_files(tmp_path):
     repo = tmp_path / ".env"
     repo.write_text("TRELLO_KEY='k1'   # comentario\nTRELLO_TOKEN=\n", encoding="utf-8")

@@ -501,26 +501,34 @@ class Board:
                 return out
             before = rows[-1]["id"]
 
-    def _claim(
-        self, card: Card, token: str, agent: str, origin: str
-    ) -> tuple[str, list[tuple[str, str]], tuple[str, str, str] | None]:
-        """Pone el candado y lee quién ganó: (id del comentario, comentarios, ganador)."""
-        mine = self.comment(card, lock_text(token, agent, origin, datetime.now(UTC)))
-        comments = self._comments_with(card, token, mine)
-        return mine, comments, winner(comments)
+    def _still_there(self, card: Card, origin: str) -> None:
+        """La tarjeta sigue en la lista de la que se la vio; si no, no se toca."""
+        fresh_card = self.card(card.id)
+        if fresh_card.list_name != origin or fresh_card.closed:
+            raise SystemExit(
+                f"{card.name}: mientras tanto pasó a «{fresh_card.list_name}»; no se toma."
+            )
+
+    def _find(self, short: str) -> Card:
+        """La tarjeta de este tablero con ese enlace o id; un enlace ajeno no sirve."""
+        card = next(
+            (c for c in self.cards() if c.short == short or c.id == short), None
+        )
+        if card is None:
+            raise SystemExit(f"No hay una tarjeta {short} en el tablero.")
+        return card
 
     def _comments_with(
         self, card: Card, token: str, mine: str
     ) -> list[tuple[str, str]]:
         """Los comentarios, esperando a que el candado propio (`mine`) aparezca: Trello
         puede tardar un instante en listar un comentario recién hecho. Si nunca
-        aparece, se borra para no dejarlo huérfano."""
+        aparece, avisa; el candado lo borra quien llamó."""
         for attempt in range(LOCK_READ_RETRIES):
             comments = self.comments(card)
             if any((lock := parse_lock(t)) and lock[0] == token for _d, t in comments):
                 return comments
             time.sleep(0.5 * (attempt + 1))
-        self.api.delete(f"/actions/{mine}")
         raise SystemExit(
             f"{card.name}: Trello no muestra el candado recién puesto; probá de nuevo en un rato."
         )
@@ -607,7 +615,7 @@ class Board:
             card.labels.append(name)
             card.label_ids[name] = self.labels[name]
         elif not on and has:
-            label_id = card.label_ids.pop(name, self.labels[name])
+            label_id = card.label_ids.pop(name, None) or self.labels[name]
             self.api.delete(f"/cards/{card.id}/idLabels/{label_id}")
             card.labels.remove(name)
 
@@ -683,22 +691,25 @@ class Board:
             self.comment(card, f"{UNLOCK} candado viejo pisado por {agent}")
         token = uuid.uuid4().hex[:12]
         origin = card.list_name
-        mine, comments, won = self._claim(card, token, agent, origin)
+        mine: str | None = None
         try:
+            mine = self.comment(
+                card, lock_text(token, agent, origin, datetime.now(UTC))
+            )
+            comments = self._comments_with(card, token, mine)
+            won = winner(comments)
             if won is None:
                 # un 🔓 o ✅ cayó justo después del nuestro. Si fue un ✅ (otro la terminó)
                 # o alguien la movió, la tarjeta ya no es la que miramos: no se toca.
-                fresh_card = self.card(card.id)
-                if fresh_card.list_name != origin or fresh_card.closed:
-                    self.api.delete(f"/actions/{mine}")
-                    raise SystemExit(
-                        f"{card.name}: mientras tanto pasó a «{fresh_card.list_name}»; "
-                        "no se toma."
-                    )
+                self._still_there(card, origin)
                 self.api.delete(f"/actions/{mine}")
-                mine, comments, won = self._claim(card, token, agent, origin)
-            if won is None or won[0] != token:
-                self.api.delete(f"/actions/{mine}")  # no dejar candados huérfanos
+                mine = None
+                mine = self.comment(
+                    card, lock_text(token, agent, origin, datetime.now(UTC))
+                )
+                comments = self._comments_with(card, token, mine)
+                won = winner(comments)
+            if won is None or won[0] != token:  # el candado lo borra el except de abajo
                 who = won[1] if won else "otro"
                 now = lock_date(
                     comments, token
@@ -711,11 +722,12 @@ class Board:
                         "`tomar --forzar` lo pisa."
                     )
                 raise SystemExit((f"{card.name}: la tomó {who} justo antes.", 2))
+            self._still_there(card, origin)  # alguien pudo moverla a mano en el medio
             self.move(card, LIST_IN_PROGRESS)
         except BaseException:
-            # cualquier cosa que falle entre el candado y el movimiento (red, Ctrl-C, un
-            # error de arriba) no deja el candado puesto en una tarjeta que no se movió
-            if card.list_name != LIST_IN_PROGRESS:
+            # cualquier cosa que falle entre el candado y el movimiento (red, Ctrl-C, una
+            # carrera perdida) no deja el candado puesto en una tarjeta que no se movió
+            if card.list_name != LIST_IN_PROGRESS and mine:
                 try:
                     self.api.delete(f"/actions/{mine}")
                 except SystemExit:
@@ -734,7 +746,7 @@ class Board:
                         or other.closed
                         or not (
                             other.list_name == LIST_IN_PROGRESS
-                            or is_work_list(other.list_name)
+                            or is_work_list(other.list_name, extra=True)
                         )
                     ):
                         continue
@@ -750,7 +762,14 @@ class Board:
                         > STALE_LOCK_MIN
                     ):
                         continue
-                    if theirs_at is None or theirs_at <= mine_at:
+                    # retrocede la del candado más nuevo; a igual hora, la del token mayor
+                    if theirs_at is None or (
+                        theirs_at,
+                        theirs[0] if theirs else "",
+                    ) <= (
+                        mine_at,
+                        token,
+                    ):
                         self.comment(
                             card,
                             f"{UNLOCK} soltada: toca lo mismo que {other.code or other.short}",
@@ -785,7 +804,7 @@ class Board:
     def release(
         self, short: str, reason: str, agent: str = "", force: bool = False
     ) -> Card:
-        card = self.card(short)
+        card = self._find(short)
         won = winner(comments := self.comments(card))
         if card.list_name != LIST_IN_PROGRESS:
             if won is None:
@@ -827,7 +846,7 @@ class Board:
         agent: str = "",
         force: bool = False,
     ) -> tuple[Card, list[Card]]:
-        card = self.card(short)
+        card = self._find(short)
         if card.list_name == LIST_DONE or card.closed:
             raise SystemExit(f"{card.name}: ya está hecha.")
         if card.list_name != LIST_IN_PROGRESS and not force:
