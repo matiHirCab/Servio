@@ -996,6 +996,41 @@ def test_label_failure_after_the_move_is_a_note_not_an_error():
     assert any("no se pudo etiquetar" in n for n in taken.notes)
 
 
+def test_body_fields_after_free_text_are_not_a_header():
+    desc = "Texto libre.\n\nMás texto (cccccc07).\n\n**Nota:** ver C-5 (9oDZRoKz)\n**Depende de:** C-9 (9oDZRoKa)"
+    assert tablero.parse_header(desc) == tablero.Header()
+
+
+def test_lost_lock_is_removed_even_if_someone_else_moved_the_card():
+    api, board = board_with(
+        card("a4", "aaaaaaa4", "A-4", "", "LD"),
+        card("c5", "cccccc05", "P1 · C-5 · Voy", HEADER_C5),
+    )
+
+    def sneak(
+        cid,
+    ):  # otro agente la movió a In progress con su propio candado, más nuevo
+        api.cards[cid]["idList"] = "LP"
+        api.add_comment(
+            cid,
+            tablero.lock_text("ffffffffffff", "otro", "Semana 3", datetime.now(UTC)),
+        )
+
+    api.before_comment_read = sneak
+    with pytest.raises(SystemExit) as e:
+        board.take("cccccc05", "yo")
+    assert e.value.code[1] == 2
+    locks = [c for c in api.comments["c5"] if c["data"]["text"].startswith("🔒")]
+    assert len(locks) == 1 and "otro" in locks[0]["data"]["text"]  # el nuestro no quedó
+
+
+def test_release_refuses_archived_card():
+    api, board = board_with(card("c5", "cccccc05", "C-5", HEADER_C5, "LP"))
+    api.cards["c5"]["closed"] = True
+    with pytest.raises(SystemExit, match="archivada"):
+        board.release("cccccc05", "", agent="yo")
+
+
 def test_credentials_from_env_files(tmp_path):
     repo = tmp_path / ".env"
     repo.write_text("TRELLO_KEY='k1'   # comentario\nTRELLO_TOKEN=\n", encoding="utf-8")

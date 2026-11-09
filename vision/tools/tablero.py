@@ -136,14 +136,15 @@ def header_lines(desc: str) -> str:
     «- **Toca:** …»); la primera línea de texto común después de un campo, sí."""
     taken: list[str] = []
     for line in desc.replace("\r", "").split("\n"):
-        stripped = re.sub(r"^(?:[-*•]\s+|#+\s+)", "", line.strip())  # viñeta o título
-        if not stripped:
+        raw = line.strip()
+        if not raw or raw.startswith("#"):  # línea en blanco o título: no cuentan
             continue
+        stripped = re.sub(r"^[-*•]\s+", "", raw)  # viñeta
         if _HEADER_FIELD.search(stripped) or (
             taken and _ONLY_PATHS.fullmatch(stripped)
         ):
             taken.append(stripped)
-        elif taken:
+        else:
             break  # la primera línea de texto común cierra el encabezado
     return " ".join(taken)
 
@@ -510,30 +511,28 @@ class Board:
         """La tarjeta sigue en la lista de la que se la vio; si no, no se toca."""
         fresh_card = self.card(card.id)
         if fresh_card.list_name != origin or fresh_card.closed:
-            raise SystemExit(
-                f"{card.name}: mientras tanto pasó a «{fresh_card.list_name}»; no se toma."
-            )
+            msg = f"{card.name}: mientras tanto pasó a «{fresh_card.list_name}»; no se toma."
+            if fresh_card.list_name == LIST_IN_PROGRESS:  # otro la tomó: es la carrera
+                raise SystemExit((msg, 2))
+            raise SystemExit(msg)
 
-    def _find(self, short: str) -> Card:
+    def _find(self, short: str, cards: list[Card]) -> Card:
         """La tarjeta de este tablero con ese enlace o id; un enlace ajeno no sirve."""
-        card = next(
-            (c for c in self.cards() if c.short == short or c.id == short), None
-        )
+        card = next((c for c in cards if c.short == short or c.id == short), None)
         if card is None:
             raise SystemExit(f"No hay una tarjeta {short} en el tablero.")
         return card
 
-    def _comments_with(
-        self, card: Card, token: str, mine: str
-    ) -> list[tuple[str, str]]:
-        """Los comentarios, esperando a que el candado propio (`mine`) aparezca: Trello
-        puede tardar un instante en listar un comentario recién hecho. Si nunca
-        aparece, avisa; el candado lo borra quien llamó."""
+    def _comments_with(self, card: Card, token: str) -> list[tuple[str, str]]:
+        """Los comentarios, esperando a que el candado propio aparezca: Trello puede
+        tardar un instante en listar un comentario recién hecho. Si nunca aparece,
+        avisa; el candado lo borra quien llamó."""
         for attempt in range(LOCK_READ_RETRIES):
             comments = self.comments(card)
             if any((lock := parse_lock(t)) and lock[0] == token for _d, t in comments):
                 return comments
-            time.sleep(0.5 * (attempt + 1))
+            if attempt < LOCK_READ_RETRIES - 1:
+                time.sleep(0.5 * (attempt + 1))
         raise SystemExit(
             f"{card.name}: Trello no muestra el candado recién puesto; probá de nuevo en un rato."
         )
@@ -682,9 +681,7 @@ class Board:
     def take(self, short: str, agent: str, force: bool = False) -> Card:
         self._check_agent(agent)
         cards = self.cards()
-        card = next((c for c in cards if c.short == short or c.id == short), None)
-        if card is None:
-            raise SystemExit(f"No hay una tarjeta {short} en el tablero.")
+        card = self._find(short, cards)
         state, why = self.status(card, cards)
         if state in ("en curso", "hecha"):
             raise SystemExit(f"{card.name}: ya está {state} ({'; '.join(why)}).")
@@ -710,11 +707,12 @@ class Board:
         token = uuid.uuid4().hex[:12]
         origin = card.list_name
         mine: str | None = None
+        moved_by_me = False
         try:
             mine = self.comment(
                 card, lock_text(token, agent, origin, datetime.now(UTC))
             )
-            comments = self._comments_with(card, token, mine)
+            comments = self._comments_with(card, token)
             won = winner(comments)
             if won is None:
                 # un 🔓 o ✅ cayó justo después del nuestro. Si fue un ✅ (otro la terminó)
@@ -725,7 +723,7 @@ class Board:
                 mine = self.comment(
                     card, lock_text(token, agent, origin, datetime.now(UTC))
                 )
-                comments = self._comments_with(card, token, mine)
+                comments = self._comments_with(card, token)
                 won = winner(comments)
             if won is None or won[0] != token:  # el candado lo borra el except de abajo
                 who = won[1] if won else "otro"
@@ -749,21 +747,16 @@ class Board:
                 raise SystemExit((f"{card.name}: la tomó {who} justo antes.", 2))
             self._still_there(card, origin)  # alguien pudo moverla a mano en el medio
             self.move(card, LIST_IN_PROGRESS)
+            moved_by_me = True
         except BaseException:
-            # cualquier cosa que falle entre el candado y el movimiento (red, Ctrl-C, una
-            # carrera perdida) no deja el candado puesto en una tarjeta que no se movió
-            if mine:
+            # Cualquier cosa que falle entre el candado y el movimiento (red, Ctrl-C, una
+            # carrera perdida) borra nuestro candado. Solo se conserva si el movimiento fue
+            # nuestro: que la tarjeta esté en curso porque la movió otro no lo justifica.
+            if mine and not moved_by_me:
                 try:
-                    moved = self.card(card.id).list_name == LIST_IN_PROGRESS
-                except (
-                    SystemExit
-                ):  # sin red no se sabe: mejor un candado de más que una
-                    moved = True  # tarjeta en curso sin candado
-                if not moved:
-                    try:
-                        self.api.delete(f"/actions/{mine}")
-                    except SystemExit:
-                        pass
+                    self.api.delete(f"/actions/{mine}")
+                except SystemExit:
+                    pass
             raise
         # Ya en curso, los choques de archivos se miran de nuevo: otro agente pudo tomar
         # una tarjeta que toca lo mismo en el medio. Si las dos entraron a la vez, retrocede
@@ -836,7 +829,10 @@ class Board:
     def release(
         self, short: str, reason: str, agent: str = "", force: bool = False
     ) -> Card:
-        card = self._find(short)
+        cards = self.cards()
+        card = self._find(short, cards)
+        if card.closed:
+            raise SystemExit(f"{card.name}: está archivada; desarchivarla primero.")
         won = winner(comments := self.comments(card))
         if card.list_name != LIST_IN_PROGRESS:
             if won is None:
@@ -867,7 +863,7 @@ class Board:
             origin = work[0]
         self.comment(card, f"{UNLOCK} soltada: {reason or 'sin terminar'}")
         self.move(card, origin)
-        self.sync_labels(self.cards(), only_dependents_of=card.short)
+        self.sync_labels(cards, only_dependents_of=card.short)
         return card
 
     def finish(
@@ -878,7 +874,8 @@ class Board:
         agent: str = "",
         force: bool = False,
     ) -> tuple[Card, list[Card]]:
-        card = self._find(short)
+        cards = self.cards()
+        card = self._find(short, cards)
         if card.list_name == LIST_DONE or card.closed:
             raise SystemExit(f"{card.name}: ya está hecha.")
         if card.list_name != LIST_IN_PROGRESS and not force:
@@ -900,7 +897,7 @@ class Board:
         self.move(card, LIST_DONE)
         self.set_label(card, LABEL_FREE, False)
         self.set_label(card, LABEL_BLOCKED, False)
-        freed = self.sync_labels(self.cards(), only_dependents_of=card.short)
+        freed = self.sync_labels(cards, only_dependents_of=card.short)
         return card, freed
 
 
@@ -978,11 +975,7 @@ def cmd_listar(board: Board, args: argparse.Namespace) -> int:
 
 def cmd_ver(board: Board, args: argparse.Namespace) -> int:
     cards = board.cards()
-    card = next(
-        (c for c in cards if c.short == args.tarjeta or c.id == args.tarjeta), None
-    )
-    if card is None:
-        raise SystemExit(f"No hay una tarjeta {args.tarjeta} en el tablero.")
+    card = board._find(args.tarjeta, cards)
     state, why = board.status(card, cards)
     print(
         f"{card.name}\nhttps://trello.com/c/{card.short} · {card.list_name} · {state}"
