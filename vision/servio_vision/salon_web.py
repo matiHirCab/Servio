@@ -8,7 +8,9 @@ navegador. Rutas (`<local>` es el `local_id` de la casa, `local` por defecto):
 - `/<local>/salon/eventos`  la misma foto por Server-Sent Events, cada vez que cambia
 - `/<local>/salon/frame.jpg` el último frame de la cámara, ya difuminado, para el
                             modo video de la página; solo con `--web-video`
-                            (`SalonFeed(video=True)`), si no, 404
+                            (`SalonFeed(video=True)`), si no, 404. Con `?v=N`,
+                            solo si es el frame de la foto N (si no, 404: la
+                            página se queda con la imagen que tenía)
 - `/`                       redirige a `/<local>/salon`
 
 Por defecto escucha solo en esta máquina (127.0.0.1). Con `--web-host 0.0.0.0` se
@@ -22,7 +24,7 @@ import threading
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import quote, unquote, urlsplit
+from urllib.parse import parse_qs, quote, unquote, urlsplit
 
 from servio_vision.salon import SalonFeed
 
@@ -76,7 +78,8 @@ def _handler(server: SalonServer) -> type[BaseHTTPRequestHandler]:
             logger.debug("web: " + format, *args)
 
         def do_GET(self) -> None:
-            parts = [unquote(p) for p in urlsplit(self.path).path.split("/") if p]
+            url = urlsplit(self.path)
+            parts = [unquote(p) for p in url.path.split("/") if p]
             if not parts:
                 return self._redirect(f"/{quote(feed.local_id)}/salon")
             if parts[0] != feed.local_id or len(parts) < 2 or parts[1] != "salon":
@@ -92,21 +95,22 @@ def _handler(server: SalonServer) -> type[BaseHTTPRequestHandler]:
             if rest == ["eventos"]:
                 return self._events()
             if rest == ["frame.jpg"]:
-                return self._frame()
+                wanted = parse_qs(url.query).get("v", [None])[0]
+                return self._frame(int(wanted) if wanted and wanted.isdigit() else None)
             return self._send(HTTPStatus.NOT_FOUND, b"No existe", "text/plain")
 
-        def _frame(self) -> None:
+        def _frame(self, version: int | None) -> None:
             if not feed.video:
                 return self._send(
                     HTTPStatus.NOT_FOUND,
                     "El modo video está apagado (--web-video)".encode(),
                     "text/plain; charset=utf-8",
                 )
-            jpeg = feed.frame_jpeg()
+            jpeg = feed.frame_jpeg(version)
             if jpeg is None:
                 return self._send(
                     HTTPStatus.NOT_FOUND,
-                    "Todavía no hay frame".encode(),
+                    "Todavía no hay frame (o no es el de esa lectura)".encode(),
                     "text/plain; charset=utf-8",
                 )
             self._send(HTTPStatus.OK, jpeg, "image/jpeg")

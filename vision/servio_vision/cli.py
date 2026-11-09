@@ -87,9 +87,11 @@ def build_parser(
     )
     parser.add_argument(
         "--web-video",
-        action="store_true",
+        action=argparse.BooleanOptionalAction,
+        default=None,  # sin el flag, manda el toml (y su default, apagado)
         help="con --web, servir también la imagen de la cámara (caras difuminadas) "
-        "para el modo video de la vista; solo para armar la cámara o una demo",
+        "para el modo video de la vista; solo para armar la cámara o una demo. "
+        "--no-web-video lo apaga aunque el toml lo prenda",
     )
     return parser
 
@@ -125,7 +127,7 @@ def settings_from_args(args: argparse.Namespace) -> Settings:
         yolo_conf=args.yolo_conf,
         web_port=getattr(args, "web", None),
         web_host=getattr(args, "web_host", None),
-        web_video=getattr(args, "web_video", False) or None,  # el flag solo prende
+        web_video=getattr(args, "web_video", None),
         record=getattr(args, "record", None),  # solo main.py lo agrega
     )
 

@@ -82,7 +82,15 @@ def test_load_settings_with_missing_config_file_logs_and_returns_none(tmp_path, 
     assert "Configuración" in caplog.text
 
 
-def test_web_video_flag_turns_on_the_video_mode_and_is_off_by_default():
+def test_web_video_flag_turns_the_video_mode_on_or_off_and_is_off_by_default(
+    monkeypatch,
+):
     assert cli.settings_from_args(parse("--source", "a.mp4")).web_video is False
     loaded = cli.settings_from_args(parse("--source", "a.mp4", "--web-video"))
     assert loaded.web_video is True
+    # el flag pisa al entorno (y al toml) en las dos direcciones: decisión 2, el
+    # video se apaga después de armar la cámara aunque alguien lo haya dejado puesto
+    monkeypatch.setenv("SERVIO_WEB_VIDEO", "true")
+    assert cli.settings_from_args(parse("--source", "a.mp4")).web_video is True
+    off = cli.settings_from_args(parse("--source", "a.mp4", "--no-web-video"))
+    assert off.web_video is False

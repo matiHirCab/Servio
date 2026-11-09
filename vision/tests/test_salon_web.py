@@ -117,6 +117,13 @@ def test_frame_is_served_with_web_video_once_there_is_a_reading(video_server):
     assert status == 200 and kind == "image/jpeg"
     assert body[:2] == bytes([0xFF, 0xD8])  # un JPEG
     assert json.loads(get(f"{base}/estado")[2])["video"] is True
+    # la página pide el frame de la foto que dibujó: el de otra lectura no sirve
+    assert get(f"{base}/frame.jpg?v=1")[0] == 200
+    code, text = status_of(f"{base}/frame.jpg?v=2")
+    assert code == 404 and "esa lectura" in text
+    assert (
+        get(f"{base}/frame.jpg?v=rara")[0] == 200
+    )  # un `v` que no es número se ignora
 
 
 def test_frame_is_encoded_once_per_reading_and_follows_the_snapshot():

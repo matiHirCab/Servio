@@ -75,10 +75,12 @@ def build_snapshot(
     restaurant: Restaurant | None = None,
     interval: float | None = None,
     video: bool = False,
+    frame_size: tuple[int, int] | None = None,
 ) -> dict[str, Any]:
     """La foto del salón después de una lectura. `last`: la última observación de
     cada mesa (una mesa que esta vez no se pudo leer muestra la anterior). `video`:
-    si la página puede pedir `frame.jpg` (sin eso no muestra el modo video)."""
+    si la página puede pedir `frame.jpg` (sin eso no muestra el modo video).
+    `frame_size`: (ancho, alto) real del frame; sin él, el de las zonas."""
     zones = pipeline.zones
     tables: list[dict[str, Any]] = []
     counts: Counter[str] = Counter()
@@ -142,7 +144,7 @@ def build_snapshot(
         "ts": _iso(ts),
         "interval": interval,
         "video": video,
-        "frame": list(zones.frame_size),
+        "frame": list(frame_size or zones.frame_size),
         "tables": tables,
         "alerts": alerts,
         "counts": {s: counts.get(s, 0) for s in PLATE_STATES},
@@ -176,17 +178,22 @@ class SalonFeed:
         self._frame_version = 0  # la foto a la que pertenece `_frame`
         self._encode_failed = 0  # la versión cuyo frame no se pudo codificar
 
-    def frame_jpeg(self) -> bytes | None:
+    def frame_jpeg(self, version: int | None = None) -> bytes | None:
         """El frame de la última foto como JPEG (se codifica la primera vez que se
         pide, aunque lo pidan varios navegadores a la vez), o `None`: modo video
         apagado, sin lecturas, o un frame que no se pudo codificar (queda logueado
-        una vez; la vista sigue sin imagen, el pipeline sigue)."""
+        una vez; la vista sigue sin imagen, el pipeline sigue). Con `version`, solo
+        si el frame guardado es el de esa foto: la página pide el de la foto que
+        dibujó y, si ya hay otra lectura, se queda con la imagen que tenía."""
         # el pipeline nunca espera este candado: `on_reading` solo toma `_changed`
         with self._encode_lock:
             with self._changed:
-                frame, jpeg, version = self._frame, self._jpeg, self._frame_version
+                frame, jpeg, current = self._frame, self._jpeg, self._frame_version
+            if version is not None and version != current:
+                return None
             if frame is None or jpeg is not None:
                 return jpeg
+            version = current
             if self._encode_failed == version:
                 return None
             try:
@@ -224,8 +231,8 @@ class SalonFeed:
             self.restaurant,
             self.interval,
             self.video,
+            (int(frame.shape[1]), int(frame.shape[0])),
         )
-        snapshot["frame"] = [int(frame.shape[1]), int(frame.shape[0])]
         kept = frame.copy() if self.video else None  # fuera del candado: es grande
         with self._changed:
             self._version += 1

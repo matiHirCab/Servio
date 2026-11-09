@@ -53,7 +53,6 @@ h1,h2,h3{margin:0;font-weight:500;text-wrap:balance}
 .stage svg,.stage img{display:block;width:100%;height:auto}
 .video{position:relative;aspect-ratio:4/3;max-width:100%;margin:0 auto;background:#000}
 .video img{position:absolute;inset:0;width:100%;height:100%;object-fit:contain;filter:saturate(.85) brightness(.9)}
-.video img[hidden]{display:none}
 .video svg{position:absolute;inset:0;width:100%;height:100%}
 .video .wait{position:absolute;inset:0;display:grid;place-items:center;color:var(--fg-2);font-weight:300;font-size:18px;text-align:center;padding:24px}
 .cap{position:absolute;left:16px;bottom:12px;display:flex;gap:10px;align-items:center;pointer-events:none}
@@ -166,9 +165,11 @@ h1,h2,h3{margin:0;font-weight:500;text-wrap:balance}
 
 <script>
 "use strict";
-const STATES = ["lleno", "comiendo", "por_terminar", "vacio"];
-const COLOR = {lleno:"#3EE08F", comiendo:"#F2C94C", por_terminar:"#FF8A3D", vacio:"#FF4D61"};
-const STATE_NAME = {lleno:"Lleno", comiendo:"Comiendo", por_terminar:"Por terminar", vacio:"Vacío"};
+const STATES = ["lleno", "comiendo", "por_terminar", "vacio"];  // los cuatro de la leyenda
+// «tapado»: un estado que la página no conoce (un plato que el modelo no pudo ver, un
+// esquema nuevo): gris neutro, nunca se dibuja como si fuera uno de los cuatro
+const COLOR = {lleno:"#3EE08F", comiendo:"#F2C94C", por_terminar:"#FF8A3D", vacio:"#FF4D61", tapado:"#9aa3ad"};
+const STATE_NAME = {lleno:"Lleno", comiendo:"Comiendo", por_terminar:"Por terminar", vacio:"Vacío", tapado:"Tapado"};
 const TABLE_STATUS = {libre:"Libre", servida:"Servida", comiendo:"Comiendo", por_terminar:"Por terminar", terminada:"Terminó"};
 const ALERT_TITLE = {
   mesa_terminada: n => `${n} terminó`,
@@ -176,7 +177,7 @@ const ALERT_TITLE = {
   plato_lleno_mucho: n => `${n} sigue con un plato lleno`,
 };
 const ALERT_COLOR = {mesa_terminada: COLOR.vacio, plato_vacio: COLOR.por_terminar, plato_lleno_mucho: COLOR.lleno};
-const FILL = {lleno:.9, comiendo:.55, por_terminar:.18, vacio:0};
+const FILL = {lleno:.9, comiendo:.55, por_terminar:.18, vacio:0, tapado:.5};
 
 const base = location.pathname.replace(/\/+$/, "");
 let snap = null;          // última foto del salón
@@ -198,7 +199,7 @@ const tableOf = id => snap ? snap.tables.find(t => t.id === id) : undefined;
 const tableName = id => { const t = tableOf(id); return t ? t.name : id; };
 const tableWaiter = id => (tableOf(id) || {}).waiter || null;
 const dishName = (p, i) => p.dish || (i === undefined ? "Plato" : "Plato " + (i + 1));
-const stateOf = p => STATE_NAME[p.state] ? p.state : "comiendo";  // un estado raro no rompe el dibujo
+const stateOf = p => STATES.includes(p.state) ? p.state : "tapado";  // un estado raro no rompe el dibujo
 const occupied = t => t.plates.length > 0;
 const alertTitle = (type, name) => (ALERT_TITLE[type] || (n => `${n}: aviso`))(name);
 const alertColor = type => ALERT_COLOR[type] || "#9aa3ad";
@@ -223,7 +224,7 @@ function rand(seed) { return () => ((seed = Math.imul(seed ^ (seed >>> 15), 2246
 // ---------- dibujo ----------
 function halos(prefix) {
   let out = "";
-  for (const s of STATES) out += `<radialGradient id="${prefix}halo-${s}"><stop offset=".45" stop-color="${COLOR[s]}" stop-opacity=".55"/><stop offset="1" stop-color="${COLOR[s]}" stop-opacity="0"/></radialGradient>`;
+  for (const s of Object.keys(COLOR)) out += `<radialGradient id="${prefix}halo-${s}"><stop offset=".45" stop-color="${COLOR[s]}" stop-opacity=".55"/><stop offset="1" stop-color="${COLOR[s]}" stop-opacity="0"/></radialGradient>`;
   return out;
 }
 function defs() {
@@ -297,7 +298,7 @@ function tag(x, y, text, col, opacity = 1, anchor = "start", age = null, alt = n
   const w = text.length * 7.2 + 22, x0 = anchor === "end" ? -w : 0;
   return `<g class="tag" data-x="${x.toFixed(1)}" data-y="${y.toFixed(1)}" data-anchor="${anchor}"${alt !== null ? ` data-alt="${alt.toFixed(1)}"` : ""}${age ? ` data-age="${esc(age)}" data-base="${esc(text.slice(0, text.lastIndexOf(" · ")))}"` : ""} transform="translate(${x.toFixed(1)} ${y.toFixed(1)})"><rect x="${x0.toFixed(0)}" y="-11" width="${w.toFixed(0)}" height="22" rx="11" fill="${col}" fill-opacity="${opacity}"/><text x="${(x0 + w / 2).toFixed(0)}" y="4" text-anchor="middle" class="svg-tag">${esc(text)}</text></g>`;
 }
-const isHidden = el => { for (let e = el; e; e = e.parentElement) if (e.hasAttribute && e.hasAttribute("hidden")) return true; return false; };  // o un ancestro
+const isHidden = el => el.closest("[hidden]") !== null;  // o un ancestro
 function fitTags(svg) {
   if (isHidden(svg)) return;  // oculto: no se puede medir
   const vw = svg.viewBox && svg.viewBox.baseVal ? svg.viewBox.baseVal.width : Infinity;
@@ -335,10 +336,14 @@ const alertTagText = (al, name) => alertTitle(al.type, name).toUpperCase();
 // las edades de las etiquetas de aviso, cada segundo (el dibujo solo se rehace con una lectura)
 function refreshAges(svg) {
   if (isHidden(svg)) return;
-  const tags = svg.querySelectorAll("g.tag[data-age]");
-  if (!tags.length) return;
-  for (const g of tags) g.querySelector("text").textContent = `${g.dataset.base} · ${ago(g.dataset.age).toUpperCase()}`;
-  fitTags(svg);
+  for (const g of svg.querySelectorAll("g.tag[data-age]")) {
+    const t = g.querySelector("text"), text = `${g.dataset.base} · ${ago(g.dataset.age).toUpperCase()}`;
+    if (t.textContent === text) continue;  // cambia una vez por segundo el primer minuto, después una por minuto
+    t.textContent = text;
+    if (!t.getComputedTextLength) continue;
+    const r = g.querySelector("rect"), w = t.getComputedTextLength() + 22, x0 = g.dataset.anchor === "end" ? -w : 0;
+    r.setAttribute("width", w.toFixed(0)); r.setAttribute("x", x0.toFixed(0)); t.setAttribute("x", (x0 + w / 2).toFixed(0));
+  }
 }
 
 // ---------- reconstrucción ----------
@@ -442,10 +447,7 @@ function renderVideo() {
   svg.setAttribute("viewBox", `0 0 ${VW} ${VH.toFixed(1)}`);
   $("cam-cap").textContent = `Cámara ${snap.camera} · caras difuminadas en la computadora`;
   const key = `${snap.ts}|${snap.version}`;
-  if (key !== camKey) {  // el frame de esta lectura; el navegador no lo cachea (no-store)
-    camKey = key;
-    $("cam").src = `${base}/frame.jpg?v=${snap.version}`;
-  }
+  if (key !== camKey) { camKey = key; loadFrame(snap.version, [fw, fh]); }
   let out = `<defs>${halos("v")}</defs>`;
   for (const t of snap.tables) {
     const sel = t.id === selected, x0 = t.box[0] * VW, y0 = t.box[1] * VH, w = t.box[2] * VW, h = t.box[3] * VH;
@@ -472,12 +474,24 @@ function renderVideo() {
   fitTags(svg);
   pending.video.clear();
 }
-$("cam").onload = () => {
-  const cam = $("cam"), was = $("video").style.aspectRatio;
-  cam.hidden = false; $("cam-wait").hidden = true;
-  if (was !== `${cam.naturalWidth} / ${cam.naturalHeight}` && mode === "video") renderVideo();  // otra proporción: las capas, sobre la imagen real
-};
-$("cam").onerror = () => { $("cam").hidden = true; $("cam-wait").hidden = false; };  // todavía no hay frame (404)
+// El frame de la foto `version`. El servidor lo da solo si todavía es el suyo (`?v=`); si ya
+// pasó a otra lectura (404) la imagen anterior se queda hasta que llegue la foto siguiente,
+// así nunca hay capas de una lectura sobre la imagen de otra. Sin `<img src>`: un 404 ahí
+// deja el cuadro roto en vez de la imagen que había.
+let frameUrl = null;
+function loadFrame(version, drawn) {
+  fetch(`${base}/frame.jpg?v=${version}`).then(r => r.ok ? r.blob() : null).then(blob => {
+    if (!blob || !snap || snap.version !== version) return;  // llegó tarde: ya se dibujó otra foto
+    const cam = $("cam"), url = URL.createObjectURL(blob);
+    cam.onload = () => {
+      if (frameUrl) URL.revokeObjectURL(frameUrl);
+      frameUrl = url; cam.hidden = false; $("cam-wait").hidden = true;
+      // la cámara no tiene la proporción con que se dibujó: las capas, sobre la imagen real
+      if ((cam.naturalWidth !== drawn[0] || cam.naturalHeight !== drawn[1]) && mode === "video") renderVideo();
+    };
+    cam.src = url;
+  }).catch(() => {});
+}
 
 // ---------- panel ----------
 function renderSide() {
@@ -498,7 +512,7 @@ ${rows}<div class="label num" style="margin-top:10px">${esc(since)} · ${t.plate
   // los avisos del más viejo al más nuevo: el que lleva más tiempo esperando es el que hay que atender
   const alerts = snap ? [...snap.alerts].sort(byAge) : [];
   const taken = a => a.answered_by ? `<span class="taken">Voy · ${esc(a.answered_by)}</span>`
-    : a.answered_by === null ? `<span class="taken none">Nadie respondió${tableWaiter(a.table_id) ? " · " + esc(tableWaiter(a.table_id)) : ""}</span>`
+    : a.answered_by === null ? `<span class="taken none">Nadie respondió${(w => w ? " · " + esc(w) : "")(tableWaiter(a.table_id))}</span>`
     : "";  // el servidor no manda quién respondió (llega con C-5): no se dice nada
   $("alerts-card").className = "card" + (alerts.length ? " warn" : "");
   $("alerts-card").innerHTML = `<div class="card-h"><h2>Avisos</h2><span class="label num">${alerts.length} ${alerts.length === 1 ? "abierto" : "abiertos"}</span></div>` +
@@ -546,8 +560,9 @@ function render() {
   // antes de redibujar: después el nodo ya no está en el documento
   const focused = document.activeElement && document.activeElement.closest ? document.activeElement.closest(".tbl") : null;
   const focusedSvg = focused ? focused.closest("svg") : null, focusedId = focused ? focused.dataset.id : null;
-  if ($("floor").hasAttribute("hidden")) dirty.floor = true; else { renderFloor(); dirty.floor = false; }
-  if ($("video").hasAttribute("hidden")) dirty.video = true; else { renderVideo(); dirty.video = false; }
+  // el modo oculto se dibuja al mostrarlo, sin latidos viejos: lo que cambió mientras no se veía no es noticia
+  if ($("floor").hasAttribute("hidden")) { dirty.floor = true; pending.floor.clear(); } else { renderFloor(); dirty.floor = false; }
+  if ($("video").hasAttribute("hidden")) { dirty.video = true; pending.video.clear(); } else { renderVideo(); dirty.video = false; }
   renderSide();
   if (focusedSvg && focusedId !== null) { const g = focusedSvg.querySelector(`.tbl[data-id="${CSS.escape(focusedId)}"]`); if (g && g.focus) g.focus(); }
 }
@@ -590,7 +605,13 @@ function chooseMode(m) {
 $("mode-recon").onclick = () => chooseMode("recon");
 $("mode-video").onclick = () => chooseMode("video");
 
-window.addEventListener("resize", () => { if (mode === "video" && snap) renderVideo(); });  // el viewBox del video sigue al ancho
+// el viewBox del video sigue al ancho: un redibujo por cuadro de animación, con el foco a salvo (render)
+let resizing = false;
+window.addEventListener("resize", () => {
+  if (mode !== "video" || !snap || resizing) return;
+  resizing = true;
+  requestAnimationFrame(() => { resizing = false; render(); });
+});
 for (const id of ["floor", "overlay"]) {
   $(id).addEventListener("click", e => { const g = e.target.closest(".tbl"); if (!g) return; selected = g.dataset.id; render(); });
   $(id).addEventListener("keydown", e => {
