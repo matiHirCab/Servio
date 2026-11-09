@@ -147,3 +147,16 @@ def test_a_frame_that_cannot_be_encoded_is_logged_once_and_not_served(caplog):
     assert caplog.text.count("No se pudo codificar") == 1
     pipeline.process_frame(FRAME, T0)  # la lectura siguiente vuelve a servirse
     assert feed.frame_jpeg() is not None
+
+
+def test_snapshot_carries_the_real_frame_size():
+    """Las zonas pueden venir de un video de otra proporción: la página dibuja las
+    cajas (normalizadas) sobre la imagen que llega, con el tamaño real del frame."""
+    import numpy as np
+
+    feed = SalonFeed("casa-1")
+    pipeline = Pipeline(
+        FakeClassifier(), ZONES, lambda o: None, on_reading=feed.on_reading
+    )
+    pipeline.process_frame(np.zeros((300, 400, 3), np.uint8), T0)
+    assert feed.snapshot()["frame"] == [400, 300]

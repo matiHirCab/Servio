@@ -173,7 +173,8 @@ class SalonFeed:
         self._frame: np.ndarray | None = None  # el de la última foto publicada
         self._jpeg: bytes | None = None  # ese frame codificado, si alguien lo pidió
         self._encode_lock = threading.Lock()  # un solo navegador codifica por vez
-        self._encode_failed: np.ndarray | None = None  # el frame que no se pudo
+        self._frame_version = 0  # la foto a la que pertenece `_frame`
+        self._encode_failed = 0  # la versión cuyo frame no se pudo codificar
 
     def frame_jpeg(self) -> bytes | None:
         """El frame de la última foto como JPEG (se codifica la primera vez que se
@@ -183,19 +184,19 @@ class SalonFeed:
         # el pipeline nunca espera este candado: `on_reading` solo toma `_changed`
         with self._encode_lock:
             with self._changed:
-                frame, jpeg = self._frame, self._jpeg
+                frame, jpeg, version = self._frame, self._jpeg, self._frame_version
             if frame is None or jpeg is not None:
                 return jpeg
-            if self._encode_failed is frame:
+            if self._encode_failed == version:
                 return None
             try:
                 jpeg = to_jpeg(frame)
             except (ValueError, cv2.error) as e:
                 logger.warning("No se pudo codificar el frame para la vista: %s", e)
-                self._encode_failed = frame
+                self._encode_failed = version
                 return None
             with self._changed:
-                if self._frame is frame:  # si ya hay otra lectura, el suyo va aparte
+                if self._frame_version == version:  # si no, ya hay otra lectura
                     self._jpeg = jpeg
             return jpeg
 
@@ -204,10 +205,12 @@ class SalonFeed:
         pipeline: "Pipeline",
         observations: list[TableObservation],
         ts: datetime,
-        frame: np.ndarray | None = None,
+        frame: np.ndarray,
     ) -> None:
         """La foto de esta lectura y, con `video`, su frame (una copia: el loop puede
-        reusar el buffer de la cámara)."""
+        reusar el buffer de la cámara). La foto lleva el tamaño real del frame: las
+        cajas van normalizadas y la página las dibuja sobre la imagen que recibe,
+        aunque la cámara no tenga la proporción con que se dibujaron las zonas."""
         for obs in observations:
             self._last[obs.table_id] = obs
         present = {z.table_id for z in pipeline.zones.tables}
@@ -222,12 +225,15 @@ class SalonFeed:
             self.interval,
             self.video,
         )
+        snapshot["frame"] = [int(frame.shape[1]), int(frame.shape[0])]
+        kept = frame.copy() if self.video else None  # fuera del candado: es grande
         with self._changed:
             self._version += 1
             snapshot["version"] = self._version
             self._snapshot = snapshot
-            if self.video and frame is not None:
-                self._frame, self._jpeg = frame.copy(), None
+            if kept is not None:
+                self._frame, self._jpeg = kept, None
+                self._frame_version = self._version
             self._changed.notify_all()
 
     def snapshot(self) -> dict[str, Any] | None:

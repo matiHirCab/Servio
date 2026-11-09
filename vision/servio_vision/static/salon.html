@@ -297,8 +297,9 @@ function tag(x, y, text, col, opacity = 1, anchor = "start", age = null, alt = n
   const w = text.length * 7.2 + 22, x0 = anchor === "end" ? -w : 0;
   return `<g class="tag" data-x="${x.toFixed(1)}" data-y="${y.toFixed(1)}" data-anchor="${anchor}"${alt !== null ? ` data-alt="${alt.toFixed(1)}"` : ""}${age ? ` data-age="${esc(age)}" data-base="${esc(text.slice(0, text.lastIndexOf(" · ")))}"` : ""} transform="translate(${x.toFixed(1)} ${y.toFixed(1)})"><rect x="${x0.toFixed(0)}" y="-11" width="${w.toFixed(0)}" height="22" rx="11" fill="${col}" fill-opacity="${opacity}"/><text x="${(x0 + w / 2).toFixed(0)}" y="4" text-anchor="middle" class="svg-tag">${esc(text)}</text></g>`;
 }
+const isHidden = el => { for (let e = el; e; e = e.parentElement) if (e.hasAttribute && e.hasAttribute("hidden")) return true; return false; };  // o un ancestro
 function fitTags(svg) {
-  for (let e = svg; e; e = e.parentElement) if (e.hasAttribute && e.hasAttribute("hidden")) return;  // oculto: no se puede medir
+  if (isHidden(svg)) return;  // oculto: no se puede medir
   const vw = svg.viewBox && svg.viewBox.baseVal ? svg.viewBox.baseVal.width : Infinity;
   for (const g of svg.querySelectorAll("g.tag")) {
     const t = g.querySelector("text"), r = g.querySelector("rect");
@@ -333,7 +334,7 @@ function tagBox(svg, g) {
 const alertTagText = (al, name) => alertTitle(al.type, name).toUpperCase();
 // las edades de las etiquetas de aviso, cada segundo (el dibujo solo se rehace con una lectura)
 function refreshAges(svg) {
-  if (svg.hasAttribute("hidden")) return;
+  if (isHidden(svg)) return;
   const tags = svg.querySelectorAll("g.tag[data-age]");
   if (!tags.length) return;
   for (const g of tags) g.querySelector("text").textContent = `${g.dataset.base} · ${ago(g.dataset.age).toUpperCase()}`;
@@ -429,7 +430,9 @@ let camKey = null;  // la lectura (hora + versión) cuyo frame.jpg se pidió; tr
 function renderVideo() {
   const svg = $("overlay");
   if (!snap) { svg.innerHTML = ""; return; }
-  const [fw, fh] = snap.frame;
+  // la proporción es la de la imagen que llegó (si ya cargó), no la de las zonas: las cajas
+  // vienen normalizadas y se dibujan sobre la imagen aunque la cámara tenga otra proporción
+  const cam = $("cam"), [fw, fh] = cam.naturalWidth && !cam.hidden ? [cam.naturalWidth, cam.naturalHeight] : snap.frame;
   // el viewBox no es la resolución de la cámara: una unidad es un píxel de la pantalla
   // (el ancho con que se muestra el video), así los trazos y las etiquetas miden lo mismo
   // con una webcam de 640 que con una de 1920, y en una cámara vertical angosta
@@ -451,7 +454,7 @@ function renderVideo() {
     out += `<rect class="tbl-top" x="${x0.toFixed(1)}" y="${y0.toFixed(1)}" width="${w.toFixed(1)}" height="${h.toFixed(1)}" rx="10" fill="#3E8BFF" fill-opacity="${sel ? .08 : .02}" stroke="#ffffff" stroke-opacity="${sel ? .9 : .35}" stroke-width="2" stroke-dasharray="${sel ? "0" : "6 6"}"/>`;
     out += tag(x0 + 8, y0 + 16, `${t.name}${t.waiter ? " · " + t.waiter : ""} · ${status.toUpperCase()}`, "#e9edf2", .92);
     const al = alertsOf(t.id)[0];
-    if (al) out += tag(x0 + 8, y0 + h - 16, alertTagText(al, t.name), alertColor(al.type), 1, "start", al.created_at);
+    if (al) out += tag(x0 + 8, y0 + h - 16, alertTagText(al, t.name), alertColor(al.type), 1, "start", al.created_at, y0 + h + 14);
     for (const p of t.plates) {
       if (!p.bbox) continue;
       const [bx, by, bw, bh] = p.bbox;
@@ -469,7 +472,11 @@ function renderVideo() {
   fitTags(svg);
   pending.video.clear();
 }
-$("cam").onload = () => { $("cam").hidden = false; $("cam-wait").hidden = true; };
+$("cam").onload = () => {
+  const cam = $("cam"), was = $("video").style.aspectRatio;
+  cam.hidden = false; $("cam-wait").hidden = true;
+  if (was !== `${cam.naturalWidth} / ${cam.naturalHeight}` && mode === "video") renderVideo();  // otra proporción: las capas, sobre la imagen real
+};
 $("cam").onerror = () => { $("cam").hidden = true; $("cam-wait").hidden = false; };  // todavía no hay frame (404)
 
 // ---------- panel ----------
@@ -530,7 +537,7 @@ ${rows}<div class="label num" style="margin-top:10px">${esc(since)} · ${t.plate
 function pickTable() {
   if (!snap) return;
   if (selected && snap.tables.some(t => t.id === selected)) return;
-  const oldest = [...snap.alerts].sort(byAge)[0];
+  const oldest = snap.alerts.filter(a => tableOf(a.table_id)).sort(byAge)[0];  // de una mesa que siga en el salón
   selected = oldest ? oldest.table_id : (snap.tables.find(occupied) || snap.tables[0] || {}).id || null;
 }
 
@@ -579,7 +586,6 @@ function chooseMode(m) {
   showMode(m === "video" && snap && snap.video ? "video" : "recon");
   if (mode === "recon" && dirty.floor) { renderFloor(); dirty.floor = false; }
   if (mode === "video" && dirty.video) { renderVideo(); dirty.video = false; }
-  fitTags($("floor")); fitTags($("overlay"));
 }
 $("mode-recon").onclick = () => chooseMode("recon");
 $("mode-video").onclick = () => chooseMode("video");
