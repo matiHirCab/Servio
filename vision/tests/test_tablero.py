@@ -15,6 +15,7 @@ LISTS = {
     "Semana 4 · 18/11": "L4",
     "In progress": "LP",
     "Done": "LD",
+    "Ideas a futuro": "LI",
 }
 ME = "me1"
 
@@ -796,6 +797,79 @@ def test_finish_only_resyncs_dependents():
     board.finish("cccccc05", 72, "")
     assert api.label_names("cccccc07") == {"Libre"}
     assert api.label_names("nuevaaa1") == set()  # no se tocó: no depende de C-5
+
+
+def test_take_does_not_drag_a_just_finished_card_back():
+    api, board = board_with(
+        card("a4", "aaaaaaa4", "A-4", "", "LD"),
+        card("c5", "cccccc05", "P1 · C-5 · Voy", HEADER_C5),
+    )
+
+    def sneak(cid):  # otro la terminó justo después de nuestro candado
+        api.add_comment(cid, "✅ Integrada en develop")
+        api.cards[cid]["idList"] = "LD"
+
+    api.before_comment_read = sneak
+    with pytest.raises(SystemExit, match="pasó a «Done»"):
+        board.take("cccccc05", "yo")
+    assert api.list_of("cccccc05") == "Done"
+    assert not any(c["data"]["text"].startswith("🔒") for c in api.comments["c5"])
+
+
+def test_take_refuses_cards_outside_work_lists():
+    _api, board = board_with(
+        card("d8", "dddddd08", "D-8 · Descartada", "**Toca:** `x`\n\nx", "LI")
+    )
+    with pytest.raises(SystemExit, match="no es una lista de trabajo"):
+        board.take("dddddd08", "yo")
+
+
+def test_api_turns_timeouts_into_exit_messages(monkeypatch):
+    def boom(req, timeout):
+        raise TimeoutError("read timed out")
+
+    monkeypatch.setattr(tablero.urllib.request, "urlopen", boom)
+    with pytest.raises(SystemExit, match="No se pudo hablar con Trello"):
+        tablero.Api("K", "T").get("/x")
+
+
+def test_retry_after_is_clamped():
+    assert tablero._retry_after("3600") == 10.0
+    assert tablero._retry_after("inf") == 10.0
+    assert tablero._retry_after("nan") == 2.0
+
+
+def test_network_error_after_the_lock_removes_it():
+    api, board = board_with(
+        card("a4", "aaaaaaa4", "A-4", "", "LD"),
+        card("c5", "cccccc05", "P1 · C-5 · Voy", HEADER_C5),
+    )
+    real_put = api.put
+
+    def failing_move(path, **params):
+        raise SystemExit("Trello respondió 503")
+
+    api.put = failing_move
+    with pytest.raises(SystemExit, match="503"):
+        board.take("cccccc05", "yo")
+    assert api.comments["c5"] == []  # el candado se borró
+    api.put = real_put
+
+
+def test_tomar_prints_the_card_notes(capsys, monkeypatch):
+    api, board = board_with(
+        card(
+            "c9",
+            "cccccc09",
+            "P2 · C-9 · X",
+            "**Toca:** `a.py`\n**Depende de:** B-4 (Telegram)\n\nx",
+        ),
+    )
+    monkeypatch.setattr(tablero, "credentials", lambda *a, **k: ("k", "t"))
+    monkeypatch.setattr(tablero, "Api", lambda key, token: api)
+    monkeypatch.setattr(tablero, "Board", lambda api_, board_id=tablero.BOARD_ID: board)
+    assert tablero.main(["tomar", "cccccc09", "--agente", "yo"]) == 0
+    assert "no es ninguna tarjeta" in capsys.readouterr().out
 
 
 def test_credentials_from_env_files(tmp_path):

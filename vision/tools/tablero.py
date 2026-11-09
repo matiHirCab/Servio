@@ -39,6 +39,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 import re
 import sys
@@ -308,11 +309,12 @@ def credentials(
 
 
 def _retry_after(value: str | None) -> float:
-    """Segundos a esperar según Retry-After; si es una fecha o basura, 2 s."""
+    """Segundos a esperar según Retry-After, entre 0 y 10; si es una fecha o basura, 2 s."""
     try:
-        return max(0.0, float(value or 2))
+        wait = float(value or 2)
     except ValueError:
         return 2.0
+    return 2.0 if math.isnan(wait) else min(10.0, max(0.0, wait))
 
 
 class Api:
@@ -360,6 +362,12 @@ class Api:
                 ) from e
             except urllib.error.URLError as e:
                 raise SystemExit(f"No se pudo hablar con Trello: {e.reason}") from e
+            except (
+                TimeoutError,
+                OSError,
+                ValueError,
+            ) as e:  # socket, lectura, JSON roto
+                raise SystemExit(f"No se pudo hablar con Trello: {e}") from e
         return None  # no se llega: el for devuelve o levanta
 
 
@@ -374,6 +382,7 @@ class Card:
     members: list[str]  # usuarios
     member_ids: list[str]
     closed: bool = False
+    notes: list[str] = field(default_factory=list)  # avisos de `status` al tomarla
     label_ids: dict[str, str] = field(
         default_factory=dict
     )  # nombre → id de la etiqueta puesta
@@ -491,6 +500,14 @@ class Board:
             ):
                 return out
             before = rows[-1]["id"]
+
+    def _claim(
+        self, card: Card, token: str, agent: str, origin: str
+    ) -> tuple[str, list[tuple[str, str]], tuple[str, str, str] | None]:
+        """Pone el candado y lee quién ganó: (id del comentario, comentarios, ganador)."""
+        mine = self.comment(card, lock_text(token, agent, origin, datetime.now(UTC)))
+        comments = self._comments_with(card, token, mine)
+        return mine, comments, winner(comments)
 
     def _comments_with(
         self, card: Card, token: str, mine: str
@@ -651,6 +668,11 @@ class Board:
             raise SystemExit(
                 f"{card.name}: {state}: {'; '.join(why)}. Con --forzar se toma igual."
             )
+        if not is_work_list(card.list_name, extra=True) and not force:
+            raise SystemExit(
+                f"{card.name}: está en «{card.list_name}», que no es una lista de trabajo."
+            )
+        card.notes = why
         # Con --forzar, un candado viejo (la movieron a mano, se cortó la red) se pisa a
         # propósito; uno fresco es otro agente tomándola ahora y sigue la carrera normal.
         if (
@@ -661,33 +683,44 @@ class Board:
             self.comment(card, f"{UNLOCK} candado viejo pisado por {agent}")
         token = uuid.uuid4().hex[:12]
         origin = card.list_name
-        mine = self.comment(card, lock_text(token, agent, origin, datetime.now(UTC)))
-        comments = self._comments_with(card, token, mine)
-        won = winner(comments)
-        if (
-            won is None
-        ):  # un 🔓 o ✅ cayó justo después del nuestro: la tarjeta está libre
-            self.api.delete(f"/actions/{mine}")
-            mine = self.comment(
-                card, lock_text(token, agent, origin, datetime.now(UTC))
-            )
-            comments = self._comments_with(card, token, mine)
-            won = winner(comments)
-        if won is None or won[0] != token:
-            self.api.delete(f"/actions/{mine}")  # no dejar candados huérfanos
-            who = won[1] if won else "otro"
-            now = lock_date(comments, token)  # la hora de Trello, no la de esta máquina
-            if (
-                won is not None
-                and lock_age_minutes(comments, won[0], now) > STALE_LOCK_MIN
-            ):
-                raise SystemExit(
-                    f"{card.name}: tiene un candado viejo de {who} (hace "
-                    f"{lock_age_minutes(comments, won[0], now):.0f} min) y no está en curso: "
-                    "`soltar --agente <quién>` lo limpia, o `tomar --forzar` lo pisa."
-                )
-            raise SystemExit((f"{card.name}: la tomó {who} justo antes.", 2))
-        self.move(card, LIST_IN_PROGRESS)
+        mine, comments, won = self._claim(card, token, agent, origin)
+        try:
+            if won is None:
+                # un 🔓 o ✅ cayó justo después del nuestro. Si fue un ✅ (otro la terminó)
+                # o alguien la movió, la tarjeta ya no es la que miramos: no se toca.
+                fresh_card = self.card(card.id)
+                if fresh_card.list_name != origin or fresh_card.closed:
+                    self.api.delete(f"/actions/{mine}")
+                    raise SystemExit(
+                        f"{card.name}: mientras tanto pasó a «{fresh_card.list_name}»; "
+                        "no se toma."
+                    )
+                self.api.delete(f"/actions/{mine}")
+                mine, comments, won = self._claim(card, token, agent, origin)
+            if won is None or won[0] != token:
+                self.api.delete(f"/actions/{mine}")  # no dejar candados huérfanos
+                who = won[1] if won else "otro"
+                now = lock_date(
+                    comments, token
+                )  # la hora de Trello, no la de esta máquina
+                age = lock_age_minutes(comments, won[0], now) if won else 0.0
+                if age > STALE_LOCK_MIN:
+                    raise SystemExit(
+                        f"{card.name}: tiene un candado viejo de {who} (hace {age:.0f} min) "
+                        "y no está en curso: `soltar --agente <quién>` lo limpia, o "
+                        "`tomar --forzar` lo pisa."
+                    )
+                raise SystemExit((f"{card.name}: la tomó {who} justo antes.", 2))
+            self.move(card, LIST_IN_PROGRESS)
+        except BaseException:
+            # cualquier cosa que falle entre el candado y el movimiento (red, Ctrl-C, un
+            # error de arriba) no deja el candado puesto en una tarjeta que no se movió
+            if card.list_name != LIST_IN_PROGRESS:
+                try:
+                    self.api.delete(f"/actions/{mine}")
+                except SystemExit:
+                    pass
+            raise
         # Ya en curso, los choques de archivos se miran de nuevo: otro agente pudo tomar
         # una tarjeta que toca lo mismo en el medio. Si las dos entraron a la vez, retrocede
         # la del candado más nuevo (la otra, al mirar, ve que la suya es la vieja y sigue).
@@ -699,7 +732,10 @@ class Board:
                     if (
                         other.id == card.id
                         or other.closed
-                        or other.list_name == LIST_DONE
+                        or not (
+                            other.list_name == LIST_IN_PROGRESS
+                            or is_work_list(other.list_name)
+                        )
                     ):
                         continue
                     hit = paths_overlap(card.header.touches, other.header.touches)
@@ -727,12 +763,14 @@ class Board:
                                 2,
                             )
                         )
-        except (SystemExit, Exception):
+        except BaseException:
             if (
                 not rolled_back
-            ):  # un error de red en la segunda mirada no deja la tarjeta colgada
-                self.comment(card, f"{UNLOCK} soltada: falló la segunda mirada")
-                self.move(card, origin)
+            ):  # un error en la segunda mirada (red, Ctrl-C) no deja la tarjeta colgada
+                try:
+                    self.comment(card, f"{UNLOCK} soltada: falló la segunda mirada")
+                finally:
+                    self.move(card, origin)
             raise
         self.set_label(card, LABEL_FREE, False)
         self.set_label(card, LABEL_BLOCKED, False)
@@ -914,6 +952,8 @@ def cmd_tomar(board: Board, args: argparse.Namespace) -> int:
     card = board.take(args.tarjeta, args.agente, force=args.forzar)
     branch = f"{args.rama or 'agente'}/{slug(card.name)}"
     print(f"Tomada: {card.name}\nhttps://trello.com/c/{card.short}")
+    for note in card.notes:
+        print(f"  ⚠ {note}")
     print(f"Rama sugerida (desde develop): {branch}")
     header = card.header
     if header.touches:
