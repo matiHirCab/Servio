@@ -19,14 +19,19 @@ programa lee (ver «Tablero y trabajo en paralelo» en AGENTS.md):
     **Decisiones:** 5, 6
 
 `Depende de` nombra tarjetas por su enlace corto entre paréntesis: una tarjeta está
-libre cuando todas están en «Done». `Toca` son rutas del repo: dos tarjetas que
-tocan lo mismo no se trabajan a la vez. La etiqueta «Humano» marca lo que un agente
-no puede hacer (armar una cámara, comer en casa) y no se toma desde acá.
+libre cuando todas están en «Done» (o archivadas). `Toca` son rutas del repo: dos
+tarjetas que tocan lo mismo no se trabajan a la vez. La etiqueta «Humano» marca lo
+que un agente no puede hacer (armar una cámara, comer en casa) y no se toma desde acá.
+
+El candado es un comentario «🔒 …» en la tarjeta; un «🔓 …» (lo deja `soltar`) o un
+«✅ …» (lo deja `terminar`) lo borra. Si una tarjeta quedó con un candado viejo (la
+movieron a mano, se cortó la red), `soltar` lo limpia y `tomar --forzar` lo pisa.
 
 Credenciales: TRELLO_KEY y TRELLO_TOKEN en el entorno o en el `.env` del repo (ver
-`.env.example`). Cada persona usa las suyas; son de su cuenta de Trello. Sale con 0
-si hizo lo pedido, 1 si no se puede (tarjeta bloqueada, ocupada, sin permiso), 2 si
-otro agente la tomó justo antes.
+`.env.example`; también se busca en el `.env` de la carpeta de arriba del repo).
+Cada persona usa las suyas; son de su cuenta de Trello. Sale con 0 si hizo lo
+pedido, 1 si no se puede (tarjeta bloqueada, ocupada, sin permiso), 2 si otro
+agente la tomó justo antes.
 """
 
 from __future__ import annotations
@@ -40,13 +45,22 @@ import urllib.error
 import urllib.parse
 import urllib.request
 import uuid
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
+from functools import cached_property
 from pathlib import Path
 from typing import Any
 
+from dotenv import dotenv_values
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from servio_vision import ENV_FILE
+
 BOARD_ID = "6ad386f07003eed0f9a752c8"
 API = "https://api.trello.com/1"
+DEFAULT_ENV_FILES = (ENV_FILE, ENV_FILE.parent.parent / ".env")
 
 LIST_IN_PROGRESS = "In progress"
 LIST_DONE = "Done"
@@ -62,7 +76,9 @@ LOCK = "🔒"
 UNLOCK = "🔓"
 DONE_MARK = "✅"
 
-_SHORT_LINK = re.compile(r"\(([A-Za-z0-9_-]{8})\)")
+CARD_FIELDS = "name,desc,idList,labels,shortLink,idMembers,closed"
+
+_PAREN_TOKEN = re.compile(r"\(([A-Za-z0-9_-]{8})\)")
 _BACKTICKED = re.compile(r"`([^`]+)`")
 _HEADER_FIELD = re.compile(
     r"\*\*(?P<key>[^*:]+):\*\*(?P<value>.*?)(?=\*\*[^*:]+:\*\*|$)"
@@ -86,18 +102,36 @@ class Header:
     decisions: str = ""
 
 
-def parse_header(desc: str) -> Header:
-    """Lee los campos `**Clave:** valor` de las primeras líneas de la descripción.
+def short_links(value: str) -> list[str]:
+    """Los enlaces cortos de Trello entre paréntesis. Una palabra de 8 letras en
+    minúscula («(opcional)») no lo es: un enlace trae mayúsculas o dígitos."""
+    return [tok for tok in _PAREN_TOKEN.findall(value) if re.search(r"[A-Z0-9]", tok)]
 
-    Solo mira hasta la primera línea en blanco: lo de abajo es texto libre y puede
-    nombrar otras tarjetas sin que cuenten como dependencias."""
-    head = desc.replace("\r", "").split("\n\n", 1)[0]
+
+def header_lines(desc: str) -> str:
+    """Las líneas del encabezado, juntas. Son las primeras que empiezan con `**`;
+    las líneas en blanco entre ellas no cortan (el editor de Trello guarda cada
+    Enter como un párrafo), la primera línea de texto común sí."""
+    taken = []
+    for line in desc.replace("\r", "").split("\n"):
+        stripped = line.strip()
+        if not stripped:
+            continue
+        if not stripped.startswith("**"):
+            break
+        taken.append(stripped)
+    return " ".join(taken)
+
+
+def parse_header(desc: str) -> Header:
+    """Lee los campos `**Clave:** valor` del encabezado de la descripción. Lo de
+    abajo es texto libre y puede nombrar otras tarjetas sin que cuenten."""
     header = Header()
-    for m in _HEADER_FIELD.finditer(head.replace("\n", " ")):
+    for m in _HEADER_FIELD.finditer(header_lines(desc)):
         key = m.group("key").strip().lower()
         value = m.group("value").strip(" ·")
         if key.startswith("depende"):
-            header.depends_on = _SHORT_LINK.findall(value)
+            header.depends_on = short_links(value)
         elif key == "toca":
             header.touches = [p.strip() for p in _BACKTICKED.findall(value)]
         elif key.startswith(("área", "area")):
@@ -182,30 +216,23 @@ def winner(comments: list[tuple[str, str]]) -> tuple[str, str, str] | None:
     return claims[0] if claims else None
 
 
-def env_value(text: str, key: str) -> str | None:
-    """`KEY=valor   # comentario` → `valor`, de un .env; None si no está."""
-    for line in text.splitlines():
-        line = line.strip().lstrip("﻿")
-        if not line.startswith(key + "="):
-            continue
-        value = line.split("=", 1)[1]
-        value = value.split(" #", 1)[0].strip().strip("'\"")
-        return value or None
-    return None
-
-
-def credentials(start: Path) -> tuple[str, str]:
-    """TRELLO_KEY y TRELLO_TOKEN: del entorno, o del primer .env que los tenga
-    subiendo desde `start` (la carpeta vision/, el repo, la carpeta de arriba)."""
-    key, token = os.environ.get("TRELLO_KEY"), os.environ.get("TRELLO_TOKEN")
-    for folder in [start, *start.parents]:
-        if key and token:
-            break
-        env = folder / ".env"
+def credentials(
+    env_files: Iterable[Path] = DEFAULT_ENV_FILES,
+    environ: Mapping[str, str] = os.environ,
+) -> tuple[str, str]:
+    """TRELLO_KEY y TRELLO_TOKEN: del entorno, o del primer `.env` que los tenga
+    (el del repo, el de la carpeta de arriba). Se leen con `python-dotenv`, el mismo
+    lector que `settings.py`, sin tocar `os.environ`."""
+    values: dict[str, str | None] = {}
+    for env in env_files:
         if env.is_file():
-            text = env.read_text(encoding="utf-8", errors="replace")
-            key = key or env_value(text, "TRELLO_KEY")
-            token = token or env_value(text, "TRELLO_TOKEN")
+            for key, value in dotenv_values(env).items():
+                if (
+                    value and key not in values
+                ):  # un `TRELLO_TOKEN=` vacío no tapa al de abajo
+                    values[key] = value
+    key = environ.get("TRELLO_KEY") or values.get("TRELLO_KEY")
+    token = environ.get("TRELLO_TOKEN") or values.get("TRELLO_TOKEN")
     if not key or not token:
         raise SystemExit(
             "Faltan TRELLO_KEY y TRELLO_TOKEN (en el entorno o en el .env del repo; "
@@ -218,7 +245,8 @@ def credentials(start: Path) -> tuple[str, str]:
 
 
 class Api:
-    """Lo mínimo de la API REST de Trello, con urllib: sin dependencias."""
+    """Lo mínimo de la API REST de Trello, con urllib: sin dependencias. La clave
+    y el token van siempre en la URL, que es como Trello los documenta."""
 
     def __init__(self, key: str, token: str) -> None:
         self.auth = {"key": key, "token": token}
@@ -236,13 +264,13 @@ class Api:
         return self._call("DELETE", path, params)
 
     def _call(self, method: str, path: str, params: dict[str, Any]) -> Any:
-        query = urllib.parse.urlencode({**self.auth, **params})
-        url = f"{API}{path}"
+        url = f"{API}{path}?" + urllib.parse.urlencode(self.auth)
         data = None
-        if method == "GET":
-            url += "?" + query
+        if method in ("GET", "DELETE"):
+            if params:
+                url += "&" + urllib.parse.urlencode(params)
         else:
-            data = query.encode()
+            data = urllib.parse.urlencode(params).encode()
         req = urllib.request.Request(url, data=data, method=method)
         try:
             with urllib.request.urlopen(req, timeout=30) as resp:
@@ -265,9 +293,11 @@ class Card:
     desc: str
     list_name: str
     labels: list[str]
-    members: list[str]
+    members: list[str]  # usuarios
+    member_ids: list[str]
+    closed: bool = False
 
-    @property
+    @cached_property
     def header(self) -> Header:
         return parse_header(self.desc)
 
@@ -315,19 +345,18 @@ class Board:
                 return name
         return "?"
 
+    def work_lists(self, extra: bool = False) -> list[str]:
+        return sorted(n for n in self.lists if is_work_list(n, extra))
+
     def cards(self) -> list[Card]:
+        """Todas, archivadas incluidas: una dependencia hecha y archivada sigue hecha."""
         rows = self.api.get(
-            f"/boards/{self.board_id}/cards",
-            fields="name,desc,idList,labels,shortLink,idMembers",
+            f"/boards/{self.board_id}/cards", fields=CARD_FIELDS, filter="all"
         )
         return [self._card(r) for r in rows]
 
     def card(self, short_or_id: str) -> Card:
-        r = self.api.get(
-            f"/cards/{short_or_id}",
-            fields="name,desc,idList,labels,shortLink,idMembers",
-        )
-        return self._card(r)
+        return self._card(self.api.get(f"/cards/{short_or_id}", fields=CARD_FIELDS))
 
     def _card(self, r: dict[str, Any]) -> Card:
         return Card(
@@ -338,6 +367,8 @@ class Board:
             list_name=self.list_name(r["idList"]),
             labels=[lb["name"] for lb in r.get("labels", []) if lb.get("name")],
             members=[self.members.get(m, m) for m in r.get("idMembers", [])],
+            member_ids=list(r.get("idMembers", [])),
+            closed=bool(r.get("closed", False)),
         )
 
     def comments(self, card: Card) -> list[tuple[str, str]]:
@@ -346,21 +377,26 @@ class Board:
         )
         return [(r["date"], r["data"]["text"]) for r in rows]
 
-    def done_links(self, cards: list[Card]) -> set[str]:
-        return {c.short for c in cards if c.list_name == LIST_DONE}
+    @staticmethod
+    def done_links(cards: list[Card]) -> set[str]:
+        return {c.short for c in cards if c.list_name == LIST_DONE or c.closed}
 
     # --- estado de cada tarjeta
 
-    def status(self, card: Card, cards: list[Card]) -> tuple[str, list[str]]:
+    def status(
+        self, card: Card, cards: list[Card], done: set[str] | None = None
+    ) -> tuple[str, list[str]]:
         """('libre' | 'bloqueada' | 'humano' | 'en curso' | 'hecha' | 'choca', motivos)."""
-        if card.list_name == LIST_DONE:
+        if card.list_name == LIST_DONE or card.closed:
             return "hecha", []
         if card.list_name == LIST_IN_PROGRESS:
             who = ", ".join(card.members) or "alguien"
             return "en curso", [who]
         if LABEL_HUMAN in card.labels:
             return "humano", ["la hace una persona"]
-        missing = missing_deps(card.header, self.done_links(cards))
+        missing = missing_deps(
+            card.header, self.done_links(cards) if done is None else done
+        )
         if missing:
             names = [self._name_of(m, cards) for m in missing]
             return "bloqueada", [f"espera {n}" for n in names]
@@ -373,7 +409,11 @@ class Board:
         """Con qué tarjetas en curso comparte archivos."""
         out = []
         for other in cards:
-            if other.id == card.id or other.list_name != LIST_IN_PROGRESS:
+            if (
+                other.id == card.id
+                or other.list_name != LIST_IN_PROGRESS
+                or other.closed
+            ):
                 continue
             hits = paths_overlap(card.header.touches, other.header.touches)
             if hits:
@@ -382,7 +422,8 @@ class Board:
                 )
         return out
 
-    def _name_of(self, short: str, cards: list[Card]) -> str:
+    @staticmethod
+    def _name_of(short: str, cards: list[Card]) -> str:
         for c in cards:
             if c.short == short:
                 return c.code or c.name[:30]
@@ -421,15 +462,16 @@ class Board:
     def sync_labels(self, cards: list[Card]) -> list[Card]:
         """Pone Libre / Bloqueada según las dependencias. Devuelve las recién liberadas."""
         self.ensure_labels()
+        done = self.done_links(cards)
         freed = []
         for card in cards:
-            if not is_work_list(card.list_name, extra=True):
+            if card.closed or not is_work_list(card.list_name, extra=True):
                 continue
             if LABEL_HUMAN in card.labels:
                 self.set_label(card, LABEL_FREE, False)
                 self.set_label(card, LABEL_BLOCKED, False)
                 continue
-            blocked = bool(missing_deps(card.header, self.done_links(cards)))
+            blocked = bool(missing_deps(card.header, done))
             was_free = LABEL_FREE in card.labels
             self.set_label(card, LABEL_BLOCKED, blocked)
             self.set_label(card, LABEL_FREE, not blocked)
@@ -453,32 +495,45 @@ class Board:
             raise SystemExit(
                 f"{card.name}: {state}: {'; '.join(why)}. Con --forzar se toma igual."
             )
+        if force and winner(self.comments(card)) is not None:
+            # un candado viejo (la movieron a mano, se cortó la red): se pisa a propósito
+            self.comment(card, f"{UNLOCK} candado viejo pisado por {agent}")
         token = uuid.uuid4().hex[:12]
         origin = card.list_name
         self.comment(card, lock_text(token, agent, origin, datetime.now(UTC)))
         won = winner(self.comments(card))
         if won is None or won[0] != token:
             who = won[1] if won else "otro"
-            raise SystemExit(f"{card.name}: la tomó {who} justo antes.", 2)
+            raise SystemExit((f"{card.name}: la tomó {who} justo antes.", 2))
         self.move(card, LIST_IN_PROGRESS)
         self.set_label(card, LABEL_FREE, False)
         self.set_label(card, LABEL_BLOCKED, False)
         me = self.me()
-        if me not in card.members:
-            self.api.post(f"/cards/{card.id}/idMembers", value=me)
+        if me not in card.member_ids:
+            try:
+                self.api.post(f"/cards/{card.id}/idMembers", value=me)
+            except SystemExit:  # ya estaba, o el token no puede asignar: no es grave
+                pass
         return card
 
     def release(self, short: str, reason: str) -> Card:
         card = self.card(short)
         if card.list_name != LIST_IN_PROGRESS:
-            raise SystemExit(
-                f"{card.name}: no está en curso (está en «{card.list_name}»)."
+            if winner(self.comments(card)) is None:
+                raise SystemExit(
+                    f"{card.name}: no está en curso (está en «{card.list_name}»)."
+                )
+            # candado viejo en una tarjeta que ya volvió a su lista: solo se limpia
+            self.comment(
+                card, f"{UNLOCK} candado viejo limpiado: {reason or 'sin motivo'}"
             )
+            return card
         won = winner(self.comments(card))
         origin = won[2] if won and won[2] in self.lists else None
+        if origin is None:  # la pusieron en curso a mano: a la primera lista de trabajo
+            origin = self.work_lists()[0]
         self.comment(card, f"{UNLOCK} soltada: {reason or 'sin terminar'}")
-        if origin:
-            self.move(card, origin)
+        self.move(card, origin)
         self.sync_labels(self.cards())
         return card
 
@@ -507,12 +562,15 @@ def is_work_list(name: str, extra: bool = False) -> bool:
 
 def cmd_listar(board: Board, args: argparse.Namespace) -> int:
     cards = board.cards()
+    done = board.done_links(cards)
     rows = []
     for card in cards:
+        if card.closed:
+            continue
         if card.list_name == LIST_IN_PROGRESS or is_work_list(
             card.list_name, args.todas
         ):
-            state, why = board.status(card, cards)
+            state, why = board.status(card, cards, done)
             rows.append((card, state, why))
     if args.json:
         print(
@@ -535,10 +593,7 @@ def cmd_listar(board: Board, args: argparse.Namespace) -> int:
             )
         )
         return 0
-    order = [
-        LIST_IN_PROGRESS,
-        *sorted(n for n in board.lists if is_work_list(n, args.todas)),
-    ]
+    order = [LIST_IN_PROGRESS, *board.work_lists(args.todas)]
     marks = {
         "libre": "🟢",
         "bloqueada": "🔴",
@@ -586,7 +641,7 @@ def cmd_tomar(board: Board, args: argparse.Namespace) -> int:
     if header.touches:
         print("Toca: " + ", ".join(header.touches))
     if header.decisions:
-        print(f"Decisiones que mandan: {header.decisions} (docs/decisiones-25-11.md)")
+        print(f"Decisiones que mandan: {header.decisions}")
     return 0
 
 
@@ -636,11 +691,16 @@ def build_parser() -> argparse.ArgumentParser:
     )
     s.add_argument("--rama", help="prefijo de rama; por defecto «agente»")
     s.add_argument(
-        "--forzar", action="store_true", help="aunque esté bloqueada o choque"
+        "--forzar",
+        action="store_true",
+        help="aunque esté bloqueada, choque o tenga un candado viejo",
     )
     s.set_defaults(fn=cmd_tomar)
 
-    s = sub.add_parser("soltar", help="devolverla a su lista sin terminarla")
+    s = sub.add_parser(
+        "soltar",
+        help="devolverla a su lista sin terminarla (o limpiar un candado viejo)",
+    )
     s.add_argument("tarjeta")
     s.add_argument("--motivo", default="")
     s.set_defaults(fn=cmd_soltar)
@@ -661,7 +721,7 @@ def main(argv: list[str] | None = None) -> int:
         if hasattr(stream, "reconfigure"):
             stream.reconfigure(errors="replace")
     args = build_parser().parse_args(argv)
-    key, token = credentials(Path(__file__).resolve().parent)
+    key, token = credentials()
     board = Board(Api(key, token))
     try:
         return args.fn(board, args)

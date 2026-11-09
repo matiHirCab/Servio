@@ -75,6 +75,11 @@ class FakeTrello:
             self.cards[cid]["idLabels"].append(params["value"])
             return {}
         if path.endswith("/idMembers"):
+            if (
+                getattr(self, "reject_duplicate_members", False)
+                and params["value"] in self.cards[cid]["idMembers"]
+            ):
+                raise SystemExit("Trello respondió 400: member is already on the card")
             self.cards[cid]["idMembers"].append(params["value"])
             return {}
         raise AssertionError(path)
@@ -224,30 +229,71 @@ def test_winner_is_oldest_active_lock_and_unlock_resets():
     assert tablero.winner(comments) is None
 
 
-def test_env_value():
-    text = "﻿CLAUDE_PROVIDER=cli   # comentario\nTRELLO_KEY='abc'\nTRELLO_TOKEN=\n"
-    assert tablero.env_value(text, "TRELLO_KEY") == "abc"
-    assert tablero.env_value(text, "CLAUDE_PROVIDER") == "cli"
-    assert tablero.env_value(text, "TRELLO_TOKEN") is None
-    assert tablero.env_value(text, "OTRA") is None
+def test_short_links_ignores_plain_words():
+    assert tablero.short_links("A-4 (opcional), C-5 (9oDZRoKz), X (aaaaaaa4)") == [
+        "9oDZRoKz",
+        "aaaaaaa4",
+    ]
 
 
-def test_credentials_from_env_file(tmp_path, monkeypatch):
-    monkeypatch.delenv("TRELLO_KEY", raising=False)
-    monkeypatch.delenv("TRELLO_TOKEN", raising=False)
-    (tmp_path / ".env").write_text("TRELLO_KEY=k1\nTRELLO_TOKEN=t1\n", encoding="utf-8")
-    sub = tmp_path / "vision" / "tools"
-    sub.mkdir(parents=True)
-    assert tablero.credentials(sub) == ("k1", "t1")
-    monkeypatch.setenv("TRELLO_TOKEN", "t2")
-    assert tablero.credentials(sub) == ("k1", "t2")
+def test_parse_header_survives_trello_paragraphs():
+    # el editor de Trello guarda cada Enter como párrafo: líneas en blanco entre los campos
+    desc = "**Área:** x\n\n**Depende de:** C-5 (9oDZRoKz)\n\n**Toca:** `a/b.py`\n\ntexto libre (cccccc07)"
+    h = tablero.parse_header(desc)
+    assert h.depends_on == ["9oDZRoKz"]
+    assert h.touches == ["a/b.py"]
 
 
-def test_credentials_missing(tmp_path, monkeypatch):
-    monkeypatch.delenv("TRELLO_KEY", raising=False)
-    monkeypatch.delenv("TRELLO_TOKEN", raising=False)
+def test_credentials_from_env_files(tmp_path):
+    repo = tmp_path / ".env"
+    repo.write_text("TRELLO_KEY='k1'   # comentario\nTRELLO_TOKEN=\n", encoding="utf-8")
+    above = tmp_path / "arriba.env"
+    above.write_text("TRELLO_TOKEN=t1\n", encoding="utf-8")
+    # el repo gana, y lo que le falta lo completa el de arriba
+    assert tablero.credentials([repo, above], environ={}) == ("k1", "t1")
+    # el entorno le gana a los archivos
+    assert tablero.credentials([repo, above], environ={"TRELLO_TOKEN": "t2"}) == (
+        "k1",
+        "t2",
+    )
+    # un archivo que no existe no molesta
+    assert tablero.credentials(
+        [tmp_path / "no.env", above], environ={"TRELLO_KEY": "k3"}
+    ) == ("k3", "t1")
+
+
+def test_credentials_missing(tmp_path):
     with pytest.raises(SystemExit, match="TRELLO_KEY"):
-        tablero.credentials(tmp_path)
+        tablero.credentials([tmp_path / "no.env"], environ={})
+
+
+def test_api_puts_auth_in_the_url_for_every_method(monkeypatch):
+    seen = []
+
+    class Resp:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def read(self):
+            return b'{"ok": true}'
+
+    def fake_urlopen(req, timeout):
+        seen.append((req.get_method(), req.full_url, req.data))
+        return Resp()
+
+    monkeypatch.setattr(tablero.urllib.request, "urlopen", fake_urlopen)
+    api = tablero.Api("K", "T")
+    api.get("/x", a="1")
+    api.post("/x", b="2")
+    api.delete("/x/y")
+    for method, url, _data in seen:
+        assert "key=K" in url and "token=T" in url, method
+    assert seen[0][2] is None and "a=1" in seen[0][1]
+    assert seen[1][2] == b"b=2"
+    assert seen[2][2] is None
 
 
 # ------------------------------------------------------------- el protocolo
@@ -392,6 +438,72 @@ def test_release_refuses_card_not_in_progress():
         board.release("cccccc05", "")
 
 
+def test_release_cleans_a_stale_lock_on_a_card_moved_back_by_hand():
+    api, board = board_with(
+        card("a4", "aaaaaaa4", "A-4", "", "LD"),
+        card("c5", "cccccc05", "P1 · C-5 · Voy", HEADER_C5),
+    )
+    board.take("cccccc05", "yo")
+    api.cards["c5"]["idList"] = "L3"  # alguien la arrastró de vuelta sin comentar 🔓
+    with pytest.raises(SystemExit, match="la tomó yo justo antes"):
+        board.take("cccccc05", "otro")
+    board.release("cccccc05", "quedó colgada")  # limpia el candado, no mueve nada
+    assert api.list_of("cccccc05").startswith("Semana 3")
+    board.take("cccccc05", "otro")
+    assert api.list_of("cccccc05") == "In progress"
+
+
+def test_take_forced_overrides_a_stale_lock():
+    api, board = board_with(
+        card("a4", "aaaaaaa4", "A-4", "", "LD"),
+        card("c5", "cccccc05", "P1 · C-5 · Voy", HEADER_C5),
+    )
+    api.add_comment(
+        "c5", tablero.lock_text("ffffffffffff", "viejo", "Semana 3", datetime.now(UTC))
+    )
+    with pytest.raises(SystemExit):
+        board.take("cccccc05", "yo")
+    board.take("cccccc05", "yo", force=True)
+    assert api.list_of("cccccc05") == "In progress"
+    assert (
+        tablero.winner([(c["date"], c["data"]["text"]) for c in api.comments["c5"]])[1]
+        == "yo"
+    )
+
+
+def test_release_without_lock_falls_back_to_first_work_list():
+    api, board = board_with(
+        card("a4", "aaaaaaa4", "A-4", "", "LD"),
+        card(
+            "c5", "cccccc05", "P1 · C-5 · Voy", HEADER_C5, "LP"
+        ),  # puesta en curso a mano
+    )
+    board.release("cccccc05", "")
+    assert api.list_of("cccccc05") == "Semana 3 · 11/11 → 17/11"
+
+
+def test_archived_dependency_counts_as_done():
+    api, board = board_with(
+        card("a4", "aaaaaaa4", "A-4", "", "L3"),
+        card("c5", "cccccc05", "P1 · C-5 · Voy", HEADER_C5),
+    )
+    api.cards["a4"]["closed"] = True
+    cards = board.cards()
+    c5 = next(c for c in cards if c.short == "cccccc05")
+    assert board.status(c5, cards) == ("libre", [])
+
+
+def test_take_does_not_reassign_a_member_already_on_the_card():
+    api, board = board_with(
+        card("a4", "aaaaaaa4", "A-4", "", "LD"),
+        card("c5", "cccccc05", "P1 · C-5 · Voy", HEADER_C5),
+    )
+    api.cards["c5"]["idMembers"].append(ME)
+    api.reject_duplicate_members = True
+    board.take("cccccc05", "yo")
+    assert api.cards["c5"]["idMembers"] == [ME]
+
+
 def test_sync_labels_ignores_human_and_done():
     api, board = board_with(
         card("a4", "aaaaaaa4", "A-4", "", "LD"),
@@ -409,7 +521,7 @@ def test_cli_listar_json(capsys, monkeypatch):
         card("c5", "cccccc05", "P1 · C-5 · Voy", HEADER_C5),
         card("c7", "cccccc07", "P1 · C-7 · Por mozo", HEADER_C7, "L4"),
     )
-    monkeypatch.setattr(tablero, "credentials", lambda start: ("k", "t"))
+    monkeypatch.setattr(tablero, "credentials", lambda *a, **k: ("k", "t"))
     monkeypatch.setattr(tablero, "Api", lambda key, token: api)
     monkeypatch.setattr(tablero, "Board", lambda api_, board_id=tablero.BOARD_ID: board)
     assert tablero.main(["listar", "--json"]) == 0
@@ -425,7 +537,7 @@ def test_cli_take_prints_branch_and_exit_codes(capsys, monkeypatch):
         card("a4", "aaaaaaa4", "A-4", "", "LD"),
         card("c5", "cccccc05", "P1 · C-5 · «Voy», «Listo»", HEADER_C5),
     )
-    monkeypatch.setattr(tablero, "credentials", lambda start: ("k", "t"))
+    monkeypatch.setattr(tablero, "credentials", lambda *a, **k: ("k", "t"))
     monkeypatch.setattr(tablero, "Api", lambda key, token: api)
     monkeypatch.setattr(tablero, "Board", lambda api_, board_id=tablero.BOARD_ID: board)
     assert (
