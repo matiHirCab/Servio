@@ -481,6 +481,7 @@ class Board:
             list_name=self.list_name(r["idList"]),
             labels=[lb["name"] for lb in r.get("labels", []) if lb.get("name")],
             closed=bool(r.get("closed", False)) or r["idList"] in self.closed_lists,
+            # una lista archivada no está en `lists`: su nombre sale «?» y cuenta como hecha
             label_ids={
                 lb["name"]: lb["id"]
                 for lb in r.get("labels", [])
@@ -539,7 +540,13 @@ class Board:
 
     @staticmethod
     def done_links(cards: list[Card]) -> set[str]:
-        return {c.short for c in cards if c.list_name == LIST_DONE or c.closed}
+        """Hechas: en Done (archivadas o no) o en una lista archivada. Una tarjeta
+        archivada desde otra lista (descartada) no cuenta como hecha."""
+        return {
+            c.short
+            for c in cards
+            if c.list_name == LIST_DONE or (c.closed and c.list_name == "?")
+        }
 
     # --- estado de cada tarjeta
 
@@ -568,16 +575,21 @@ class Board:
             if m not in known
         ]
         missing = [m for m in missing if m in known]
+        clashes = self.clashes(card, cards)
         if missing:
             names = [self._name_of(m, cards) for m in missing]
-            return "bloqueada", [f"espera {n}" for n in names] + unknown
-        clashes = self.clashes(card, cards)
+            return "bloqueada", [f"espera {n}" for n in names] + clashes + unknown
         if clashes:
             return "choca", clashes + unknown
         if is_work_list(card.list_name, extra=True) and not card.header.touches:
             unknown.append("sin encabezado: no se sabe qué toca")
         text = card.header.depends_text.strip().lower()
-        if text and text != "nada" and not card.header.depends_on:
+        if (
+            text
+            and text not in ("nada", "—")
+            and "hecha" not in text
+            and not card.header.depends_on
+        ):
             unknown.append(
                 f"«Depende de: {card.header.depends_text}» no trae enlaces (XXXXXXXX): no bloquea"
             )
@@ -748,6 +760,15 @@ class Board:
             self._still_there(card, origin)  # alguien pudo moverla a mano en el medio
             self.move(card, LIST_IN_PROGRESS)
             moved_by_me = True
+            # Trello pudo tardar en listar el candado de otro: ya movida, se confirma que
+            # el nuestro sigue siendo el más viejo; si no, se devuelve.
+            again = winner(comments := self.comments(card))
+            if again is None or again[0] != token:
+                who = again[1] if again else "otro"
+                self.comment(card, f"{UNLOCK} soltada: la tomó {who} justo antes")
+                self.move(card, origin)
+                moved_by_me = False
+                raise SystemExit((f"{card.name}: la tomó {who} justo antes.", 2))
         except BaseException:
             # Cualquier cosa que falle entre el candado y el movimiento (red, Ctrl-C, una
             # carrera perdida) borra nuestro candado. Solo se conserva si el movimiento fue
@@ -763,11 +784,18 @@ class Board:
         # la del candado más nuevo (la otra, al mirar, ve que la suya es la vieja y sigue).
         rolled_back = False
         try:
-            if state != "choca":
+            if True:  # (la sangría se mantiene para no mover el bloque entero)
+                known_clash = (
+                    {c.id for c in cards if c.list_name == LIST_IN_PROGRESS}
+                    if state == "choca"
+                    else set()
+                )
                 mine_at = lock_date(comments, token)
                 for other in self.cards():
                     if (
                         other.id == card.id
+                        or other.id
+                        in known_clash  # ya se aceptó ese choque con --forzar
                         or other.closed
                         or not (
                             other.list_name == LIST_IN_PROGRESS
@@ -813,8 +841,13 @@ class Board:
             ):  # un error en la segunda mirada (red, Ctrl-C) no deja la tarjeta colgada
                 try:
                     self.comment(card, f"{UNLOCK} soltada: falló la segunda mirada")
-                finally:
                     self.move(card, origin)
+                except SystemExit as e:
+                    print(
+                        f"{card.name} quedó en curso con candado: corré "
+                        f"`soltar {card.short} --agente {agent} --forzar` ({e.code})",
+                        file=sys.stderr,
+                    )
             raise
         try:  # la tarjeta ya es nuestra: lo de acá abajo es cosmético
             self.set_label(card, LABEL_FREE, False)
@@ -829,6 +862,8 @@ class Board:
     def release(
         self, short: str, reason: str, agent: str = "", force: bool = False
     ) -> Card:
+        if agent:
+            self._check_agent(agent)
         cards = self.cards()
         card = self._find(short, cards)
         if card.closed:
@@ -874,6 +909,8 @@ class Board:
         agent: str = "",
         force: bool = False,
     ) -> tuple[Card, list[Card]]:
+        if agent:
+            self._check_agent(agent)
         cards = self.cards()
         card = self._find(short, cards)
         if card.list_name == LIST_DONE or card.closed:

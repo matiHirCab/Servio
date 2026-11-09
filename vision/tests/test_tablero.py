@@ -1031,6 +1031,97 @@ def test_release_refuses_archived_card():
         board.release("cccccc05", "", agent="yo")
 
 
+def test_late_listed_older_lock_makes_us_back_off_after_the_move():
+    api, board = board_with(
+        card("a4", "aaaaaaa4", "A-4", "", "LD"),
+        card("c5", "cccccc05", "P1 · C-5 · Voy", HEADER_C5),
+    )
+    real_get = api.get
+    reads = {"n": 0}
+
+    def late_listing(path, **params):
+        rows = real_get(path, **params)
+        if path.endswith("/actions"):
+            reads["n"] += 1
+            if (
+                reads["n"] == 1
+            ):  # la primera lectura todavía no muestra el candado ajeno
+                api.add_comment(
+                    "c5",
+                    tablero.lock_text(
+                        "ffffffffffff", "otro", "Semana 3", datetime.now(UTC)
+                    ),
+                )
+                api.comments["c5"][-1]["date"] = (
+                    "2026-11-09T10:00:00.500Z"  # más viejo que el nuestro
+                )
+        return rows
+
+    api.get = late_listing
+    with pytest.raises(SystemExit) as e:
+        board.take("cccccc05", "yo")
+    assert e.value.code == ("P1 · C-5 · Voy: la tomó otro justo antes.", 2)
+    assert api.list_of("cccccc05").startswith("Semana 3")
+    locks = [c for c in api.comments["c5"] if c["data"]["text"].startswith("🔒")]
+    assert len(locks) == 1 and "otro" in locks[0]["data"]["text"]
+
+
+def test_blocked_card_also_reports_clashes():
+    _api, board = board_with(
+        card("a4", "aaaaaaa4", "A-4", "", "L3"),
+        card("c5", "cccccc05", "P1 · C-5 · Voy", HEADER_C5),
+        card(
+            "c9",
+            "cccccc09",
+            "P2 · C-9 · Otra",
+            "**Toca:** `vision/servio_vision/alerts/engine.py`\n\nx",
+            "LP",
+        ),
+    )
+    cards = board.cards()
+    c5 = next(c for c in cards if c.short == "cccccc05")
+    state, why = board.status(c5, cards)
+    assert state == "bloqueada"
+    assert any("espera A-4" in w for w in why) and any(
+        "toca lo mismo que C-9" in w for w in why
+    )
+
+
+def test_discarded_archived_card_is_not_done():
+    api, board = board_with(
+        card("d8", "dddddd08", "D-8 · Descartada", "", "LI"),
+        card(
+            "c9",
+            "cccccc09",
+            "P2 · C-9 · X",
+            "**Toca:** `a.py`\n**Depende de:** D-8 (dddddd08)\n\nx",
+        ),
+    )
+    api.cards["d8"]["closed"] = True
+    cards = board.cards()
+    c9 = next(c for c in cards if c.short == "cccccc09")
+    assert board.status(c9, cards)[0] == "bloqueada"
+
+
+def test_hecha_marker_in_depende_does_not_warn():
+    _api, board = board_with(
+        card(
+            "c9",
+            "cccccc09",
+            "P2 · C-9 · X",
+            "**Toca:** `a.py`\n**Depende de:** A-4 (hecha)\n\nx",
+        )
+    )
+    cards = board.cards()
+    assert board.status(cards[0], cards) == ("libre", [])
+
+
+def test_finish_validates_agent_name():
+    _api, board = board_with(card("c5", "cccccc05", "C-5", HEADER_C5, "LP"))
+    with pytest.raises(SystemExit, match="una palabra sin espacios"):
+        board.finish("cccccc05", 1, "", agent="claude jessica")
+
+
 def test_credentials_from_env_files(tmp_path):
     repo = tmp_path / ".env"
     repo.write_text("TRELLO_KEY='k1'   # comentario\nTRELLO_TOKEN=\n", encoding="utf-8")
@@ -1274,7 +1365,7 @@ def test_release_without_lock_falls_back_to_first_work_list():
 
 def test_archived_dependency_counts_as_done():
     api, board = board_with(
-        card("a4", "aaaaaaa4", "A-4", "", "L3"),
+        card("a4", "aaaaaaa4", "A-4", "", "LD"),  # hecha y archivada desde Done
         card("c5", "cccccc05", "P1 · C-5 · Voy", HEADER_C5),
     )
     api.cards["a4"]["closed"] = True
