@@ -166,7 +166,7 @@ def test_plate_protector_uses_the_classifier_detector():
 
 
 def test_loop_keeps_the_frame_for_the_video_mode_only_with_web_video(loop):
-    """El loop le deja a la vista el frame (ya difuminado) de cada lectura, solo si
+    """La vista recibe con cada lectura el frame (ya difuminado) y lo guarda solo si
     el modo video está prendido; apagado, no se guarda ninguna imagen."""
     from servio_vision.salon import SalonFeed
 
@@ -175,7 +175,6 @@ def test_loop_keeps_the_frame_for_the_video_mode_only_with_web_video(loop):
         pipeline = Pipeline(
             FakeClassifier(), ZONES, lambda o: None, on_reading=feed.on_reading
         )
-        pipeline.salon = feed  # lo que hace build_pipeline con --web
         loop(pipeline=pipeline)
         assert app.run(Settings.load(source="0")) == 0
         assert (feed.frame_jpeg() is not None) is video

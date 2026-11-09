@@ -9,12 +9,11 @@ atiende, si hay gente y los avisos abiertos. `salon_web.py` la sirve en
 La foto se arma en el hilo del pipeline y queda inmutable: el servidor web solo
 la lee, así no comparte nada con las reglas de avisos.
 
-Modo video (F-1b, decisión 2): con `video=True` el feed guarda además el frame de
-la última lectura **en memoria** (`keep_frame`, lo llama el loop de `app.run` con el
-frame ya difuminado, antes de procesarlo; `on_reading` lo publica junto con la foto,
-así el frame y las capas que se dibujan encima son del mismo cuadro). Se codifica a
-JPEG recién cuando alguien pide `/<local>/salon/frame.jpg` (`frame_jpeg`), una vez
-por lectura. Apagado, no se guarda ni se sirve nada.
+Modo video (F-1b, decisión 2): con `video=True` el feed guarda además, **en
+memoria**, el frame (ya difuminado) que `on_reading` recibe con cada lectura, junto
+con la foto: el frame y las capas que se dibujan encima son siempre del mismo
+cuadro. Se codifica a JPEG recién cuando alguien pide `/<local>/salon/frame.jpg`
+(`frame_jpeg`), una vez por lectura. Apagado, no se guarda ni se sirve nada.
 
 Coordenadas: todo normalizado 0–1 en la imagen de la cámara ([x, y, w, h]).
 """
@@ -171,42 +170,44 @@ class SalonFeed:
         self._snapshot: dict[str, Any] | None = None
         self._version = 0
         self._changed = threading.Condition()
-        self._pending: np.ndarray | None = None  # el frame de la lectura en curso
         self._frame: np.ndarray | None = None  # el de la última foto publicada
         self._jpeg: bytes | None = None  # ese frame codificado, si alguien lo pidió
-        self._encode_failed = False
-
-    def keep_frame(self, frame: np.ndarray) -> None:
-        """El frame (BGR, ya difuminado) de la lectura que está por procesarse; lo
-        publica `on_reading` con la foto. Solo con `video`; si no, no se guarda."""
-        if not self.video:
-            return
-        self._pending = frame.copy()  # el loop puede reusar el buffer de la cámara
+        self._encode_lock = threading.Lock()  # un solo navegador codifica por vez
+        self._encode_failed: np.ndarray | None = None  # el frame que no se pudo
 
     def frame_jpeg(self) -> bytes | None:
         """El frame de la última foto como JPEG (se codifica la primera vez que se
-        pide), o `None`: modo video apagado, sin lecturas, o un frame que no se pudo
-        codificar (queda logueado; la vista sigue sin imagen, el pipeline sigue)."""
-        with self._changed:
-            frame, jpeg = self._frame, self._jpeg
-        if frame is None or jpeg is not None:
-            return jpeg
-        try:
-            jpeg = to_jpeg(frame)
-        except (ValueError, cv2.error) as e:
-            if not self._encode_failed:
+        pide, aunque lo pidan varios navegadores a la vez), o `None`: modo video
+        apagado, sin lecturas, o un frame que no se pudo codificar (queda logueado
+        una vez; la vista sigue sin imagen, el pipeline sigue)."""
+        # el pipeline nunca espera este candado: `on_reading` solo toma `_changed`
+        with self._encode_lock:
+            with self._changed:
+                frame, jpeg = self._frame, self._jpeg
+            if frame is None or jpeg is not None:
+                return jpeg
+            if self._encode_failed is frame:
+                return None
+            try:
+                jpeg = to_jpeg(frame)
+            except (ValueError, cv2.error) as e:
                 logger.warning("No se pudo codificar el frame para la vista: %s", e)
-                self._encode_failed = True
-            return None
-        self._encode_failed = False
-        with self._changed:
-            if self._frame is frame:  # si ya hay otra lectura, el suyo se codifica solo
-                self._jpeg = jpeg
-        return jpeg
+                self._encode_failed = frame
+                return None
+            with self._changed:
+                if self._frame is frame:  # si ya hay otra lectura, el suyo va aparte
+                    self._jpeg = jpeg
+            return jpeg
 
     def on_reading(
-        self, pipeline: "Pipeline", observations: list[TableObservation], ts: datetime
+        self,
+        pipeline: "Pipeline",
+        observations: list[TableObservation],
+        ts: datetime,
+        frame: np.ndarray | None = None,
     ) -> None:
+        """La foto de esta lectura y, con `video`, su frame (una copia: el loop puede
+        reusar el buffer de la cámara)."""
         for obs in observations:
             self._last[obs.table_id] = obs
         present = {z.table_id for z in pipeline.zones.tables}
@@ -225,8 +226,8 @@ class SalonFeed:
             self._version += 1
             snapshot["version"] = self._version
             self._snapshot = snapshot
-            if self._pending is not None:
-                self._frame, self._pending, self._jpeg = self._pending, None, None
+            if self.video and frame is not None:
+                self._frame, self._jpeg = frame.copy(), None
             self._changed.notify_all()
 
     def snapshot(self) -> dict[str, Any] | None:

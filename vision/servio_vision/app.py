@@ -263,7 +263,6 @@ def build_pipeline(settings: Settings) -> Pipeline | None:
         )
     if feed is not None:
         assert settings.web_port is not None
-        pipeline.salon = feed
         try:
             server = SalonServer(feed, settings.web_host, settings.web_port).start()
         except OSError as e:
@@ -278,11 +277,14 @@ def build_pipeline(settings: Settings) -> Pipeline | None:
             return None
         logger.info("Salón en vivo: %s", server.url)
         if feed.video:
+            exposed = settings.web_host not in ("127.0.0.1", "localhost", "::1")
             logger.warning(
                 "Modo video (--web-video): la imagen de la cámara, difuminada, se "
-                "sirve en %s/frame.jpg a cualquiera en la red. Apagalo después de "
-                "armar la cámara",
+                "sirve en %s/frame.jpg %s. Apagalo después de armar la cámara",
                 server.url,
+                f"a cualquiera en la red (--web-host {settings.web_host})"
+                if exposed
+                else "(solo en esta máquina)",
             )
     if live:
         pipeline.resume()  # los ids y el suavizado, para que sigan siendo los mismos
@@ -384,10 +386,6 @@ def run(settings: Settings, limit: int | None = None) -> int:
         for frame, ts in frames:
             if recorder is not None:
                 recorder = _record(recorder, frame, ts)
-            if pipeline.salon is not None:
-                # antes de procesar: `on_reading` lo publica junto con la foto de
-                # esta lectura, así frame.jpg y las capas son del mismo cuadro
-                pipeline.salon.keep_frame(frame)
             if readings == 0:
                 # la luz, antes de gastar la primera clasificación en un cuadro negro
                 framing.log_report(frame, None, logger, tables=False)

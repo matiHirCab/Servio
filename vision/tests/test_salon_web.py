@@ -4,7 +4,6 @@ y `frame.jpg` (modo video, F-1b), con y sin `--web-video`."""
 import json
 import threading
 import urllib.request
-from datetime import timedelta
 from urllib.error import HTTPError
 
 import pytest
@@ -14,28 +13,19 @@ from servio_vision.pipeline import Pipeline
 from servio_vision.salon import SalonFeed
 from servio_vision.salon_web import SalonServer
 from tests.test_main import FRAME, T0, ZONES
-
-
-def read(pipeline: Pipeline, readings: int) -> None:
-    for n in range(readings):
-        pipeline.process_frame(FRAME, T0 + timedelta(seconds=30 * n))
-
-
-def serve(feed: SalonFeed):
-    srv = SalonServer(feed, "127.0.0.1", 0).start()
-    return srv
+from tests.test_salon import read
 
 
 @pytest.fixture
 def server():
-    srv = serve(SalonFeed("casa-1"))
+    srv = SalonServer(SalonFeed("casa-1"), "127.0.0.1", 0).start()
     yield srv
     srv.stop()
 
 
 @pytest.fixture
 def video_server():
-    srv = serve(SalonFeed("casa-1", video=True))
+    srv = SalonServer(SalonFeed("casa-1", video=True), "127.0.0.1", 0).start()
     yield srv
     srv.stop()
 
@@ -109,8 +99,7 @@ def test_events_stream_pushes_each_new_reading(server):
 
 
 def test_frame_is_not_served_without_web_video(server):
-    """Sin el flag, el frame no se guarda ni se sirve, aunque el loop lo ofrezca."""
-    server.feed.keep_frame(FRAME)
+    """Sin el flag, el frame no se guarda ni se sirve, aunque llegue con cada lectura."""
     read(pipeline_for(server), 1)
     assert server.feed.frame_jpeg() is None
     code, text = status_of(f"http://127.0.0.1:{server.port}/casa-1/salon/frame.jpg")
@@ -118,15 +107,12 @@ def test_frame_is_not_served_without_web_video(server):
 
 
 def test_frame_is_served_with_web_video_once_there_is_a_reading(video_server):
-    """El frame se publica con la foto de su lectura (`on_reading`), no antes: la
-    imagen y las capas que la página dibuja encima son del mismo cuadro."""
+    """El frame se publica con la foto de su lectura (`on_reading`): la imagen y las
+    capas que la página dibuja encima son del mismo cuadro."""
     base = f"http://127.0.0.1:{video_server.port}/casa-1/salon"
-    pipeline = pipeline_for(video_server)
     code, text = status_of(f"{base}/frame.jpg")
     assert code == 404 and "Todavía" in text  # prendido, pero sin lecturas
-    video_server.feed.keep_frame(FRAME)
-    assert video_server.feed.frame_jpeg() is None  # la lectura no se procesó aún
-    read(pipeline, 1)
+    read(pipeline_for(video_server), 1)
     status, kind, body = get(f"{base}/frame.jpg")
     assert status == 200 and kind == "image/jpeg"
     assert body[:2] == bytes([0xFF, 0xD8])  # un JPEG
@@ -138,18 +124,15 @@ def test_frame_is_encoded_once_per_reading_and_follows_the_snapshot():
     pipeline = Pipeline(
         FakeClassifier(), ZONES, lambda o: None, on_reading=feed.on_reading
     )
-    feed.keep_frame(FRAME)
-    read(pipeline, 1)
+    pipeline.process_frame(FRAME, T0)
     first = feed.frame_jpeg()
     assert first is not None and feed.frame_jpeg() is first  # cacheado
-    feed.keep_frame(FRAME + 200)  # el cuadro de la lectura siguiente (más claro)
-    assert feed.frame_jpeg() is first  # hasta que esa lectura se publique
-    read(pipeline, 1)
+    pipeline.process_frame(FRAME + 200, T0)  # otro cuadro (más claro)
     second = feed.frame_jpeg()
     assert second is not None and second != first
 
 
-def test_a_frame_that_cannot_be_encoded_is_logged_and_not_served(caplog):
+def test_a_frame_that_cannot_be_encoded_is_logged_once_and_not_served(caplog):
     """Un cuadro roto no puede tirar el loop: la vista queda sin imagen y sigue."""
     import numpy as np
 
@@ -157,9 +140,10 @@ def test_a_frame_that_cannot_be_encoded_is_logged_and_not_served(caplog):
     pipeline = Pipeline(
         FakeClassifier(), ZONES, lambda o: None, on_reading=feed.on_reading
     )
-    feed.keep_frame(np.zeros((0, 0, 3), np.uint8))
-    read(pipeline, 1)
+    feed.on_reading(pipeline, [], T0, np.zeros((0, 0, 3), np.uint8))
     with caplog.at_level("WARNING", logger="servio"):
         assert feed.frame_jpeg() is None
         assert feed.frame_jpeg() is None  # se avisa una vez, no en cada pedido
     assert caplog.text.count("No se pudo codificar") == 1
+    pipeline.process_frame(FRAME, T0)  # la lectura siguiente vuelve a servirse
+    assert feed.frame_jpeg() is not None

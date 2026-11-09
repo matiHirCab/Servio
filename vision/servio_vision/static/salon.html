@@ -251,17 +251,26 @@ function chair(x, y, side, s) {
   return `<rect x="${(x - w / 2).toFixed(1)}" y="${(y - h / 2).toFixed(1)}" width="${w.toFixed(1)}" height="${h.toFixed(1)}" rx="${9 * s}" fill="url(#chairg)" stroke="#ffffff" stroke-opacity=".05"/>`;
 }
 
-// Un plato: anillo del color del estado cuyo arco es cuánto queda, halo suave, la comida
-// como mancha; vacío lleva el punto arriba. Si cambió de estado en la última lectura, late.
+// El anillo de un plato, centrado en el origen: halo del color del estado (hasta `haloR`),
+// anillo tenue de radio `R` y encima el arco de cuánto queda (`fill_ratio`). Lo usan los
+// dos modos: la reconstrucción (`plate`) y el video (`renderVideo`), con otros tamaños.
+function ring(p, R, haloR, w, prefix = "", haloOpacity = 1) {
+  const st = stateOf(p), col = COLOR[st], f = p.fill_ratio ?? FILL[st], circ = 2 * Math.PI * R;
+  let o = `<circle r="${haloR.toFixed(1)}" fill="url(#${prefix}halo-${st})" opacity="${haloOpacity}"/>`;
+  o += `<circle r="${R.toFixed(1)}" fill="none" stroke="${col}" stroke-opacity=".2" stroke-width="${w}"/>`;
+  if (f > 0.02) o += `<circle r="${R.toFixed(1)}" fill="none" stroke="${col}" stroke-width="${(w * 1.15).toFixed(2)}" stroke-linecap="round" stroke-dasharray="${(circ * f).toFixed(1)} ${circ.toFixed(1)}" transform="rotate(-90)"/>`;
+  return o;
+}
+
+// Un plato: el anillo, el plato con la comida como mancha; vacío lleva el punto arriba.
+// Si cambió de estado en la última lectura, late.
 function plate(p, x, y, r, changed) {
   const st = stateOf(p);
   const col = COLOR[st];
   const f = p.fill_ratio ?? FILL[st];
-  const R = r + 5 * r / 17, circ = 2 * Math.PI * R;
+  const R = r + 5 * r / 17;
   let o = `<g transform="translate(${x.toFixed(1)} ${y.toFixed(1)})"><g class="${changed ? "changed" : ""}">`;
-  o += `<circle r="${(r + 16 * r / 17).toFixed(1)}" fill="url(#halo-${st})"/>`;
-  o += `<circle r="${R.toFixed(1)}" fill="none" stroke="${col}" stroke-opacity=".18" stroke-width="2"/>`;
-  if (f > 0.02) o += `<circle r="${R.toFixed(1)}" fill="none" stroke="${col}" stroke-width="2.2" stroke-linecap="round" stroke-dasharray="${(circ * f).toFixed(1)} ${circ.toFixed(1)}" transform="rotate(-90)"/>`;
+  o += ring(p, R, r + 16 * r / 17, 2);
   o += `<circle r="${r.toFixed(1)}" fill="url(#plateg)" stroke="#d8dde3" stroke-opacity=".5" stroke-width=".8"/>`;
   if (f > 0.02) {
     const rnd = rand(hash(p.id)), rr = (r - 5 * r / 17) * Math.sqrt(f), pts = [];
@@ -416,7 +425,7 @@ function renderFloor() {
 // El último frame difuminado (frame.jpg) con las capas encima: el recuadro, la etiqueta
 // y el aviso abierto de cada mesa y, por plato con caja, el anillo del estado y el
 // nombre. Un plato sin caja no se marca: solo se dibuja lo que la cámara ve de verdad.
-let camVersion = -1;  // la versión de la foto cuyo frame.jpg se pidió
+let camKey = null;  // la lectura (hora + versión) cuyo frame.jpg se pidió; tras un reinicio la versión vuelve a 1
 function renderVideo() {
   const svg = $("overlay");
   if (!snap) { svg.innerHTML = ""; return; }
@@ -424,13 +433,14 @@ function renderVideo() {
   // el viewBox no es la resolución de la cámara: una unidad es un píxel de la pantalla
   // (el ancho con que se muestra el video), así los trazos y las etiquetas miden lo mismo
   // con una webcam de 640 que con una de 1920, y en una cámara vertical angosta
-  const VW = $("video").clientWidth || 1000, VH = VW * fh / fw;
   $("video").style.aspectRatio = `${fw} / ${fh}`;
   $("video").style.width = `min(100%, calc(72vh * ${(fw / fh).toFixed(4)}))`;  // una cámara vertical no más alta que la pantalla
+  const VW = $("video").clientWidth || 1000, VH = VW * fh / fw;  // medido después de fijar el ancho
   svg.setAttribute("viewBox", `0 0 ${VW} ${VH.toFixed(1)}`);
   $("cam-cap").textContent = `Cámara ${snap.camera} · caras difuminadas en la computadora`;
-  if (snap.version !== camVersion) {  // el frame de esta lectura; el navegador no lo cachea (no-store)
-    camVersion = snap.version;
+  const key = `${snap.ts}|${snap.version}`;
+  if (key !== camKey) {  // el frame de esta lectura; el navegador no lo cachea (no-store)
+    camKey = key;
     $("cam").src = `${base}/frame.jpg?v=${snap.version}`;
   }
   let out = `<defs>${halos("v")}</defs>`;
@@ -446,9 +456,8 @@ function renderVideo() {
       if (!p.bbox) continue;
       const [bx, by, bw, bh] = p.bbox;
       const px = (bx + bw / 2) * VW, py = (by + bh / 2) * VH, r = Math.min(bw * VW, bh * VH) / 2;
-      const st = stateOf(p), col = COLOR[st], R = r + 6, circ = 2 * Math.PI * R, f = p.fill_ratio ?? FILL[st];
-      out += `<g transform="translate(${px.toFixed(1)} ${py.toFixed(1)})"><g class="${pending.video.has(p.id) ? "changed" : ""}"><circle r="${(R + 10).toFixed(1)}" fill="url(#vhalo-${st})" opacity=".8"/><circle r="${R.toFixed(1)}" fill="none" stroke="${col}" stroke-opacity=".25" stroke-width="2.5"/>`;
-      if (f > .02) out += `<circle r="${R.toFixed(1)}" fill="none" stroke="${col}" stroke-width="3" stroke-linecap="round" stroke-dasharray="${(circ * f).toFixed(1)} ${circ.toFixed(1)}" transform="rotate(-90)"/>`;
+      const st = stateOf(p), col = COLOR[st], R = r + 6;
+      out += `<g transform="translate(${px.toFixed(1)} ${py.toFixed(1)})"><g class="${pending.video.has(p.id) ? "changed" : ""}">` + ring(p, R, R + 10, 2.5, "v", .8);
       const label = `${dishName(p)} · ${STATE_NAME[st].toUpperCase()}`;
       const left = px + R + 8 + label.length * 7.2 + 22 > VW;  // a la izquierda si a la derecha no entra
       // arriba del anillo; si ahí pisa la etiqueta de un plato vecino, fitTags la baja (`alt`)

@@ -125,7 +125,7 @@ def settings_from_args(args: argparse.Namespace) -> Settings:
         yolo_conf=args.yolo_conf,
         web_port=getattr(args, "web", None),
         web_host=getattr(args, "web_host", None),
-        web_video=True if getattr(args, "web_video", False) else None,
+        web_video=getattr(args, "web_video", False) or None,  # el flag solo prende
         record=getattr(args, "record", None),  # solo main.py lo agrega
     )
 
