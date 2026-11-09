@@ -26,6 +26,35 @@ Contexto: MVP de hackathon, 24 horas, equipo de 3 personas (Tomás, Matías, Jes
 | [docs/roadmap-producto.md](docs/roadmap-producto.md) | Vas a hacer una tarea de después de la hackathon (fases A–E): arquitectura, banco de pruebas en casa, mejoras y funciones nuevas. |
 | [docs/montaje-camara.md](docs/montaje-camara.md) | Vas a armar la cámara en una casa: altura, ángulo, luz, cámaras probadas y el chequeo de encuadre. |
 
+## Tablero y trabajo en paralelo
+
+Las tareas viven en el Trello del equipo (tablero «Servio»), y las hacen agentes, varios a la vez. Para no pisarse, **ninguna tarjeta se toma a mano**: se toma con `vision/tools/tablero.py`, que la pasa a «In progress» en el mismo paso y deja un candado (un comentario) que gana el primero que llega.
+
+```
+cd vision
+python tools/tablero.py listar                      # 🟢 libre · 🔴 bloqueada (espera otra) · 🟠 choca (toca archivos de una en curso) · 🟡 humano
+python tools/tablero.py ver <enlace>                # la descripción completa
+python tools/tablero.py tomar <enlace> --agente <quién> --rama <prefijo>   # la reclama; si otro llegó antes, sale con 2
+python tools/tablero.py terminar <enlace> --pr <N>  # a Done, y libera las que dependían de ella
+python tools/tablero.py soltar <enlace> --motivo "…" # si no la vas a terminar: vuelve a su lista
+```
+
+El `<enlace>` es lo que va en `trello.com/c/XXXXXXXX`. Hacen falta `TRELLO_KEY` y `TRELLO_TOKEN` en el `.env` (de la cuenta de la persona que corre el agente; ver `.env.example`).
+
+El ciclo de una tarjeta:
+
+1. `listar` y elegir una 🟢 **libre**. Las 🔴 esperan otra tarjeta (el encabezado dice cuál); las 🟠 tocan los mismos archivos que una en curso (esperar a que termine, o `--forzar` si estás seguro de que no chocan); las 🟡 las hace una persona.
+2. `tomar`. Rama **desde `develop`** con el nombre que imprime (`<prefijo>/<código>-<tema>`). Leer el encabezado de la tarjeta: **Toca** (qué carpetas; no salirse sin motivo), **Decisiones** (los números de [docs/decisiones-25-11.md](docs/decisiones-25-11.md) que mandan sobre esa tarjeta) y el «Hecho cuando».
+3. Programar con tests. PR a `develop` (nunca a `main`), con el enlace de la tarjeta en la descripción. Pasar el code review (`/code-review <PR>`) e iterar hasta el ok; recién ahí mergear.
+4. `terminar --pr <N>`: comenta el PR en la tarjeta, la pasa a Done y pone 🟢 a las que esperaban por ella. Después, `listar` de nuevo y seguir con otra.
+
+Reglas del tablero:
+
+- Una tarjeta por agente a la vez. Si no la vas a terminar, `soltar`: una tarjeta en curso que nadie trabaja bloquea a las demás.
+- El encabezado de cada tarjeta (las primeras líneas de la descripción) es lo que lee el programa: `**Área:**`, `**Toca:**` (rutas entre acentos graves), `**Depende de:**` (otras tarjetas con su enlace entre paréntesis), `**Decisiones:**`. Si creás una tarjeta, ponéselo; si partís una en dos, las dos lo llevan.
+- Si al trabajar una tarjeta hace falta tocar archivos de otra que está en curso, no lo hagas en esa rama: terminá la tuya y abrí otra tarjeta, o esperá.
+- Lo que una tarjeta decide y no está en `docs/decisiones-25-11.md` ni en los docs de contexto, se escribe en el PR y, si cambia reglas, en el doc de contexto que corresponde (ver el mapa de arriba).
+
 ## Reglas para agentes
 
 1. **Los contratos mandan.** Si cambiás `Classifier`, `Item`, la observación de mesa o `Alert`, actualizá primero `docs/context/03-contratos.md` y los fixtures en el mismo PR, y avisá en la descripción.

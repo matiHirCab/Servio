@@ -35,9 +35,10 @@
 
 ## Git
 
-- Ramas: `tomas/<tema>`, `matias/<tema>`, `jessica/<tema>`.
+- Ramas: `tomas/<tema>`, `matias/<tema>`, `jessica/<tema>`; un agente usa el nombre que le imprime `tools/tablero.py tomar` (`<prefijo>/<código de la tarjeta>-<tema>`).
 - Commits cortos en presente: `vision: agrega suavizado por voto mayoritario`.
-- PR chico a `main`, otra persona aprueba. `main` siempre tiene que andar.
+- PR chico a `develop`, con code review antes de mergear; a `main` solo se mergea desde `develop` (`solo-develop-a-main.yml`). `main` siempre tiene que andar.
+- Las tareas se toman del Trello con `tools/tablero.py`, nunca a mano: ver «Tablero y trabajo en paralelo» en `AGENTS.md`.
 
 ## Configuración
 
