@@ -14,7 +14,7 @@ Fuentes: [context/01-producto.md](context/01-producto.md), [context/05-reglas-al
 | 3 | F-2, el dashboard: ¿son estas las 17 métricas? ¿cuál es el titular? | Las 17 quedan; la plata con la carta con precios (la cargamos nosotros, después editable); sin identificar el plato, «X platos volvieron llenos» |
 | 4 | F-2: ¿qué se muestra el primer día, sin datos? | Tarjetas visibles con «falta recolectar datos»; selector de período (hoy, día, semana, mes, rango) |
 | 5 | F-3: ¿respuesta con una palabra o botones? | Botones «Voy», «Listo», «No hacía falta» + texto libre; la cámara cierra; cada mozo recibe solo sus mesas; «Mesa X» en negrita |
-| 6 | F-3: tiempos de recordatorio y escalado | Configurables por local, con los valores de hoy como default |
+| 6 | F-3: tiempos de recordatorio y escalado | Configurables por local: R, cuántos recordatorios antes de escalar, los 10 min de «Listo»; el escalado sale al recordatorio siguiente al último |
 | **Casos de la vida real** | | |
 | 7 | Plato compartido o fuente al medio | (b) comportamiento + (c) el modelo dice si parece fuente o tabla; nada que cargue el restaurante |
 | 8 | Pan, guarnición, salsas, lo que se deja a propósito | Por contenido, no por recipiente: pan, canasta, salsera y guarnición no cuentan; un bowl con comida sí |
@@ -22,7 +22,7 @@ Fuentes: [context/01-producto.md](context/01-producto.md), [context/05-reglas-al
 | 10 | Mesa con platos y sin gente (se fueron sin pagar / ya pagaron) | Configurable X: avisar si pasan X minutos sin gente y con platos |
 | 11 | Postre, café, vasos, tazas | Sin estado «sobremesa»; solo mesa vacía del todo |
 | 12 | Mesa grande (8 personas, platos que llegan de a tandas) | Estado «terminando» para mesas de N+ personas (default 4; platos si no hay conteo) al 80 %; pasa a «mesa terminó» tras un tiempo; todo configurable |
-| 13 | Cliente que rechaza el plato (se lo llevan lleno) | Posible devolución sin preguntar motivo; detectar el acto de comer por los cubiertos |
+| 13 | Cliente que rechaza el plato (se lo llevan lleno) | Posible devolución sin preguntar motivo; el acto de comer por los cubiertos se investiga aparte (V-3) |
 | 14 | Mesas que se juntan o se mueven | Detección automática de mesas; el admin corrige a mano desde la vista |
 | **Opciones técnicas con impacto en el negocio** | | |
 | 15 | Detector de platos: seguir con YOLO entrenado, YOLO-World, entrenar más | Benchmark de detectores en paralelo, sin frenar nada; solución agnóstica al detector |
@@ -76,7 +76,7 @@ Los tres diseños están en [diseno-front.md](diseno-front.md) con un prototipo 
 
 **Propuesta.** El titular es «tus mesas esperan X minutos menos después de terminar» (es lo que se mide en M-2 y lo que un dueño entiende sin explicación). Rotación y ROI, debajo, como consecuencia. Las 17 quedan, pero se confirma que ninguna sobra ni falta: ¿propinas? ¿reseñas del local?
 
-**Decisión:** Las 17 quedan. Lo de la plata necesita la carta con precios: al principio la cargamos nosotros y después la edita el local (precios de temporada, platos que salen de la carta). Mientras no se identifique qué plato es, el desperdicio se informa como «X platos volvieron llenos», sin decir cuáles.
+**Decisión:** Las 17 quedan. Lo de la plata necesita la carta con precios: al principio la cargamos nosotros y después la edita el local (precios de temporada, platos que salen de la carta). *Nota (completado al revisar):* el equipo habló de un «fine tuning por restaurante para ver qué plato es»; no hace falta entrenar nada (punto 16 lo descarta): con comanda, `DishMatcher` (Claude) ya identifica qué plato del pedido es cada uno; sin comanda, no se identifica y vale el «X platos volvieron llenos». Mientras no se identifique qué plato es, el desperdicio se informa como «X platos volvieron llenos», sin decir cuáles.
 
 ### 4. F-2: qué se muestra el primer día
 
@@ -94,7 +94,7 @@ Los tres diseños están en [diseno-front.md](diseno-front.md) con un prototipo 
 
 **Propuesta.** La del diseño. Y una regla de negocio: contestar es opcional, la cámara cierra los avisos sola cuando ve el plato retirado. El mozo que no contesta nunca no rompe nada; solo no tiene métrica de tiempo de respuesta.
 
-**Decisión:** Botones («Voy», «Listo», «No hacía falta») más el texto libre de qué pasó con el plato, como hoy. El aviso se cierra solo cuando la cámara ve que el plato se sacó. Cada mozo recibe solo los avisos de **sus** mesas; si no hay mesas definidas por mozo, todo va a un solo chat. No hay pregunta «¿Mesa 2 o Mesa 3?»: «Mesa X» va en negrita al principio del mensaje para que resalte. *Cómo se aplica (completado al revisar, a confirmar):* una respuesta que **cita** el aviso (un botón, o una respuesta rápida del reloj y del celular, que Telegram manda como respuesta a ese mensaje) va a ese aviso. Hoy `feedback.py` solo mira la cita a su propia pregunta «escribí qué pasó»; C-5 extiende eso a la cita del aviso. Que la respuesta rápida del reloj llegue como cita es lo que F-3 asume y hay que probar en un reloj real (punto 24). Una respuesta **suelta**, sin cita: en el chat privado de un mozo (C-7) va a su aviso abierto más reciente; en el grupo compartido se ignora, porque no se sabe de quién ni para qué mesa es y adivinar cobra el tiempo de respuesta al aviso equivocado. Si en el reloj no se ven los botones (lo que F-3 asume hasta probarlo), la respuesta rápida igual cita el mensaje.
+**Decisión:** Botones («Voy», «Listo», «No hacía falta») más el texto libre de qué pasó con el plato, como hoy. El aviso se cierra solo cuando la cámara ve que el plato se sacó. Cada mozo recibe solo los avisos de **sus** mesas; si no hay mesas definidas por mozo, todo va a un solo chat. *De dónde sale mozo ↔ mesas (completado al revisar):* en el piloto, de `servio.toml` (C-7); cuando haya comanda o POS (D-2b, `Comanda.mozo(mesa)`), lo que diga la comanda gana para esa mesa. Si ninguna de las dos lo dice, el aviso de esa mesa va al grupo. No hay pregunta «¿Mesa 2 o Mesa 3?»: «Mesa X» va en negrita al principio del mensaje para que resalte. *Cómo se aplica (completado al revisar, a confirmar):* una respuesta que **cita** el aviso (un botón, o una respuesta rápida del reloj y del celular, que Telegram manda como respuesta a ese mensaje) va a ese aviso. Hoy `feedback.py` solo mira la cita a su propia pregunta «escribí qué pasó»; C-5 extiende eso a la cita del aviso. Que la respuesta rápida del reloj llegue como cita es lo que F-3 asume y hay que probar en un reloj real (punto 24). Una respuesta **suelta**, sin cita: en el chat privado de un mozo (C-7) va a su aviso abierto más reciente; en el grupo compartido se ignora, porque no se sabe de quién ni para qué mesa es y adivinar cobra el tiempo de respuesta al aviso equivocado. Si en el reloj no se ven los botones (lo que F-3 asume hasta probarlo), la respuesta rápida igual cita el mensaje.
 
 ### 6. F-3: tiempos de recordatorio y escalado
 
@@ -104,7 +104,7 @@ Los tres diseños están en [diseno-front.md](diseno-front.md) con un prototipo 
 
 **Propuesta.** Configurable por local en `servio.toml` (junto con T1, T2 y R de `05-reglas-alertas.md`), default 9 min. El piloto dice si bajarlo.
 
-**Decisión:** Sí, configurables por local (recordatorio, cantidad de recordatorios, escalado y los 10 min de «Listo»), en el mismo lugar que T1, T2 y R, con los valores de hoy como default. *Semántica del escalado (completado al revisar):* como lo define F-3, el escalado sale **cuando habría salido el recordatorio siguiente al último** (con R = 3 min y 2 recordatorios, a los 9 min: de ahí el «9 min»); si se cambia R o la cantidad, el escalado se mueve con ellos. No es un timer aparte.
+**Decisión:** Sí, configurables por local, en el mismo lugar que T1, T2 y R, con los valores de hoy como default. *Qué se configura (completado al revisar):* el intervalo R (ya existe), **cuántos recordatorios antes de escalar** (default 2) y los 10 min de «Listo». El escalado **no es un valor en minutos aparte**: como lo define F-3, sale cuando habría salido el recordatorio siguiente al último (R = 3 min y 2 recordatorios → a los 9 min); quien quiera escalar a los 5 min pone R = 2,5 min y 1 recordatorio.
 
 ---
 
@@ -130,7 +130,7 @@ Lo que Servio tiene que hacer cuando pasa algo que no es «dos personas, dos pla
 
 **Propuesta.** No cuentan. Aviso esperado del escenario «dejar el pan»: ninguno.
 
-**Decisión:** El equipo dijo «no contar bowls ni canastas» y en la misma respuesta dudó: «¿una ensalada en un bowl no la detectaría?». Lo que sale de las dos cosas: la regla va **por contenido, no por recipiente**. Lo que el modelo reconoce como pan, canasta, salsera o guarnición para compartir (el bol de papas) no cuenta para ningún aviso; un bowl con un plato de comida (ensalada, pasta, sopa) cuenta como plato. El detector sigue buscando «bowl» (`detector.py`); es el modelo, en la misma llamada que estima la comida, el que dice si lo que hay adentro es un plato o una guarnición (campo `kind` en `Item`, ver también el punto 7).
+**Decisión:** El equipo dijo «no contar bowls ni canastas» y en la misma respuesta dudó: «¿una ensalada en un bowl no la detectaría?». Lo que sale de las dos cosas: la regla va **por contenido, no por recipiente**. Lo que el modelo reconoce como pan, canasta, salsera o guarnición para compartir (el bol de papas) no cuenta para ningún aviso; un bowl con un plato de comida (ensalada, pasta, sopa) cuenta como plato. El detector sigue buscando «bowl» (`detector.py`); es el modelo, en la misma llamada que estima la comida, el que dice si lo que hay adentro es un plato o una guarnición (campo `kind` en `Item`, ver también el punto 7). *Contrato (completado al revisar):* `Item.kind` hoy vale solo `"plate"`; C-1c lo extiende **una sola vez** para los puntos 7 y 8 con `"plate"` (plato de comida, bowl con comida incluido), `"platter"` (fuente, tabla, bandeja para compartir), `"side"` (pan, canasta, salsera, guarnición para compartir) y `"other"`; `03-contratos.md`, los fixtures y los validadores de `alerts/models.py` cambian en ese PR y en ningún otro.
 
 ### 9. Alguien se levanta con el plato lleno
 
@@ -140,7 +140,7 @@ Lo que Servio tiene que hacer cuando pasa algo que no es «dos personas, dos pla
 
 **Propuesta.** Pausar el reloj mientras no hay nadie: si alguien se fue 8 minutos y vuelve, no le cae «¿está todo bien?» a los 2 minutos de sentarse. Aviso esperado: ninguno mientras no hay nadie; «sigue lleno» solo si el plato sigue lleno 10 minutos **con gente**.
 
-**Decisión:** Pausar el reloj del plato mientras no hay nadie, nada más. *Alcance (completado al revisar):* se pausa el reloj de «sigue lleno» (T2), que es el único que necesita gente; el de «retirar» (T1) sigue corriendo, porque un plato vacío sin gente igual hay que retirarlo (punto 10 y `05-reglas-alertas.md`). Pausar es pausar: el tiempo acumulado con gente se conserva (un plato lleno 9 min con gente, 8 min sin nadie y 1 min más con gente, avisa: estuvo 10 min lleno con gente). Un «sigue lleno» ya abierto **no se cierra** por falta de gente (reemplaza la regla de hoy de cerrarlo a las 2 lecturas sin gente, que lo cerraba y lo volvía a abrir); se cierra cuando el plato se va o la mesa queda libre.
+**Decisión:** Pausar el reloj del plato mientras no hay nadie, nada más. *Alcance (completado al revisar):* se pausa el reloj de «sigue lleno» (T2), que es el único que necesita gente; el de «retirar» (T1) sigue corriendo, porque un plato vacío sin gente igual hay que retirarlo (punto 10 y `05-reglas-alertas.md`). Pausar es pausar: el tiempo acumulado con gente se conserva (un plato lleno 9 min con gente, 8 min sin nadie y 1 min más con gente, avisa: estuvo 10 min lleno con gente). Un «sigue lleno» ya abierto **no se cierra por una ausencia corta** (reemplaza la regla de hoy de cerrarlo a las 2 lecturas sin gente, que lo cerraba y lo volvía a abrir): se cierra cuando el plato se va, la mesa queda libre, o la mesa lleva X minutos sin gente y pasa a ser «se fueron y quedaron platos» (punto 10), porque preguntar «¿está todo bien?» a una mesa vacía no tiene sentido.
 
 ### 10. Mesa con platos y sin gente
 
@@ -148,7 +148,7 @@ Lo que Servio tiene que hacer cuando pasa algo que no es «dos personas, dos pla
 
 **Propuesta.** Mesa sin gente dos lecturas seguidas y con platos: aviso de «retirar» a los 2 minutos, haya o no comida. Es la rotación: esa mesa no se puede volver a ocupar hasta que la limpien.
 
-**Decisión:** Configurable un X: avisar si después de X minutos la mesa sigue sin gente y con platos. *Alcance (completado al revisar):* es un aviso nuevo, distinto de «retirar»; si la mesa ya tiene abierto cualquier aviso («retirar» y «mesa terminó» siguen saliendo sin gente, `05-reglas-alertas.md`; «sigue lleno» queda abierto sin gente, punto 9), no se abre otro: el mozo ya tiene que ir. Sirve para la mesa que se fue dejando platos **con comida**, que hoy no avisa nunca.
+**Decisión:** Configurable un X: avisar si después de X minutos la mesa sigue sin gente y con platos. *Alcance (completado al revisar):* es un aviso nuevo, distinto de «retirar»; si la mesa ya tiene abierto un «retirar» o un «mesa terminó» (siguen saliendo sin gente, `05-reglas-alertas.md`), no se abre otro: el mozo ya tiene que ir. Un «sigue lleno» abierto, en cambio, **se cierra** (`motivo_cierre = sin_gente`) y lo reemplaza este aviso: así la mesa abandonada con comida queda registrada como tal y no como un plato que nadie contestó. Sirve para la mesa que se fue dejando platos **con comida**, que hoy no avisa nunca.
 
 ### 11. Postre, café, vasos, tazas
 
@@ -166,7 +166,7 @@ Lo que Servio tiene que hacer cuando pasa algo que no es «dos personas, dos pla
 
 **Propuesta.** Confirmar que así está bien. Un posible cambio: «mesa terminó» con el 80 % de los platos vacíos en mesas de 6 o más, para que el mozo vaya con la cuenta antes. Para el piloto, no.
 
-**Decisión:** Estado «terminando» solo para mesas grandes, de N o más (default 4): si terminó el 80 %, la mesa pasa a «terminando»; si está mucho tiempo así, pasa a «mesa terminó». El porcentaje, el N y el tiempo son configurables por el admin. *Para implementar (completado al revisar):* (1) **N se cuenta en personas**: `people.py` ya devuelve una caja por persona, pero al contrato solo llega `people_present` (sí/no); C-1b propaga el conteo (`people_count` en la observación, `03-contratos.md`). Si no hay conteo (clasificador sin detector local), se cuenta en platos de comida. (2) El 80 % se **redondea hacia abajo** y siempre queda al menos un plato con comida: con 4 platos son 3 vacíos, con 5 son 4, con 8 son 6 (si se redondeara hacia arriba, con 4 platos sería «todos», que ya es «mesa terminó», y el estado no serviría para la mesa de 4). (3) Default del tiempo en «terminando»: 5 min. (4) «Terminando» es un estado de **mesa** nuevo al lado de `por_terminar` (que sigue siendo solo el color) y cambia cuándo se abre `mesa_terminada` en mesas grandes; el `FINISHED_AFTER` de hoy (plato de `por_terminar` a `vacio` a los 6 min) es por **plato** y sigue igual. El PR actualiza `03-contratos.md`, `05-reglas-alertas.md` y los fixtures en el mismo paso (regla 1 de `AGENTS.md`).
+**Decisión:** Estado «terminando» solo para mesas grandes, de N o más (default 4): si terminó el 80 %, la mesa pasa a «terminando»; si está mucho tiempo así, pasa a «mesa terminó». El porcentaje, el N y el tiempo son configurables por el admin. *Para implementar (completado al revisar):* (1) **N se cuenta en personas**: `people.py` ya devuelve una caja por persona, pero al contrato solo llega `people_present` (sí/no); C-1b propaga el conteo (`people_count` en la observación, `03-contratos.md`). Si no hay conteo (clasificador sin detector local), se cuenta en platos de comida. (2) Además de N personas, hacen falta **al menos N platos de comida** (`kind` plato): una mesa de 4 con dos fuentes para compartir no entra, que es el caso del punto 7. El 80 % se **redondea hacia abajo** y siempre queda al menos un plato con comida: con 4 platos son 3 vacíos, con 5 son 4, con 8 son 6 (si se redondeara hacia arriba, con 4 platos sería «todos», que ya es «mesa terminó», y el estado no serviría para la mesa de 4). (3) Default del tiempo en «terminando»: 5 min. (4) «Terminando» es un estado de **mesa** nuevo al lado de `por_terminar` (que sigue siendo solo el color) y cambia cuándo se abre `mesa_terminada` en mesas grandes; el `FINISHED_AFTER` de hoy (plato de `por_terminar` a `vacio` a los 6 min) es por **plato** y sigue igual. El PR actualiza `03-contratos.md`, `05-reglas-alertas.md` y los fixtures en el mismo paso (regla 1 de `AGENTS.md`).
 
 ### 13. Cliente que rechaza el plato
 
@@ -176,7 +176,7 @@ Lo que Servio tiene que hacer cuando pasa algo que no es «dos personas, dos pla
 
 **Propuesta.** Las dos. Un plato lleno que desaparece queda como «posible devolución» y el mozo recibe la pregunta de motivo (los mismos botones de hoy). Sin respuesta, cuenta igual pero sin motivo.
 
-**Decisión:** Se marca como posible devolución y **no** se pregunta el motivo. *Alcance (completado al revisar):* lo que no se pregunta es por el plato que **desaparece lleno**; la pregunta de motivo del aviso «sigue lleno» (A-4, con sus botones) sigue como está, y de ahí salen `desperdicio`, la mitad «por qué» de `platos_que_vuelven` y los motivos de D-4. La posible devolución suma al conteo de platos que vuelven, sin motivo. Lo de reconocer el acto de comer por los cubiertos **no es alcance de esta decisión**: es una investigación aparte (V-3, punto 18); hasta que exista, todo plato que desaparece lleno cuenta como posible devolución. Reconocer el acto de comer por el movimiento de los cubiertos (el utensilio entra y sale más de X veces): si la persona comió, un plato que se va aunque parezca lleno es retiro y no devolución, y el plato lleno que llega después es uno nuevo de otra cosa.
+**Decisión:** Se marca como posible devolución y **no** se pregunta el motivo. *Alcance (completado al revisar):* lo que no se pregunta es por el plato que **desaparece lleno**; la pregunta de motivo del aviso «sigue lleno» (A-4, con sus botones) sigue como está, y de ahí salen `desperdicio`, la mitad «por qué» de `platos_que_vuelven` y los motivos de D-4. La posible devolución suma al conteo de platos que vuelven, sin motivo. Lo de reconocer el acto de comer por los cubiertos **no es alcance de esta decisión**: es una investigación aparte (tarjeta **V-3** del Trello, un spike, no una función; punto 18); hasta que exista, todo plato que desaparece lleno cuenta como posible devolución. Reconocer el acto de comer por el movimiento de los cubiertos (el utensilio entra y sale más de X veces): si la persona comió, un plato que se va aunque parezca lleno es retiro y no devolución, y el plato lleno que llega después es uno nuevo de otra cosa.
 
 ### 14. Mesas que se juntan o se mueven
 
@@ -223,7 +223,7 @@ Lo que Servio tiene que hacer cuando pasa algo que no es «dos personas, dos pla
 
 ### 18. Cadencia y costo por mesa por hora
 
-**Contexto.** Una lectura cada 30 segundos por mesa. Hoy se saltea la llamada al modelo cuando la mesa entera no cambió (`CLAUDE_REUSE_UNCHANGED`, con refresco cada 4 lecturas); si cambió algo, va toda la mesa. Mandar solo los platos que cambiaron, con caché por plato, es C-2. El costo por mesa por hora no está medido todavía (sale del tablero de B-3) y es lo que define el precio mínimo. C-2 lo baja a la mitad (caché por plato, no volver a preguntar por un plato vacío).
+**Contexto.** Una lectura cada 30 segundos por mesa. Hoy se saltea la llamada al modelo cuando la mesa entera no cambió (`CLAUDE_REUSE_UNCHANGED`, con refresco cada 4 lecturas); si cambió algo, van los recortes de **todos los platos** de esa mesa (nunca la imagen de la mesa: C-3, salvo el modo del punto 17). Mandar solo los platos que cambiaron, con caché por plato, es C-2. El costo por mesa por hora no está medido todavía (sale del tablero de B-3) y es lo que define el precio mínimo. C-2 lo baja a la mitad (caché por plato, no volver a preguntar por un plato vacío).
 
 **Opciones.** 30 s; 60 s (la mitad del costo, avisos un minuto más tarde); adaptativo (rápido cuando la mesa cambia, lento cuando no).
 
@@ -350,7 +350,7 @@ Lo que Servio tiene que hacer cuando pasa algo que no es «dos personas, dos pla
 ## Agregado en la reunión
 
 - **RAG sobre las métricas y los datos del negocio:** poder consultar en lenguaje natural lo que Servio recolecta (avisos, tiempos, platos, respuestas), sin depender de las pantallas fijas del dashboard. Va al Trello como tarjeta nueva.
-- **Detectar el acto de comer** (punto 13) es una capacidad nueva de visión: cubiertos que entran y salen del plato. Pide fotos más seguidas que cada 30 s (punto 18); se investiga aparte antes de prometerlo.
+- **Detectar el acto de comer** (punto 13) es una capacidad nueva de visión: cubiertos que entran y salen del plato. Pide fotos más seguidas que cada 30 s (punto 18); se investiga aparte antes de prometerlo (tarjeta V-3 del Trello, un spike que termina en un documento con una recomendación).
 - **La implementación no se reparte entre personas:** la hacen agentes tarjeta por tarjeta, y el tablero marca cuáles se pueden tomar (ver «Tablero y trabajo en paralelo» en `AGENTS.md`, que llega con `vision/tools/tablero.py` en la rama `jessica/tablero-agentes`).
 
 ## Qué doc de contexto cambia con cada decisión
@@ -360,9 +360,9 @@ Mientras no se actualicen, los docs de contexto dicen lo viejo; este archivo gan
 | Decisión | Doc que hoy dice otra cosa | Qué cambia |
 |---|---|---|
 | 1 | `context/12-roles.md` («el mozo ve la vista»), `diseno-front.md` F-1 («Mozo (principal)») | La pantalla es del encargado; el mozo solo recibe avisos |
-| 5, 6 | `diseno-front.md` F-3 (palabra suelta, `telegram` en `salon.json`), `context/05-reglas-alertas.md` | Botones, tiempos configurables, mozo ↔ mesas en `servio.toml` |
+| 5, 6 | `diseno-front.md` F-3 (palabra suelta, `telegram` en `salon.json`), `context/05-reglas-alertas.md` (y su mención a flags `--t1/--t2/--reminder` que no existen: son `ALERT_*` y el toml) | Botones, qué se configura, mozo ↔ mesas en `servio.toml` (la comanda gana cuando la hay) |
 | 9, 10, 12 | `context/05-reglas-alertas.md`, `context/03-contratos.md`, fixtures | Pausa de T2, aviso de mesa sin gente, estado «terminando» |
-| 7, 8 | `context/03-contratos.md` (`Item`), `context/05-reglas-alertas.md`, prompt | `kind` por plato; qué cuenta y qué no |
+| 7, 8 | `context/03-contratos.md` (`Item`), `context/05-reglas-alertas.md`, prompt | Un solo cambio de contrato: `Item.kind` = `plate` · `platter` · `side` · `other`; qué cuenta y qué no |
 | 13 | `context/05-reglas-alertas.md`, `context/13-metricas.md`, `roadmap-producto.md` (D-4) | Posible devolución sin motivo; el motivo sigue en «sigue lleno» |
 | 14 | `diseno-front.md` F-1, `context/04-vision.md` | Mesas automáticas corregibles a mano |
 | 17 | `context/04-vision.md`, `legal-uruguay.md`, `.env.example`, `context/09-convenciones.md` («Privacidad y datos» y el test `test_only_plate_crops_reach_the_provider`, que sigue valiendo sin el flag) | Bloque de color en vez de pixelado, detrás del flag |
