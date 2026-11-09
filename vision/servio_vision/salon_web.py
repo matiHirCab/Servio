@@ -6,6 +6,9 @@ navegador. Rutas (`<local>` es el `local_id` de la casa, `local` por defecto):
 - `/<local>/salon`          la página (static/salon.html)
 - `/<local>/salon/estado`   la última foto del salón en JSON (`salon.py`)
 - `/<local>/salon/eventos`  la misma foto por Server-Sent Events, cada vez que cambia
+- `/<local>/salon/frame.jpg` el último frame de la cámara, ya difuminado, para el
+                            modo video de la página; solo con `--web-video`
+                            (`SalonFeed(video=True)`), si no, 404
 - `/`                       redirige a `/<local>/salon`
 
 Por defecto escucha solo en esta máquina (127.0.0.1). Con `--web-host 0.0.0.0` se
@@ -88,7 +91,25 @@ def _handler(server: SalonServer) -> type[BaseHTTPRequestHandler]:
                 return self._send(HTTPStatus.OK, body, "application/json")
             if rest == ["eventos"]:
                 return self._events()
+            if rest == ["frame.jpg"]:
+                return self._frame()
             return self._send(HTTPStatus.NOT_FOUND, b"No existe", "text/plain")
+
+        def _frame(self) -> None:
+            if not feed.video:
+                return self._send(
+                    HTTPStatus.NOT_FOUND,
+                    "El modo video está apagado (--web-video)".encode(),
+                    "text/plain; charset=utf-8",
+                )
+            jpeg = feed.frame_jpeg()
+            if jpeg is None:
+                return self._send(
+                    HTTPStatus.NOT_FOUND,
+                    "Todavía no hay frame".encode(),
+                    "text/plain; charset=utf-8",
+                )
+            self._send(HTTPStatus.OK, jpeg, "image/jpeg")
 
         def _redirect(self, location: str) -> None:
             self.send_response(HTTPStatus.FOUND)

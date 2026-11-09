@@ -229,7 +229,13 @@ def build_pipeline(settings: Settings) -> Pipeline | None:
         mirror_log=settings.record / recording.EVENTS_FILE if settings.record else None,
     )
     feed = (
-        SalonFeed(settings.local_id, processor, restaurant, settings.interval)
+        SalonFeed(
+            settings.local_id,
+            processor,
+            restaurant,
+            settings.interval,
+            video=settings.web_video,
+        )
         if settings.web_port is not None
         else None
     )
@@ -265,6 +271,13 @@ def build_pipeline(settings: Settings) -> Pipeline | None:
             pipeline.close()
             return None
         logger.info("Salón en vivo: %s", server.url)
+        if feed.video:
+            logger.warning(
+                "Modo video (--web-video): la imagen de la cámara, difuminada, se "
+                "sirve en %s/frame.jpg a cualquiera en la red. Apagalo después de "
+                "armar la cámara",
+                server.url,
+            )
     if live:
         pipeline.resume()  # los ids y el suavizado, para que sigan siendo los mismos
     return pipeline
@@ -362,9 +375,14 @@ def run(settings: Settings, limit: int | None = None) -> int:
             )
         else:
             logger.info("Privacidad: caras difuminadas en la captura")
+        feed = salon_feed(pipeline)
         for frame, ts in frames:
             if recorder is not None:
                 recorder = _record(recorder, frame, ts)
+            if feed is not None:
+                # antes de procesar: cuando la página reciba la foto nueva, el
+                # frame.jpg que pida ya es el de esta lectura
+                feed.keep_frame(frame)
             if readings == 0:
                 # la luz, antes de gastar la primera clasificación en un cuadro negro
                 framing.log_report(frame, None, logger, tables=False)
@@ -402,6 +420,13 @@ def run(settings: Settings, limit: int | None = None) -> int:
                 logger.error("No se pudo cerrar la sesión grabada: %s", e)
     logger.info("%d lecturas", readings)
     return 0 if readings else 1
+
+
+def salon_feed(pipeline: Pipeline) -> SalonFeed | None:
+    """La vista del salón que `build_pipeline` enganchó en `on_reading`, si hay
+    (`--web`); el loop le deja el frame para el modo video."""
+    owner = getattr(pipeline.on_reading, "__self__", None)
+    return owner if isinstance(owner, SalonFeed) else None
 
 
 def plate_protector(pipeline: Pipeline) -> privacy.Protector | None:

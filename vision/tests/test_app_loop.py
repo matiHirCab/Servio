@@ -160,3 +160,37 @@ def test_plate_protector_uses_the_classifier_detector():
     assert (
         app.plate_protector(Pipeline(FakeClassifier(), ZONES, lambda o: None)) is None
     )
+
+
+# ---- modo video de la vista del salón (F-1b) ----
+
+
+def test_loop_keeps_the_frame_for_the_video_mode_only_with_web_video(loop):
+    """El loop le deja a la vista el frame (ya difuminado) de cada lectura, solo si
+    el modo video está prendido; apagado, no se guarda ninguna imagen."""
+    from servio_vision.salon import SalonFeed
+
+    for video in (True, False):
+        feed = SalonFeed("casa-1", video=video)
+        pipeline = Pipeline(
+            FakeClassifier(), ZONES, lambda o: None, on_reading=feed.on_reading
+        )
+        loop(pipeline=pipeline)
+        assert app.run(Settings.load(source="0")) == 0
+        assert (feed.frame_jpeg() is not None) is video
+        assert feed.snapshot()["video"] is video
+
+
+def test_salon_feed_is_found_only_when_the_view_is_on():
+    from servio_vision.salon import SalonFeed
+
+    feed = SalonFeed("casa-1")
+    with_view = Pipeline(
+        FakeClassifier(), ZONES, lambda o: None, on_reading=feed.on_reading
+    )
+    without = Pipeline(
+        FakeClassifier(), ZONES, lambda o: None, on_reading=lambda *a: None
+    )
+    assert app.salon_feed(with_view) is feed
+    assert app.salon_feed(without) is None
+    assert app.salon_feed(Pipeline(FakeClassifier(), ZONES, lambda o: None)) is None

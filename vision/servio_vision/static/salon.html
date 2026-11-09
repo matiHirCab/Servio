@@ -7,9 +7,15 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow:wght@300;400;500;600&family=Barlow+Condensed:wght@400;500;600&display=swap">
 <style>
-/* Vista de reconocimiento (F-1), estilo pantalla de auto: barra de estado arriba,
-   salón cenital a la izquierda, mesa elegida + avisos + turno a la derecha, dock abajo.
-   La página se arma sola con /estado y se actualiza con /eventos (salon_web.py). */
+/* Vista de reconocimiento (F-1), la pantalla fija del encargado (docs/diseno-front.md,
+   decisión 1): barra de estado arriba, el salón grande a la izquierda, la mesa elegida,
+   los avisos y «Ahora» a la derecha, el dock de estados abajo. Dos modos sobre los mismos
+   datos: la reconstrucción (mesas, sillas, personas y platos dibujados; el default) y el
+   video (el último frame ya difuminado, con las capas encima), que el servidor solo
+   ofrece con --web-video (decisión 2). La página se arma sola con /estado y se
+   actualiza con /eventos (salon_web.py). Solo tema oscuro: se mira de reojo con la luz
+   de un restaurante. */
+[hidden]{display:none!important}
 :root{
   --bg:#07080a; --surface:#121418; --surface-2:#1a1d22; --line:rgba(255,255,255,.08);
   --fg:#eef1f4; --fg-2:#9aa1ab; --fg-3:#5f6670; --accent:#3E8BFF;
@@ -21,62 +27,81 @@
 *{box-sizing:border-box}
 html,body{background:var(--bg);margin:0}
 body{color:var(--fg);font-family:var(--f-display);font-size:14px;font-weight:400;-webkit-font-smoothing:antialiased;
-  padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px));padding-block:20px 28px}
+  padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px));padding-block:16px 28px}
 .screen{max-width:1440px;margin:0 auto;display:grid;grid-template-columns:minmax(0,1fr) 360px;gap:16px;align-items:start}
 .label{font-family:var(--f-label);font-size:12px;letter-spacing:.14em;text-transform:uppercase;color:var(--fg-3)}
 .num{font-variant-numeric:tabular-nums}
+h1,h2,h3{margin:0;font-weight:500;text-wrap:balance}
 
-.status{grid-column:1/-1;display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap;padding:4px 4px 0}
+.status{grid-column:1/-1;display:flex;align-items:center;justify-content:space-between;gap:14px;flex-wrap:wrap;padding:4px 4px 0}
 .brand{display:flex;align-items:baseline;gap:14px;flex-wrap:wrap}
 .brand b{font-weight:300;font-size:26px;letter-spacing:.32em;text-transform:uppercase}
 .brand span{color:var(--fg-2);font-size:14px}
-.status-r{display:flex;gap:22px;align-items:center;color:var(--fg-2);font-size:14px;flex-wrap:wrap}
+.status-r{display:flex;gap:18px;align-items:center;color:var(--fg-2);font-size:14px;flex-wrap:wrap}
 .status-r .time{color:var(--fg);font-size:22px;font-weight:300}
 .live{display:inline-flex;align-items:center;gap:8px}
-.live i{width:8px;height:8px;border-radius:50%;background:var(--fg-3)}
+.live i{width:8px;height:8px;border-radius:50%;background:var(--por_terminar);box-shadow:0 0 0 4px rgba(255,138,61,.18)}
 .live.on i{background:var(--vacio);box-shadow:0 0 0 4px rgba(255,77,97,.18);animation:blink 2s infinite}
+.live.wait i{background:var(--fg-3);box-shadow:none}
 @keyframes blink{50%{opacity:.35}}
+.modes{display:inline-flex;background:var(--surface-2);border-radius:999px;padding:3px}
+.modes button{border:0;background:transparent;color:var(--fg-2);font-family:var(--f-label);font-size:13px;letter-spacing:.12em;text-transform:uppercase;padding:8px 16px;border-radius:999px;cursor:pointer;min-height:36px}
+.modes button[aria-pressed="true"]{background:var(--surface);color:var(--fg);box-shadow:inset 0 0 0 1px var(--line)}
+.modes button:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
 
-.stage{border-radius:22px;overflow:hidden;background:#0c0d10;border:1px solid var(--line);min-width:0}
-.floor{display:block;width:100%;height:auto}
+.stage{position:relative;border-radius:22px;overflow:hidden;background:#0c0d10;border:1px solid var(--line);min-width:0}
+.stage svg,.stage img{display:block;width:100%;height:auto}
+.video{position:relative;aspect-ratio:4/3;max-width:100%;margin:0 auto;background:#000}
+.video img{position:absolute;inset:0;width:100%;height:100%;object-fit:contain;filter:saturate(.85) brightness(.9)}
+.video img[hidden]{display:none}
+.video svg{position:absolute;inset:0;width:100%;height:100%}
+.video .wait{position:absolute;inset:0;display:grid;place-items:center;color:var(--fg-2);font-weight:300;font-size:18px;text-align:center;padding:24px}
+.cap{position:absolute;left:16px;bottom:12px;display:flex;gap:10px;align-items:center;pointer-events:none}
+.cap .label{color:var(--fg-2)}
+.cap i{width:8px;height:8px;border-radius:50%;background:var(--vacio)}
 .svg-cap{font-family:var(--f-label);font-size:11px;letter-spacing:.16em;fill:#5f6670}
 .svg-label{font-family:var(--f-display);font-size:15px;font-weight:500;fill:#eef1f4}
 .svg-status{font-family:var(--f-label);font-size:13px;letter-spacing:.06em;fill:#9aa1ab}
 .svg-status.sel{fill:#3E8BFF}
 .svg-free{font-family:var(--f-label);font-size:12px;letter-spacing:.3em;fill:#5f6670}
 .svg-empty{font-family:var(--f-display);font-size:18px;font-weight:300;fill:#9aa1ab}
+.svg-tag{font-family:var(--f-label);font-size:12px;letter-spacing:.08em;fill:#07080a;font-weight:600}
 .tbl{cursor:pointer}
 .tbl:focus{outline:none}
 .tbl:focus-visible .tbl-top{stroke:#3E8BFF;stroke-opacity:1}
 .changed{animation:pop 1.2s ease-out;transform-box:fill-box;transform-origin:center}  /* sin esto escala desde el origen del SVG */
 @keyframes pop{0%{transform:scale(1.25)}100%{transform:scale(1)}}
 
-.side{display:grid;gap:16px;align-content:start;min-width:0}
-.card{background:var(--surface);border:1px solid var(--line);border-radius:20px;padding:18px}
+.side{display:grid;gap:14px;align-content:start;min-width:0}
+.card{background:var(--surface);border:1px solid var(--line);border-radius:20px;padding:16px 18px}
 .card.sel{border-color:rgba(62,139,255,.35)}
-.card-h{display:flex;justify-content:space-between;align-items:baseline;gap:12px;margin-bottom:14px}
-.card-h h2{margin:0;font-weight:500;font-size:18px}
+.card.warn{border-color:rgba(255,138,61,.45)}
+.card-h{display:flex;justify-content:space-between;align-items:baseline;gap:12px;margin-bottom:12px}
+.card-h h2{font-size:18px}
 .card-h small{font-family:var(--f-label);font-size:12px;letter-spacing:.1em;color:var(--accent);text-transform:uppercase}
-.prow{display:grid;grid-template-columns:10px minmax(0,1fr) 90px;align-items:center;gap:10px;font-size:13px;color:var(--fg-2);padding:5px 0}
+.prow{display:grid;grid-template-columns:10px minmax(0,1fr) 92px;align-items:center;gap:10px;font-size:13px;color:var(--fg-2);padding:5px 0}
 .prow i{width:10px;height:10px;border-radius:50%}
 .prow .nm{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--fg)}
 .prow .st{text-align:right}
 .bar{grid-column:2/-1;height:3px;border-radius:2px;background:var(--surface-2);overflow:hidden;margin-top:-2px}
 .bar b{display:block;height:100%;border-radius:2px;transition:width .6s}
 .muted{color:var(--fg-2);font-size:13px;margin:0}
-.alert{display:grid;grid-template-columns:4px 1fr auto;gap:12px;padding:12px 0;border-top:1px solid var(--line)}
-.alert:first-child{border-top:0;padding-top:0}
+.alert{display:grid;grid-template-columns:4px 1fr auto;gap:12px;padding:0 0 12px}
+.alert + .alert{border-top:1px solid var(--line);padding-top:12px}
+.alert:last-child{padding-bottom:0}
 .alert .sev{border-radius:2px}
 .alert p{margin:0;font-size:15px;line-height:1.35}
 .alert p small{display:block;color:var(--fg-2);font-size:13px;margin-top:3px}
 .alert time{font-size:13px;color:var(--fg-3);white-space:nowrap}
-.metrics{display:grid;grid-template-columns:1fr 1fr;gap:18px 14px}
-.metric .v{font-size:34px;font-weight:300;line-height:1.05}
+.taken{display:inline-block;margin-top:6px;font-family:var(--f-label);font-size:12px;letter-spacing:.1em;text-transform:uppercase;color:var(--lleno)}
+.taken.none{color:var(--por_terminar)}
+.metrics{display:grid;grid-template-columns:1fr 1fr;gap:16px 14px}
+.metric .v{font-size:32px;font-weight:300;line-height:1.05}
 .metric .v small{font-size:15px;color:var(--fg-2);margin-left:3px}
 
 .dock{grid-column:1/-1;display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap;
   background:var(--surface);border:1px solid var(--line);border-radius:20px;padding:12px 18px}
-.legend{display:flex;gap:22px;flex-wrap:wrap}
+.legend{display:flex;gap:20px;flex-wrap:wrap}
 .chip{display:flex;align-items:center;gap:9px;font-size:14px}
 .chip i{width:12px;height:12px;border-radius:50%;box-shadow:0 0 12px currentColor}
 .chip b{color:var(--fg);font-weight:500}
@@ -84,7 +109,21 @@ body{color:var(--fg);font-family:var(--f-display);font-size:14px;font-weight:400
 .conn.off{color:var(--por_terminar)}
 
 @media (max-width:1000px){.screen{grid-template-columns:minmax(0,1fr)}}
-@media (max-width:620px){.status-r{gap:14px}.brand b{font-size:22px}}
+/* celular: el salón arriba, las tarjetas abajo, el dock con los estados pegado al borde
+   de abajo; los números de «Ahora» en una fila */
+@media (max-width:620px){
+  .screen{gap:12px}
+  .status-r{gap:12px}
+  .brand b{font-size:20px}
+  .status-r .time{font-size:18px}
+  #occupied{display:none}
+  .dock{position:sticky;bottom:calc(8px + env(safe-area-inset-bottom,0px));flex-wrap:nowrap;overflow-x:auto;gap:12px;padding:10px 14px}
+  .legend{gap:14px;flex-wrap:nowrap}
+  .chip span{white-space:nowrap}
+  .conn{display:none}
+  .metrics{grid-template-columns:1fr 1fr 1fr 1fr}
+  .metric .v{font-size:24px}
+}
 @media (prefers-reduced-motion:reduce){.changed,.live.on i{animation:none}.bar b{transition:none}}
 </style>
 </head>
@@ -93,14 +132,24 @@ body{color:var(--fg);font-family:var(--f-display);font-size:14px;font-weight:400
   <header class="status">
     <div class="brand"><b>Servio</b><span id="local">Salón</span></div>
     <div class="status-r">
-      <span class="live" id="live"><i></i><span id="live-text">Conectando</span></span>
+      <span class="live wait" id="live"><i></i><span id="live-text">Conectando</span></span>
       <span class="num" id="occupied"></span>
+      <span class="modes" role="group" aria-label="Modo" id="modes" hidden>
+        <button type="button" id="mode-recon" aria-pressed="true">Reconstrucción</button>
+        <button type="button" id="mode-video" aria-pressed="false">Video</button>
+      </span>
       <span class="time num" id="clock">--:--</span>
     </div>
   </header>
 
-  <section class="stage" aria-label="Salón visto desde la cámara">
-    <svg class="floor" id="floor" viewBox="0 0 1000 560" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Vista cenital del salón"></svg>
+  <section class="stage" aria-label="Salón">
+    <svg id="floor" viewBox="0 0 1000 560" xmlns="http://www.w3.org/2000/svg" role="group" aria-label="Reconstrucción del salón"></svg>
+    <div class="video" id="video" hidden>
+      <img id="cam" alt="Imagen de la cámara con las caras difuminadas" hidden>
+      <div class="wait" id="cam-wait">Esperando la imagen de la cámara</div>
+      <svg id="overlay" viewBox="0 0 640 480" xmlns="http://www.w3.org/2000/svg" role="group" aria-label="Capas sobre la cámara"></svg>
+      <div class="cap"><i></i><span class="label" id="cam-cap">Cámara · caras difuminadas en la computadora</span></div>
+    </div>
   </section>
 
   <aside class="side">
@@ -132,15 +181,31 @@ const FILL = {lleno:.9, comiendo:.55, por_terminar:.18, vacio:0};
 const base = location.pathname.replace(/\/+$/, "");
 let snap = null;          // última foto del salón
 let receivedAt = 0;       // Date.now() cuando llegó
-let prevStates = {};      // track_id → estado, para marcar cambios
+let prevStates = {};      // track_id → estado de la foto anterior, para marcar cambios
 let selected = null;      // table_id elegida
 let connected = false;
+let everConnected = false;  // para distinguir «conectando» de «se cortó»
+let mode = "recon";       // "recon" | "video"; el video solo si el servidor lo ofrece (snap.video)
+const dirty = {floor:false, video:false};        // el modo oculto se dibuja recién al mostrarlo
+const pending = {floor:new Set(), video:new Set()}; // los platos que tienen que latir en cada modo
 
 const $ = id => document.getElementById(id);
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+const tableOf = id => snap ? snap.tables.find(t => t.id === id) : undefined;
+const tableName = id => { const t = tableOf(id); return t ? t.name : id; };
+const tableWaiter = id => (tableOf(id) || {}).waiter || null;
+const dishName = (p, i) => p.dish || (i === undefined ? "Plato" : "Plato " + (i + 1));
+const stateOf = p => STATE_NAME[p.state] ? p.state : "comiendo";  // un estado raro no rompe el dibujo
+const occupied = t => t.plates.length > 0;
+const alertTitle = (type, name) => (ALERT_TITLE[type] || (n => `${n}: aviso`))(name);
+const alertColor = type => ALERT_COLOR[type] || "#9aa3ad";
+const plainMessage = m => String(m ?? "").replace(/^[^\p{L}\p{N}]+/u, "");  // sin el emoji del mensaje de Telegram
+const byAge = (a, b) => Date.parse(a.created_at) - Date.parse(b.created_at);  // el más viejo primero
+const alertsOf = id => snap ? snap.alerts.filter(a => a.table_id === id).sort(byAge) : [];
 
-// "ahora" en el reloj de las lecturas (en un video es el tiempo del video)
+// "ahora" en el reloj de las lecturas (en un video es el tiempo del video). Las horas
+// vienen en UTC y se muestran en la del navegador, que es la del local.
 function nowTs() { return snap ? Date.parse(snap.ts) + (Date.now() - receivedAt) : Date.now(); }
 function ago(iso) {
   if (!iso) return "";
@@ -149,13 +214,17 @@ function ago(iso) {
   const m = Math.floor(s / 60);
   return m < 60 ? `${m} min` : `${Math.floor(m / 60)} h ${m % 60} min`;
 }
+const hhmm = ms => new Date(ms).toLocaleTimeString("es-UY", {hour: "2-digit", minute: "2-digit", hourCycle: "h23"});
 function hash(str) { let h = 2166136261; for (const c of str) h = Math.imul(h ^ c.charCodeAt(0), 16777619); return h >>> 0; }
 function rand(seed) { return () => ((seed = Math.imul(seed ^ (seed >>> 15), 2246822507) >>> 0) % 1000) / 1000; }
 
-// ---------- salón ----------
+// ---------- dibujo ----------
+function halos(prefix) {
+  let out = "";
+  for (const s of STATES) out += `<radialGradient id="${prefix}halo-${s}"><stop offset=".45" stop-color="${COLOR[s]}" stop-opacity=".55"/><stop offset="1" stop-color="${COLOR[s]}" stop-opacity="0"/></radialGradient>`;
+  return out;
+}
 function defs() {
-  let halos = "";
-  for (const s of STATES) halos += `<radialGradient id="halo-${s}"><stop offset=".45" stop-color="${COLOR[s]}" stop-opacity=".55"/><stop offset="1" stop-color="${COLOR[s]}" stop-opacity="0"/></radialGradient>`;
   return `<defs>
 <radialGradient id="floorg" cx="50%" cy="45%" r="70%"><stop offset="0" stop-color="#22262c"/><stop offset="1" stop-color="#0c0d10"/></radialGradient>
 <linearGradient id="tableg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#3a3f47"/><stop offset=".55" stop-color="#2a2e34"/><stop offset="1" stop-color="#1f2227"/></linearGradient>
@@ -165,7 +234,7 @@ function defs() {
 <radialGradient id="headg" cx="40%" cy="35%" r="70%"><stop offset="0" stop-color="#eef1f4"/><stop offset="1" stop-color="#b3bac3"/></radialGradient>
 <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse"><path d="M40 0H0V40" fill="none" stroke="#ffffff" stroke-opacity=".035"/></pattern>
 <filter id="soft" x="-30%" y="-30%" width="160%" height="160%"><feGaussianBlur stdDeviation="14"/></filter>
-${halos}</defs>`;
+${halos("")}</defs>`;
 }
 
 function person(x, y, rot, s) {
@@ -180,8 +249,10 @@ function chair(x, y, side, s) {
   return `<rect x="${(x - w / 2).toFixed(1)}" y="${(y - h / 2).toFixed(1)}" width="${w.toFixed(1)}" height="${h.toFixed(1)}" rx="${9 * s}" fill="url(#chairg)" stroke="#ffffff" stroke-opacity=".05"/>`;
 }
 
+// Un plato: anillo del color del estado cuyo arco es cuánto queda, halo suave, la comida
+// como mancha; vacío lleva el punto arriba. Si cambió de estado en la última lectura, late.
 function plate(p, x, y, r, changed) {
-  const st = p.state || "comiendo";
+  const st = stateOf(p);
   const col = COLOR[st];
   const f = p.fill_ratio ?? FILL[st];
   const R = r + 5 * r / 17, circ = 2 * Math.PI * R;
@@ -206,6 +277,30 @@ function plate(p, x, y, r, changed) {
   return o + `</g></g>`;
 }
 
+// Una etiqueta de color (el aviso de una mesa, el nombre de un plato). El ancho se
+// estima por la cantidad de letras; `fitTags` lo ajusta al texto real ya dibujado.
+function tag(x, y, text, col, opacity = 1, anchor = "start") {
+  const w = text.length * 7.2 + 22, x0 = anchor === "end" ? -w : 0;
+  return `<g class="tag" data-x="${x.toFixed(1)}" data-y="${y.toFixed(1)}" data-anchor="${anchor}" transform="translate(${x.toFixed(1)} ${y.toFixed(1)})"><rect x="${x0.toFixed(0)}" y="-11" width="${w.toFixed(0)}" height="22" rx="11" fill="${col}" fill-opacity="${opacity}"/><text x="${(x0 + w / 2).toFixed(0)}" y="4" text-anchor="middle" class="svg-tag">${esc(text)}</text></g>`;
+}
+function fitTags(svg) {
+  for (let e = svg; e; e = e.parentElement) if (e.hasAttribute && e.hasAttribute("hidden")) return;  // oculto: no se puede medir
+  const vw = svg.viewBox && svg.viewBox.baseVal ? svg.viewBox.baseVal.width : Infinity;
+  for (const g of svg.querySelectorAll("g.tag")) {
+    const t = g.querySelector("text"), r = g.querySelector("rect");
+    if (!t.getComputedTextLength) continue;
+    const w = t.getComputedTextLength() + 22, x0 = g.dataset.anchor === "end" ? -w : 0;
+    r.setAttribute("width", w.toFixed(0)); r.setAttribute("x", x0.toFixed(0)); t.setAttribute("x", (x0 + w / 2).toFixed(0));
+    g.setAttribute("transform", `translate(${g.dataset.x} ${g.dataset.y})`);
+    const m = g.getCTM && svg.getCTM ? svg.getCTM().inverse().multiply(g.getCTM()) : null, absX = (m ? m.e : +g.dataset.x) + x0;
+    let shift = Math.min(0, vw - w - 4 - absX);  // que no se corte contra el borde derecho
+    if (absX + shift < 4) shift = 4 - absX;      // ni contra el izquierdo
+    if (shift) g.setAttribute("transform", `translate(${(+g.dataset.x + shift).toFixed(1)} ${g.dataset.y})`);
+  }
+}
+const alertTagText = (al, name) => alertTitle(al.type, name).toUpperCase() + " · " + ago(al.created_at).toUpperCase();
+
+// ---------- reconstrucción ----------
 function renderFloor() {
   const svg = $("floor");
   if (!snap || !snap.tables.length) {
@@ -214,6 +309,7 @@ function renderFloor() {
     svg.innerHTML = defs() + `<rect width="1000" height="560" fill="url(#floorg)"/><rect width="1000" height="560" fill="url(#grid)"/>
 <text x="500" y="280" text-anchor="middle" class="svg-empty">${msg}</text>
 <text x="500" y="308" text-anchor="middle" class="svg-cap">LAS MESAS APARECEN SOLAS CUANDO LLEGA UNA LECTURA</text>`;
+    pending.floor.clear();
     return;
   }
   const [fw, fh] = snap.frame;
@@ -221,9 +317,10 @@ function renderFloor() {
   const T = snap.tables.map(t => ({t, x: t.box[0] * fw, y: t.box[1] * fh, w: t.box[2] * fw, h: t.box[3] * fh}));
   const minx = Math.min(...T.map(a => a.x)), miny = Math.min(...T.map(a => a.y));
   const maxx = Math.max(...T.map(a => a.x + a.w)), maxy = Math.max(...T.map(a => a.y + a.h));
-  const W = 1000, M = 110, TOP = 120;
-  const k = (W - 2 * M) / Math.max(maxx - minx, 1);
+  const W = 1000, M = 110, TOP = 120, MAXH = 640;  // más alto que ancho no: la pantalla se mira de lejos
+  const k = Math.min((W - 2 * M) / Math.max(maxx - minx, 1), (MAXH - TOP - M) / Math.max(maxy - miny, 1));
   const H = Math.max(420, (maxy - miny) * k + TOP + M);
+  const offX = M + (W - 2 * M - (maxx - minx) * k) / 2;
   const offY = TOP + Math.max(0, (H - TOP - M - (maxy - miny) * k) / 2);
   const sides = T.map(a => Math.min(a.w, a.h) * k).sort((a, b) => a - b);
   const s = clamp(sides[Math.floor(sides.length / 2)] / 120, .55, 1.3); // tamaño de sillas y personas
@@ -236,14 +333,14 @@ function renderFloor() {
 
   for (const a of T) {
     const t = a.t;
-    const x0 = M + (a.x - minx) * k, y0 = offY + (a.y - miny) * k, w = a.w * k, h = a.h * k;
+    const x0 = offX + (a.x - minx) * k, y0 = offY + (a.y - miny) * k, w = a.w * k, h = a.h * k;
     const sel = t.id === selected;
     // platos: con su caja de la cámara, o repartidos en la mesa si no la tienen
     const n = t.plates.length, cols = Math.ceil(Math.sqrt(n || 1)), rows = Math.ceil((n || 1) / cols);
     const P = t.plates.map((p, i) => {
       if (p.bbox) {
         const [bx, by, bw, bh] = p.bbox;
-        return {p, x: M + ((bx + bw / 2) * fw - minx) * k, y: offY + ((by + bh / 2) * fh - miny) * k,
+        return {p, x: offX + ((bx + bw / 2) * fw - minx) * k, y: offY + ((by + bh / 2) * fh - miny) * k,
                 r: clamp(Math.min(bw * fw, bh * fh) * k / 2, 9, 60)};
       }
       const c = i % cols, r = Math.floor(i / cols);
@@ -269,47 +366,104 @@ function renderFloor() {
     if (sel) out += `<rect x="${(x0 - seat - 26 * s).toFixed(1)}" y="${(y0 - seat - 26 * s).toFixed(1)}" width="${(w + 2 * seat + 52 * s).toFixed(1)}" height="${(h + 2 * seat + 52 * s).toFixed(1)}" rx="26" fill="#3E8BFF" fill-opacity=".05" stroke="#3E8BFF" stroke-opacity=".7" stroke-width="1.5" stroke-dasharray="2 5"/>`;
     out += `<rect class="tbl-top" x="${x0.toFixed(1)}" y="${y0.toFixed(1)}" width="${w.toFixed(1)}" height="${h.toFixed(1)}" rx="14" fill="url(#tableg)" stroke="#ffffff" stroke-opacity="${sel ? .35 : .1}"/>`;
     out += `<rect x="${(x0 + 8).toFixed(1)}" y="${(y0 + 8).toFixed(1)}" width="${Math.max(0, w - 16).toFixed(1)}" height="${(h * .32).toFixed(1)}" rx="10" fill="#ffffff" opacity=".035"/>`;
-    for (const q of P) out += plate(q.p, q.x, q.y, q.r, prevStates[q.p.id] && prevStates[q.p.id] !== q.p.state);
+    for (const q of P) out += plate(q.p, q.x, q.y, q.r, pending.floor.has(q.p.id));
     for (const o of people) out += person(o.x, o.y, o.rot, s);
     if (!n) out += `<text x="${(x0 + w / 2).toFixed(1)}" y="${(y0 + h / 2 + 4).toFixed(1)}" text-anchor="middle" class="svg-free">LIBRE</text>`;
-    out += `<text x="${x0.toFixed(1)}" y="${ly.toFixed(1)}" class="svg-label">${esc(t.name)}</text>`;
+    out += `<text x="${x0.toFixed(1)}" y="${ly.toFixed(1)}" class="svg-label">${esc(t.name)}${t.waiter ? " · " + esc(t.waiter) : ""}</text>`;
     out += `<text x="${(x0 + w).toFixed(1)}" y="${ly.toFixed(1)}" text-anchor="end" class="svg-status${sel ? " sel" : ""}">${esc(status)}</text>`;
+    const al = alertsOf(t.id)[0];  // el aviso más viejo de la mesa, debajo
+    if (al) out += tag(x0, y0 + h + (people.some(o => o.side === "b") ? seat + 26 * s : 22), alertTagText(al, t.name), alertColor(al.type));
     out += `</g>`;
   }
   svg.setAttribute("viewBox", `0 0 ${W} ${H.toFixed(0)}`);
   svg.innerHTML = out;
+  fitTags(svg);
+  pending.floor.clear();
 }
 
-// ---------- panel ----------
-function tableName(id) { const t = snap && snap.tables.find(x => x.id === id); return t ? t.name : id; }
-const occupied = t => t.plates.length > 0;
+// ---------- video ----------
+// El último frame difuminado (frame.jpg) con las capas encima: el recuadro, la etiqueta
+// y el aviso abierto de cada mesa y, por plato con caja, el anillo del estado y el
+// nombre. Un plato sin caja no se marca: solo se dibuja lo que la cámara ve de verdad.
+let camVersion = -1;  // la versión de la foto cuyo frame.jpg se pidió
+function renderVideo() {
+  const svg = $("overlay");
+  if (!snap) { svg.innerHTML = ""; return; }
+  const [fw, fh] = snap.frame;
+  $("video").style.aspectRatio = `${fw} / ${fh}`;
+  $("video").style.width = `min(100%, calc(72vh * ${(fw / fh).toFixed(4)}))`;  // una cámara vertical no más alta que la pantalla
+  svg.setAttribute("viewBox", `0 0 ${fw} ${fh}`);
+  $("cam-cap").textContent = `Cámara ${snap.camera} · caras difuminadas en la computadora`;
+  if (snap.version !== camVersion) {  // el frame de esta lectura; el navegador no lo cachea (no-store)
+    camVersion = snap.version;
+    $("cam").src = `${base}/frame.jpg?v=${snap.version}`;
+  }
+  let out = `<defs>${halos("v")}</defs>`;
+  for (const t of snap.tables) {
+    const sel = t.id === selected, x0 = t.box[0] * fw, y0 = t.box[1] * fh, w = t.box[2] * fw, h = t.box[3] * fh;
+    const status = TABLE_STATUS[t.status] || t.status;
+    out += `<g class="tbl" data-id="${esc(t.id)}" tabindex="0" role="button" aria-label="${esc(t.name)}, ${esc(status)}">`;
+    out += `<rect class="tbl-top" x="${x0.toFixed(1)}" y="${y0.toFixed(1)}" width="${w.toFixed(1)}" height="${h.toFixed(1)}" rx="10" fill="#3E8BFF" fill-opacity="${sel ? .08 : .02}" stroke="#ffffff" stroke-opacity="${sel ? .9 : .35}" stroke-width="2" stroke-dasharray="${sel ? "0" : "6 6"}"/>`;
+    out += tag(x0 + 8, y0 + 16, `${t.name}${t.waiter ? " · " + t.waiter : ""} · ${status.toUpperCase()}`, "#e9edf2", .92);
+    const al = alertsOf(t.id)[0];
+    if (al) out += tag(x0 + 8, y0 + h - 16, alertTagText(al, t.name), alertColor(al.type));
+    const labels = [];  // las etiquetas ya puestas en esta mesa [x0, x1, y], para no pisarlas
+    for (const p of t.plates) {
+      if (!p.bbox) continue;
+      const [bx, by, bw, bh] = p.bbox;
+      const px = (bx + bw / 2) * fw, py = (by + bh / 2) * fh, r = Math.min(bw * fw, bh * fh) / 2;
+      const st = stateOf(p), col = COLOR[st], R = r + 6, circ = 2 * Math.PI * R, f = p.fill_ratio ?? FILL[st];
+      out += `<g transform="translate(${px.toFixed(1)} ${py.toFixed(1)})"><g class="${pending.video.has(p.id) ? "changed" : ""}"><circle r="${(R + 10).toFixed(1)}" fill="url(#vhalo-${st})" opacity=".8"/><circle r="${R.toFixed(1)}" fill="none" stroke="${col}" stroke-opacity=".25" stroke-width="2.5"/>`;
+      if (f > .02) out += `<circle r="${R.toFixed(1)}" fill="none" stroke="${col}" stroke-width="3" stroke-linecap="round" stroke-dasharray="${(circ * f).toFixed(1)} ${circ.toFixed(1)}" transform="rotate(-90)"/>`;
+      const label = `${dishName(p)} · ${STATE_NAME[st].toUpperCase()}`, lw = label.length * 7.2 + 22;
+      const left = px + R + 8 + lw > fw;  // a la izquierda si a la derecha no entra
+      const lx0 = left ? px - R - 8 - lw : px + R + 8, lx1 = lx0 + lw;
+      // arriba del anillo; si ahí pisa la etiqueta de un plato vecino, abajo
+      let ly = py - (R - 2);
+      if (labels.some(([a, b, y]) => Math.abs(y - ly) < 24 && lx0 < b && lx1 > a)) ly = py + R + 14;
+      labels.push([lx0, lx1, ly]);
+      out += `</g>` + tag(left ? -(R + 8) : R + 8, ly - py, label, col, 1, left ? "end" : "start") + `</g>`;
+    }
+    out += `</g>`;
+  }
+  svg.innerHTML = out;
+  fitTags(svg);
+  pending.video.clear();
+}
+$("cam").onload = () => { $("cam").hidden = false; $("cam-wait").hidden = true; };
+$("cam").onerror = () => { $("cam").hidden = true; $("cam-wait").hidden = false; };  // todavía no hay frame (404)
 
+// ---------- panel ----------
 function renderSide() {
-  const t = snap && snap.tables.find(x => x.id === selected);
+  const t = tableOf(selected);
   if (!t) {
-    $("table-card").innerHTML = `<div class="card-h"><h2>Mesa</h2></div><p class="muted">Tocá una mesa del salón para ver sus platos.</p>`;
+    $("table-card").innerHTML = `<div class="card-h"><h2>Mesa</h2></div><p class="muted">${snap && snap.tables.length ? "Tocá una mesa del salón para ver sus platos." : "Las mesas aparecen cuando llega la primera lectura."}</p>`;
   } else {
-    let rows = t.plates.map((p, i) => {
-      const f = p.fill_ratio ?? FILL[p.state] ?? 0;
-      return `<div class="prow"><i style="background:${COLOR[p.state]}"></i><span class="nm">${esc(p.dish || "Plato " + (i + 1))}</span><span class="st">${STATE_NAME[p.state] || "Tapado"}</span>
-<div class="bar"><b style="width:${Math.round(f * 100)}%;background:${COLOR[p.state]}"></b></div></div>`;
-    }).join("");
-    if (!rows) rows = `<p class="muted">Sin platos en la mesa.</p>`;
-    const since = t.since ? `Sentados hace ${ago(t.since)}` : (t.people ? "Hay gente, sin platos" : "Mesa libre");
+    const rows = t.plates.map((p, i) => {
+      const st = stateOf(p), f = p.fill_ratio ?? FILL[st];
+      return `<div class="prow"><i style="background:${COLOR[st]}"></i><span class="nm">${esc(dishName(p, i))}</span><span class="st">${STATE_NAME[st]}</span>
+<div class="bar"><b style="width:${Math.round(f * 100)}%;background:${COLOR[st]}"></b></div></div>`;
+    }).join("") || `<p class="muted">${t.people ? "Hay gente, sin platos." : "Mesa libre."}</p>`;
+    const since = t.since ? "Sentados desde las " + hhmm(Date.parse(t.since)) : (t.people ? "Hay gente, sin platos" : "Libre");
     $("table-card").innerHTML = `<div class="card-h"><h2>${esc(t.name)}</h2><small>${t.waiter ? esc(t.waiter) + " · mozo" : esc(TABLE_STATUS[t.status] || "")}</small></div>
 ${rows}<div class="label num" style="margin-top:10px">${esc(since)} · ${t.plates.length} ${t.plates.length === 1 ? "plato" : "platos"}</div>`;
   }
 
-  const alerts = snap ? [...snap.alerts].reverse() : [];
+  // los avisos del más viejo al más nuevo: el que lleva más tiempo esperando es el que hay que atender
+  const alerts = snap ? [...snap.alerts].sort(byAge) : [];
+  const taken = a => a.answered_by ? `<span class="taken">Voy · ${esc(a.answered_by)}</span>`
+    : a.answered_by === null ? `<span class="taken none">Nadie respondió${tableWaiter(a.table_id) ? " · " + esc(tableWaiter(a.table_id)) : ""}</span>`
+    : "";  // el servidor no manda quién respondió (llega con C-5): no se dice nada
+  $("alerts-card").className = "card" + (alerts.length ? " warn" : "");
   $("alerts-card").innerHTML = `<div class="card-h"><h2>Avisos</h2><span class="label num">${alerts.length} ${alerts.length === 1 ? "abierto" : "abiertos"}</span></div>` +
-    (alerts.length ? alerts.map(a => `<div class="alert"><span class="sev" style="background:${ALERT_COLOR[a.type] || "#3E8BFF"}"></span>
-<p>${esc((ALERT_TITLE[a.type] || (n => n))(tableName(a.table_id)))}<small>${esc(a.message.replace(/^[^\p{L}\p{N}]+/u, ""))}</small></p><time class="num">${ago(a.created_at)}</time></div>`).join("")
-      : `<p class="muted">Nada pendiente. Cuando una mesa necesite al mozo aparece acá.</p>`);
+    (alerts.length ? alerts.map(a => `<div class="alert"><span class="sev" style="background:${alertColor(a.type)}"></span>
+<p>${esc(alertTitle(a.type, tableName(a.table_id)))}<small>${esc(plainMessage(a.message))}</small>${taken(a)}</p><time class="num">${ago(a.created_at)}</time></div>`).join("")
+      : `<p class="muted">Nada pendiente: todas las mesas atendidas.</p>`);
 
   const tables = snap ? snap.tables : [];
   const occ = tables.filter(occupied);
   const plates = tables.reduce((n, x) => n + x.plates.length, 0);
-  const sinces = occ.map(x => x.since).filter(Boolean).map(s => (nowTs() - Date.parse(s)) / 60000);
+  const sinces = tables.map(x => x.since).filter(Boolean).map(s => (nowTs() - Date.parse(s)) / 60000);  // el promedio se calcula acá
   const avg = sinces.length ? Math.round(sinces.reduce((a, b) => a + b, 0) / sinces.length) : null;
   $("shift-card").innerHTML = `<div class="card-h"><h2>Ahora</h2><span class="label">En el salón</span></div><div class="metrics">
 <div class="metric"><div class="label">Mesas ocupadas</div><div class="v num">${occ.length}<small>de ${tables.length}</small></div></div>
@@ -319,52 +473,90 @@ ${rows}<div class="label num" style="margin-top:10px">${esc(since)} · ${t.plate
 
   $("legend").innerHTML = STATES.map(s => `<span class="chip" style="color:${COLOR[s]}"><i style="background:${COLOR[s]}"></i><span>${STATE_NAME[s]} <b class="num">${snap ? snap.counts[s] : 0}</b></span></span>`).join("");
   $("occupied").textContent = snap ? `${occ.length} de ${tables.length} mesas ocupadas` : "";
-  if (snap) $("clock").textContent = new Date(nowTs()).toLocaleTimeString("es-UY", {hour: "2-digit", minute: "2-digit", hour12: false});
+  if (snap) $("clock").textContent = hhmm(nowTs());
   $("local").textContent = snap ? `${snap.local} · Salón` : "Salón";
+  // pasadas 3 lecturas + 10 s sin novedades, la cámara se da por caída
   const late = snap && snap.interval && (Date.now() - receivedAt) / 1000 > 3 * snap.interval + 10;
-  $("live").className = "live" + (connected && snap && !late ? " on" : "");
-  $("live-text").textContent = !connected ? "Reconectando" : late ? "Sin lecturas" : "Cámara en vivo";
+  $("live").className = "live" + (!connected ? (everConnected ? "" : " wait") : late ? "" : snap ? " on" : " wait");
+  $("live-text").textContent = !connected ? (everConnected ? "Reconectando" : "Conectando") : late ? "Sin lecturas" : snap ? "Cámara en vivo" : "Esperando lecturas";
   const conn = $("conn");
   conn.className = "conn" + (connected && !late ? "" : " off");
-  conn.textContent = !connected ? "Sin conexión con Servio, reintentando…"
+  conn.textContent = !connected ? (everConnected ? "Sin conexión con Servio, reintentando…" : "Conectando con Servio…")
     : !snap ? "Esperando la primera lectura"
-    : `Última lectura hace ${Math.round((Date.now() - receivedAt) / 1000)} s`;
+    : `${late ? "Sin lecturas desde hace" : "Última lectura hace"} ${ago(snap.ts)}${snap.interval ? " · cada " + snap.interval + " s" : ""}`;
 }
 
-// la mesa a mostrar si no eligieron ninguna: la del aviso más nuevo, o la primera ocupada
+// la mesa a mostrar si no eligieron ninguna (o la elegida ya no está): la del aviso
+// abierto más viejo, el que hay que atender; si no hay avisos, la primera ocupada
 function pickTable() {
   if (!snap) return;
   if (selected && snap.tables.some(t => t.id === selected)) return;
-  const last = snap.alerts[snap.alerts.length - 1];
-  selected = last ? last.table_id : (snap.tables.find(occupied) || snap.tables[0] || {}).id || null;
+  const oldest = [...snap.alerts].sort(byAge)[0];
+  selected = oldest ? oldest.table_id : (snap.tables.find(occupied) || snap.tables[0] || {}).id || null;
+}
+
+function render() {
+  pickTable();
+  const focused = document.activeElement && document.activeElement.closest ? document.activeElement.closest(".tbl") : null;
+  const focusedSvg = focused ? focused.closest("svg") : null;  // antes de redibujar: después el nodo ya no está
+  if ($("floor").hasAttribute("hidden")) dirty.floor = true; else renderFloor();
+  if ($("video").hasAttribute("hidden")) dirty.video = true; else renderVideo();
+  renderSide();
+  if (focusedSvg) { const g = focusedSvg.querySelector(`.tbl[data-id="${CSS.escape(selected ?? "")}"]`); if (g && g.focus) g.focus(); }
 }
 
 function apply(data) {
   if (!data) return;
-  if (snap) for (const t of snap.tables) for (const p of t.plates) prevStates[p.id] = p.state;
+  const first = snap === null;
   snap = data; receivedAt = Date.now();
-  pickTable(); renderFloor(); renderSide();
+  // lo que cambió de estado o es nuevo late una vez, en el modo que se esté mirando
+  // (y en el otro cuando se muestre, si todavía no se redibujó); la primera foto no
+  if (!first) for (const t of snap.tables) for (const p of t.plates) {
+    if (prevStates[p.id] !== p.state) { pending.floor.add(p.id); pending.video.add(p.id); }
+  }
   prevStates = {};
   for (const t of snap.tables) for (const p of t.plates) prevStates[p.id] = p.state;
+  // el segmento de modo solo si el servidor ofrece el frame (--web-video)
+  $("modes").hidden = !snap.video;
+  if (!snap.video && mode === "video") setMode("recon");
+  render();
 }
 
-$("floor").addEventListener("click", e => {
-  const g = e.target.closest(".tbl"); if (!g) return;
-  selected = g.dataset.id; renderFloor(); renderSide();
-});
-$("floor").addEventListener("keydown", e => {
-  if (e.key !== "Enter" && e.key !== " ") return;
-  const g = e.target.closest(".tbl"); if (!g) return;
-  e.preventDefault(); selected = g.dataset.id; renderFloor(); renderSide();
-});
+function setMode(m) {
+  if (m === "video" && !(snap && snap.video)) m = "recon";
+  mode = m;
+  $("floor").toggleAttribute("hidden", m !== "recon");
+  $("video").toggleAttribute("hidden", m !== "video");
+  if (m === "recon" && dirty.floor) { renderFloor(); dirty.floor = false; }
+  if (m === "video" && dirty.video) { renderVideo(); dirty.video = false; }
+  fitTags($("floor")); fitTags($("overlay"));
+  $("mode-recon").setAttribute("aria-pressed", String(m === "recon"));
+  $("mode-video").setAttribute("aria-pressed", String(m === "video"));
+  try { localStorage.setItem("salon-mode", m); } catch (e) {}
+}
+$("mode-recon").onclick = () => setMode("recon");
+$("mode-video").onclick = () => setMode("video");
 
-fetch(base + "/estado").then(r => r.json()).then(d => { connected = true; apply(d); renderSide(); }).catch(() => {});
+for (const id of ["floor", "overlay"]) {
+  $(id).addEventListener("click", e => { const g = e.target.closest(".tbl"); if (!g) return; selected = g.dataset.id; render(); });
+  $(id).addEventListener("keydown", e => {
+    if (e.key !== "Enter" && e.key !== " ") return;
+    const g = e.target.closest(".tbl"); if (!g) return;
+    e.preventDefault(); selected = g.dataset.id; render();
+  });
+}
+
+let wanted = "recon";
+try { wanted = localStorage.getItem("salon-mode") || "recon"; } catch (e) {}
+fetch(base + "/estado").then(r => r.json()).then(d => { connected = everConnected = true; apply(d); if (wanted === "video") setMode("video"); renderSide(); }).catch(() => {});
 const events = new EventSource(base + "/eventos");
-events.onopen = () => { connected = true; renderSide(); };
-events.onmessage = e => { connected = true; apply(JSON.parse(e.data)); };
+events.onopen = () => { connected = everConnected = true; renderSide(); };
+events.onmessage = e => { connected = everConnected = true; apply(JSON.parse(e.data)); };
 events.onerror = () => { connected = false; renderSide(); };
-renderFloor(); renderSide();
+render();
 setInterval(renderSide, 1000);
+// las etiquetas se midieron con la fuente de reserva: al llegar Barlow Condensed, de nuevo
+if (document.fonts) document.fonts.ready.then(() => { fitTags($("floor")); fitTags($("overlay")); });
 </script>
 </body>
 </html>

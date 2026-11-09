@@ -80,3 +80,9 @@ def test_load_settings_with_missing_config_file_logs_and_returns_none(tmp_path, 
         )
     assert result is None
     assert "Configuración" in caplog.text
+
+
+def test_web_video_flag_turns_on_the_video_mode_and_is_off_by_default():
+    assert cli.settings_from_args(parse("--source", "a.mp4")).web_video is False
+    loaded = cli.settings_from_args(parse("--source", "a.mp4", "--web-video"))
+    assert loaded.web_video is True

@@ -9,6 +9,11 @@ atiende, si hay gente y los avisos abiertos. `salon_web.py` la sirve en
 La foto se arma en el hilo del pipeline y queda inmutable: el servidor web solo
 la lee, así no comparte nada con las reglas de avisos.
 
+Modo video (F-1b, decisión 2): con `video=True` el feed guarda además el último
+frame **en memoria** como JPEG (`keep_frame`, lo llama el loop de `app.run` con el
+frame ya difuminado; uno solo, se pisa en cada lectura) y `salon_web.py` lo sirve
+en `/<local>/salon/frame.jpg`. Apagado, no se guarda ni se sirve nada.
+
 Coordenadas: todo normalizado 0–1 en la imagen de la cámara ([x, y, w, h]).
 """
 
@@ -18,10 +23,13 @@ from collections.abc import Iterable
 from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
+import numpy as np
+
 from servio_vision.alerts.models import TableObservation
 from servio_vision.alerts.state import table_status
 from servio_vision.restaurant import Restaurant, plate_order
 from servio_vision.schemas import PlateState
+from servio_vision.zones import to_jpeg
 
 if TYPE_CHECKING:
     from servio_vision.alerts.processor import AlertProcessor
@@ -61,9 +69,11 @@ def build_snapshot(
     processor: "AlertProcessor | None" = None,
     restaurant: Restaurant | None = None,
     interval: float | None = None,
+    video: bool = False,
 ) -> dict[str, Any]:
     """La foto del salón después de una lectura. `last`: la última observación de
-    cada mesa (una mesa que esta vez no se pudo leer muestra la anterior)."""
+    cada mesa (una mesa que esta vez no se pudo leer muestra la anterior). `video`:
+    si la página puede pedir `frame.jpg` (sin eso no muestra el modo video)."""
     zones = pipeline.zones
     tables: list[dict[str, Any]] = []
     counts: Counter[str] = Counter()
@@ -126,6 +136,7 @@ def build_snapshot(
         "camera": zones.camera_id,
         "ts": _iso(ts),
         "interval": interval,
+        "video": video,
         "frame": list(zones.frame_size),
         "tables": tables,
         "alerts": alerts,
@@ -143,15 +154,32 @@ class SalonFeed:
         processor: "AlertProcessor | None" = None,
         restaurant: Restaurant | None = None,
         interval: float | None = None,
+        video: bool = False,
     ) -> None:
         self.local_id = local_id
         self.processor = processor
         self.restaurant = restaurant
         self.interval = interval
+        self.video = video
         self._last: dict[str, TableObservation] = {}
         self._snapshot: dict[str, Any] | None = None
         self._version = 0
         self._changed = threading.Condition()
+        self._frame: bytes | None = None
+
+    def keep_frame(self, frame: np.ndarray) -> None:
+        """Guarda el frame (BGR, ya difuminado) como el JPEG que sirve `frame.jpg`.
+        Solo con `video`; si no, no se guarda nada (ni se codifica)."""
+        if not self.video:
+            return
+        jpeg = to_jpeg(frame)
+        with self._changed:
+            self._frame = jpeg
+
+    def frame_jpeg(self) -> bytes | None:
+        """El último frame guardado, o `None` (modo video apagado o sin lecturas)."""
+        with self._changed:
+            return self._frame
 
     def on_reading(
         self, pipeline: "Pipeline", observations: list[TableObservation], ts: datetime
@@ -168,6 +196,7 @@ class SalonFeed:
             self.processor,
             self.restaurant,
             self.interval,
+            self.video,
         )
         with self._changed:
             self._version += 1

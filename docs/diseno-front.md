@@ -48,19 +48,21 @@ Mismo contenido, otra composición: el salón arriba a todo el ancho, debajo la 
 
 ### Qué cambia respecto de lo implementado (`salon.html`)
 
-1. El modo **video** (hoy solo hay reconstrucción) y el segmento para cambiar.
-2. La **etiqueta de aviso** sobre la mesa (hoy el aviso solo está en el panel).
-3. La **marca de las mesas del mozo** (necesita saber quién mira: login de R-1).
-4. En el aviso, **quién lo tomó** («Voy · Juan») o que nadie respondió (necesita C-5).
-5. El dock sticky en celular.
-6. En el panel, los avisos del **más viejo al más nuevo** (hoy `salon.html` pone el más nuevo arriba): el que lleva más tiempo esperando es el que hay que atender.
+Hecho en F-1b (sobre `salon.html` y `salon_web.py`; `vista_demo.py` queda como herramienta de demo con video):
 
-Lo que necesita del servidor, además de lo que `/estado` ya manda (`fill_ratio`, `since` y `created_at` en ISO, `dish` que puede ser `null`, `message`, `waiter` por mesa):
+1. ✅ El modo **video** y el segmento para cambiar. El segmento solo aparece si el servidor ofrece el frame (`"video": true` en `/estado`, que sale de `--web-video`); el modo elegido se recuerda en el navegador. Una cámara vertical no se dibuja más alta que la pantalla (el video se acota al 72 % del alto y se centra); las etiquetas de dos platos vecinos no se pisan (la segunda baja debajo del anillo). En la reconstrucción, el salón tampoco queda más alto que ancho: se acota y se centra.
+2. ✅ La **etiqueta de aviso** debajo de la mesa (el aviso más viejo de esa mesa), en los dos modos.
+3. ✖ La **marca de las mesas del mozo**: no va. La pantalla es del encargado (decisión 1), el mozo no la mira; todas las mesas sin marca, y la etiqueta de la mesa lleva el mozo siempre («Mesa 1 · Juan»).
+4. ✅ En el aviso, **quién lo tomó** («Voy · Juan») o «Nadie respondió · mozo»: la página lo muestra si `answered_by` viene y no dice nada si no viene. El servidor lo agrega C-5.
+5. ✅ El dock sticky en celular; los números de «Ahora» en una fila de cuatro.
+6. ✅ En el panel, los avisos del **más viejo al más nuevo**, y la mesa elegida al entrar es la del aviso más viejo (`pickTable`). Sin avisos: «Nada pendiente: todas las mesas atendidas.»
 
-- `GET /<local>/salon/frame.jpg`: el último frame difuminado (modo video), solo con `--web-video` (ver arriba).
-- `answered_by` en cada aviso (el nombre que ya usa `alert_feedback` en el log): quién respondió «Voy» (C-5); `null` si nadie respondió todavía. Con `null` el panel muestra «Nadie respondió · mozo» (el mozo sale de la mesa del aviso; el aviso no lo trae); si el campo no viene (el servidor de hoy), no dice nada: no sabe.
+Lo que el servidor manda, además de lo que `/estado` ya mandaba (`fill_ratio`, `since` y `created_at` en ISO, `dish` que puede ser `null`, `message`, `waiter` por mesa):
+
+- `"video"` en la foto: si la página puede pedir `frame.jpg`.
+- `GET /<local>/salon/frame.jpg`: el último frame difuminado (modo video), solo con `--web-video` (ver arriba); sin el flag, 404. El loop de `app.run` se lo deja a `SalonFeed.keep_frame` antes de procesar la lectura, así cuando la página recibe la foto nueva el frame que pide ya es el de esa lectura. La página lo pide con `?v=<version>` para que el navegador no reuse el anterior.
+- `answered_by` en cada aviso (el nombre que ya usa `alert_feedback` en el log): quién respondió «Voy» (C-5); `null` si nadie respondió todavía. Con `null` el panel muestra «Nadie respondió · mozo» (el mozo sale de la mesa del aviso; el aviso no lo trae); si el campo no viene (el servidor de hoy), no dice nada: no sabe. **Pendiente de C-5.**
 - Las horas (`since`, `created_at`, `ts`) vienen en UTC y la pantalla las muestra en la hora del navegador, que es la del local.
-- Quién mira (para marcar sus mesas): el usuario de R-1. Sin login, todas las mesas sin marca.
 
 Lo demás (colores, tipografías Barlow y Barlow Condensed, el dibujo de mesas, sillas, personas y platos, la animación de cambio) es lo que ya está: el prototipo es una **copia** del código de dibujo de `salon.html` al día de hoy (`plate()`, `person()`, `chair()`, `renderFloor()`, colores, `FILL`); si se tocan, `salon.html` manda (este PR le arregla una cosa: `.changed` con `transform-box: fill-box; transform-origin: center`, sin eso el `pop` corría el plato en vez de hacerlo latir). No comparten archivo a propósito: el prototipo se publica solo, sin el servidor; y los datos de ejemplo del prototipo tienen la forma real de `/estado`, así que lo que se implemente a partir de él usa los campos que existen.
 

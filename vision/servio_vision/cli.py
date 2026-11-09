@@ -85,6 +85,12 @@ def build_parser(
         "--web-host",
         help="dónde escucha --web (por defecto 127.0.0.1; 0.0.0.0 para la red)",
     )
+    parser.add_argument(
+        "--web-video",
+        action="store_true",
+        help="con --web, servir también la imagen de la cámara (caras difuminadas) "
+        "para el modo video de la vista; solo para armar la cámara o una demo",
+    )
     return parser
 
 
@@ -119,6 +125,7 @@ def settings_from_args(args: argparse.Namespace) -> Settings:
         yolo_conf=args.yolo_conf,
         web_port=getattr(args, "web", None),
         web_host=getattr(args, "web_host", None),
+        web_video=True if getattr(args, "web_video", False) else None,
         record=getattr(args, "record", None),  # solo main.py lo agrega
     )
 
