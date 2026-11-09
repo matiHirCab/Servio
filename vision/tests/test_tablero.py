@@ -563,6 +563,7 @@ def test_release_of_a_stale_lock_does_not_need_the_same_agent():
     )
     board.take("cccccc05", "viejo")
     api.cards["c5"]["idList"] = "L3"  # la arrastraron de vuelta a mano
+    api.comments["c5"][-1]["date"] = "2026-01-01T00:00:00.000Z"  # el candado es viejo
     board.release("cccccc05", "colgada", agent="yo")  # lo que la herramienta recomienda
     board.take("cccccc05", "yo")
     assert api.list_of("cccccc05") == "In progress"
@@ -612,6 +613,87 @@ def test_network_error_in_the_second_look_rolls_the_card_back():
         board.take("cccccc05", "yo")
     assert api.list_of("cccccc05").startswith("Semana 3")
     assert api.comments["c5"][-1]["data"]["text"].startswith("🔓")
+
+
+def test_first_occurrence_of_a_header_field_wins():
+    desc = (
+        "**Toca:** `vision/a.py`\n**Depende de:** C-5 (cccccc05)\n\n"
+        "**Depende de** lo que diga Tomás sobre C-7 (cccccc07).\n**Toca** también `docs/x.md`."
+    )
+    h = tablero.parse_header(desc)
+    assert h.touches == ["vision/a.py"]
+    assert h.depends_on == ["cccccc05"]
+
+
+def test_glob_without_folder_touches_everything():
+    assert tablero.paths_overlap(["**/*.md"], ["docs/a.md"])
+
+
+def test_release_owner_guard_does_not_expire_while_in_progress():
+    api, board = board_with(
+        card("a4", "aaaaaaa4", "A-4", "", "LD"),
+        card("c5", "cccccc05", "P1 · C-5 · Voy", HEADER_C5),
+    )
+    board.take("cccccc05", "ana")
+    api.comments["c5"][-1]["date"] = (
+        "2026-01-01T00:00:00.000Z"  # ana lleva meses con ella
+    )
+    with pytest.raises(SystemExit, match="la tiene tomada ana"):
+        board.release("cccccc05", "", agent="beto")
+
+
+def test_release_does_not_wipe_a_fresh_lock_of_a_take_in_flight():
+    api, board = board_with(
+        card("a4", "aaaaaaa4", "A-4", "", "LD"),
+        card("c5", "cccccc05", "P1 · C-5 · Voy", HEADER_C5),
+    )
+    api.add_comment(
+        "c5", tablero.lock_text("ffffffffffff", "ana", "Semana 3", datetime.now(UTC))
+    )
+    with pytest.raises(SystemExit, match="la está tomando ahora mismo"):
+        board.release("cccccc05", "", agent="beto")
+    board.release("cccccc05", "", agent="beto", force=True)
+    assert api.comments["c5"][-1]["data"]["text"].startswith("🔓")
+
+
+def test_take_waits_for_its_own_lock_to_be_visible(monkeypatch):
+    api, board = board_with(
+        card("a4", "aaaaaaa4", "A-4", "", "LD"),
+        card("c5", "cccccc05", "P1 · C-5 · Voy", HEADER_C5),
+    )
+    real_get = api.get
+    lag = {"reads": 0}
+
+    def lagging(path, **params):
+        rows = real_get(path, **params)
+        if path.endswith("/actions"):
+            lag["reads"] += 1
+            if lag["reads"] == 1:  # la primera lectura todavía no muestra el comentario
+                return rows[:-1]
+        return rows
+
+    api.get = lagging
+    monkeypatch.setattr(tablero.time, "sleep", lambda s: None)
+    board.take("cccccc05", "yo")
+    assert api.list_of("cccccc05") == "In progress"
+
+
+def test_take_fails_clearly_if_the_lock_never_shows_up(monkeypatch):
+    api, board = board_with(
+        card("a4", "aaaaaaa4", "A-4", "", "LD"),
+        card("c5", "cccccc05", "P1 · C-5 · Voy", HEADER_C5),
+    )
+    real_get = api.get
+
+    def blind(path, **params):
+        rows = real_get(path, **params)
+        return [] if path.endswith("/actions") else rows
+
+    api.get = blind
+    monkeypatch.setattr(tablero.time, "sleep", lambda s: None)
+    with pytest.raises(SystemExit, match="no muestra el candado"):
+        board.take("cccccc05", "yo")
+    assert api.list_of("cccccc05").startswith("Semana 3")
 
 
 def test_credentials_from_env_files(tmp_path):
@@ -816,6 +898,7 @@ def test_release_cleans_a_stale_lock_on_a_card_moved_back_by_hand():
     )
     board.take("cccccc05", "yo")
     api.cards["c5"]["idList"] = "L3"  # alguien la arrastró de vuelta sin comentar 🔓
+    api.comments["c5"][-1]["date"] = "2026-01-01T00:00:00.000Z"  # el candado es viejo
     with pytest.raises(SystemExit, match="la tomó yo justo antes"):
         board.take("cccccc05", "otro")
     board.release("cccccc05", "quedó colgada")  # limpia el candado, no mueve nada

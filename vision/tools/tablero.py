@@ -79,6 +79,7 @@ LOCK = "🔒"
 UNLOCK = "🔓"
 DONE_MARK = "✅"
 RETRIES_429 = 3  # reintentos cuando Trello devuelve «demasiadas llamadas»
+LOCK_READ_RETRIES = 4  # lecturas hasta ver el candado propio
 STALE_LOCK_MIN = (
     10  # un candado de más que esto en una tarjeta que no está en curso es viejo
 )
@@ -145,16 +146,26 @@ def parse_header(desc: str) -> Header:
     """Lee los campos `**Clave:** valor` del encabezado de la descripción. Lo de
     abajo es texto libre y puede nombrar otras tarjetas sin que cuenten."""
     header = Header()
+    seen: set[str] = set()
     for m in _HEADER_FIELD.finditer(header_lines(desc)):
         key = m.group("key").strip().lower()
         value = m.group("value").strip(" ·")
         if key.startswith("depende"):
+            key = "depende"
+        elif key.startswith(("área", "area")):
+            key = "area"
+        elif key.startswith("decision"):
+            key = "decisiones"
+        if key in seen:  # una negrita del cuerpo no pisa al encabezado
+            continue
+        seen.add(key)
+        if key == "depende":
             header.depends_on = short_links(value)
         elif key == "toca":
             header.touches = [p.strip() for p in _BACKTICKED.findall(value)]
-        elif key.startswith(("área", "area")):
+        elif key == "area":
             header.area = value
-        elif key.startswith("decision"):
+        elif key == "decisiones":
             header.decisions = value
     return header
 
@@ -170,7 +181,13 @@ def paths_overlap(a: list[str], b: list[str]) -> list[str]:
     for x in a:
         for y in b:
             xn, yn = _norm(x), _norm(y)
-            if xn == yn or xn.startswith(yn + "/") or yn.startswith(xn + "/"):
+            if (
+                not xn
+                or not yn
+                or xn == yn
+                or xn.startswith(yn + "/")
+                or yn.startswith(xn + "/")
+            ):  # «*.py», «**/*.md»: sin carpeta, toca todo
                 hits.append(f"{x} ~ {y}")
     return hits
 
@@ -455,6 +472,18 @@ class Board:
         )
         return [(r["date"], r["data"]["text"]) for r in rows]
 
+    def _comments_with(self, card: Card, token: str) -> list[tuple[str, str]]:
+        """Los comentarios, esperando a que el candado propio aparezca (Trello puede
+        tardar un instante en listar un comentario recién hecho)."""
+        for attempt in range(LOCK_READ_RETRIES):
+            comments = self.comments(card)
+            if any((lock := parse_lock(t)) and lock[0] == token for _d, t in comments):
+                return comments
+            time.sleep(0.5 * (attempt + 1))
+        raise SystemExit(
+            f"{card.name}: Trello no muestra el candado recién puesto; probá de nuevo en un rato."
+        )
+
     @staticmethod
     def done_links(cards: list[Card]) -> set[str]:
         return {c.short for c in cards if c.list_name == LIST_DONE or c.closed}
@@ -599,7 +628,7 @@ class Board:
         token = uuid.uuid4().hex[:12]
         origin = card.list_name
         mine = self.comment(card, lock_text(token, agent, origin, datetime.now(UTC)))
-        comments = self.comments(card)
+        comments = self._comments_with(card, token)
         won = winner(comments)
         if (
             won is None
@@ -608,7 +637,7 @@ class Board:
             mine = self.comment(
                 card, lock_text(token, agent, origin, datetime.now(UTC))
             )
-            comments = self.comments(card)
+            comments = self._comments_with(card, token)
             won = winner(comments)
         if won is None or won[0] != token:
             self.api.delete(f"/actions/{mine}")  # no dejar candados huérfanos
@@ -686,25 +715,25 @@ class Board:
     ) -> Card:
         card = self.card(short)
         won = winner(comments := self.comments(card))
-        fresh = (
-            won is not None
-            and card.list_name == LIST_IN_PROGRESS
-            and lock_age_minutes(comments, won[0]) <= STALE_LOCK_MIN
-        )
-        if fresh and won is not None and agent and won[1] != agent and not force:
-            raise SystemExit(
-                f"{card.name}: la tiene tomada {won[1]}, no {agent}. Con --forzar se suelta igual."
-            )
         if card.list_name != LIST_IN_PROGRESS:
             if won is None:
                 raise SystemExit(
                     f"{card.name}: no está en curso (está en «{card.list_name}»)."
+                )
+            if lock_age_minutes(comments, won[0]) <= STALE_LOCK_MIN and not force:
+                raise SystemExit(
+                    f"{card.name}: {won[1]} la está tomando ahora mismo (candado de hace un "
+                    "momento); no es un candado viejo."
                 )
             # candado viejo en una tarjeta que ya volvió a su lista: solo se limpia
             self.comment(
                 card, f"{UNLOCK} candado viejo limpiado: {reason or 'sin motivo'}"
             )
             return card
+        if won is not None and agent and won[1] != agent and not force:
+            raise SystemExit(
+                f"{card.name}: la tiene tomada {won[1]}, no {agent}. Con --forzar se suelta igual."
+            )
         origin = won[2] if won and won[2] in self.lists else None
         if origin is None:  # la pusieron en curso a mano: a la primera lista de trabajo
             work = self.work_lists()
@@ -825,8 +854,12 @@ def cmd_listar(board: Board, args: argparse.Namespace) -> int:
 
 
 def cmd_ver(board: Board, args: argparse.Namespace) -> int:
-    card = board.card(args.tarjeta)
     cards = board.cards()
+    card = next(
+        (c for c in cards if c.short == args.tarjeta or c.id == args.tarjeta), None
+    )
+    if card is None:
+        raise SystemExit(f"No hay una tarjeta {args.tarjeta} en el tablero.")
     state, why = board.status(card, cards)
     print(
         f"{card.name}\nhttps://trello.com/c/{card.short} · {card.list_name} · {state}"
