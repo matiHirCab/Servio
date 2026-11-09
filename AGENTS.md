@@ -24,6 +24,8 @@ Contexto: MVP de hackathon, 24 horas, equipo de 3 personas (Tomás, Matías, Jes
 | [docs/context/12-roles.md](docs/context/12-roles.md) | Vas a mostrar algo según quién mira (mozo, encargado, dueño): vistas, métricas y avisos por rol, y dónde se configura. |
 | [docs/context/13-metricas.md](docs/context/13-metricas.md) | Vas a calcular o mostrar una métrica: lista cerrada de M-1, fórmula, de qué tabla sale, qué rol la ve y en qué pantalla. |
 | [docs/roadmap-producto.md](docs/roadmap-producto.md) | Vas a hacer una tarea de después de la hackathon (fases A–E): arquitectura, banco de pruebas en casa, mejoras y funciones nuevas. |
+| [docs/decisiones-25-11.md](docs/decisiones-25-11.md) | **Siempre, antes de tomar una tarjeta:** las decisiones de producto y negocio del equipo (8/11). Si una tarjeta o un doc de contexto dice otra cosa, gana este archivo. Cada tarjeta nombra los números que le aplican. |
+| [docs/diseno-front.md](docs/diseno-front.md) | Vas a tocar el salón en vivo, el dashboard o los mensajes de Telegram: qué se decidió de diseño (F-1, F-2, F-3) y los prototipos de `docs/prototipos/`. |
 | [docs/montaje-camara.md](docs/montaje-camara.md) | Vas a armar la cámara en una casa: altura, ángulo, luz, cámaras probadas y el chequeo de encuadre. |
 
 ## Tablero y trabajo en paralelo

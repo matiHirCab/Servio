@@ -67,7 +67,7 @@ _BACKTICKED = re.compile(r"`([^`]+)`")
 _HEADER_FIELD = re.compile(
     r"\*\*(?P<key>[^*:]+):\*\*(?P<value>.*?)(?=\*\*[^*:]+:\*\*|$)"
 )
-_CODE = re.compile(r"\b([A-Z]-\d+[a-z]?)\b")
+_CODE = re.compile(r"\b([A-Z]{1,2}-\d+[a-z]?)\b")
 _LOCK_LINE = re.compile(
     rf"^{LOCK} (?P<token>[0-9a-f]{{12}}) · (?P<agent>.+?) · desde «(?P<origin>[^»]*)»"
 )
@@ -657,6 +657,9 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
+    for stream in (sys.stdout, sys.stderr):  # la consola de Windows no siempre es UTF-8
+        if hasattr(stream, "reconfigure"):
+            stream.reconfigure(errors="replace")
     args = build_parser().parse_args(argv)
     key, token = credentials(Path(__file__).resolve().parent)
     board = Board(Api(key, token))

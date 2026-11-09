@@ -183,6 +183,7 @@ def test_paths_overlap_prefix_and_equal():
 def test_card_code_and_slug():
     assert tablero.card_code("P1 · C-5 · «Voy», «Listo» y «No hacía falta»") == "C-5"
     assert tablero.card_code("P1 · F-1b · Implementar la vista") == "F-1b"
+    assert tablero.card_code("P3 · PR-29 · Decidir el PR #29") == "PR-29"
     assert tablero.card_code("Cámara armada en cada casa") is None
     assert (
         tablero.slug("P1 · C-5 · «Voy», «Listo» y «No hacía falta»")
