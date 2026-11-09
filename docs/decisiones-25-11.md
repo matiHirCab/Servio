@@ -6,43 +6,43 @@ Fuentes: [context/01-producto.md](context/01-producto.md), [context/05-reglas-al
 
 ## Resumen en una pantalla
 
-| # | Decisión | Propuesta |
+| # | Qué se decidía | Decisión |
 |---|---|---|
 | **Validar los diseños** | | |
-| 1 | F-1, el salón: ¿quién lo mira y dónde? | Pantalla del encargado y de la venta; el mozo mira el reloj |
-| 2 | F-1: ¿modo video con caras difuminadas o solo reconstrucción? | Reconstrucción por defecto; video solo en la demo |
-| 3 | F-2, el dashboard: ¿son estas las 17 métricas? ¿cuál es el titular? | Titular: «tus mesas esperan X min menos»; el resto queda |
-| 4 | F-2: ¿qué se muestra el primer día, sin datos? | Tarjetas punteadas con el porqué, nunca un número inventado |
-| 5 | F-3: ¿respuesta con una palabra o botones? | Palabra suelta en todo; botones de regalo en el celular |
-| 6 | F-3: tiempos de recordatorio y escalado | 3 min, dos recordatorios, escalado a los 9 min |
+| 1 | F-1, el salón: ¿quién lo mira y dónde? | Pantalla fija en la barra o la cocina, para el encargado; el mozo no la mira |
+| 2 | F-1: ¿modo video con caras difuminadas o solo reconstrucción? | Reconstrucción por defecto; video solo con flag, para demo y calibrar |
+| 3 | F-2, el dashboard: ¿son estas las 17 métricas? ¿cuál es el titular? | Las 17 quedan; la plata con la carta con precios (la cargamos nosotros, después editable); sin identificar el plato, «X platos volvieron llenos» |
+| 4 | F-2: ¿qué se muestra el primer día, sin datos? | Tarjetas visibles con «falta recolectar datos»; selector de período (hoy, día, semana, mes, rango) |
+| 5 | F-3: ¿respuesta con una palabra o botones? | Botones «Voy», «Listo», «No hacía falta» + texto libre; la cámara cierra; cada mozo recibe solo sus mesas; «Mesa X» en negrita |
+| 6 | F-3: tiempos de recordatorio y escalado | Configurables por local, con los valores de hoy como default |
 | **Casos de la vida real** | | |
-| 7 | Plato compartido o fuente al medio | Nada que cargue el restaurante: regla + comportamiento |
-| 8 | Pan, guarnición, salsas, lo que se deja a propósito | No cuenta como plato |
-| 9 | Alguien se levanta (baño, fumar) con el plato lleno | No avisar sin gente; retomar al volver |
-| 10 | Mesa con platos y sin gente (se fueron sin pagar / ya pagaron) | Avisar «retirar» a los 2 min, es trabajo del mozo igual |
-| 11 | Postre, café, vasos, tazas | Café y vasos no se miran hasta D-7; postre es un plato más |
-| 12 | Mesa grande (8 personas, platos que llegan de a tandas) | Las reglas son por plato: ya funciona; confirmar «mesa terminó» |
-| 13 | Cliente que rechaza el plato (se lo llevan lleno) | «Sigue lleno» se cierra solo; el mozo marca el motivo |
-| 14 | Mesas que se juntan o se mueven | Zonas fijas por local; juntar mesas es un caso de D-2 |
+| 7 | Plato compartido o fuente al medio | (b) comportamiento + (c) el modelo dice si parece fuente o tabla; nada que cargue el restaurante |
+| 8 | Pan, guarnición, salsas, lo que se deja a propósito | No cuentan canastas ni paneras; un bowl con comida sí (va por contenido, no por forma) |
+| 9 | Alguien se levanta (baño, fumar) con el plato lleno | Pausar el reloj de «sigue lleno» mientras no hay nadie |
+| 10 | Mesa con platos y sin gente (se fueron sin pagar / ya pagaron) | Configurable X: avisar si pasan X minutos sin gente y con platos |
+| 11 | Postre, café, vasos, tazas | Sin estado «sobremesa»; solo mesa vacía del todo |
+| 12 | Mesa grande (8 personas, platos que llegan de a tandas) | Estado «terminando» para mesas de N+ (default 4) al 80 %; pasa a «mesa terminó» tras un tiempo; todo configurable |
+| 13 | Cliente que rechaza el plato (se lo llevan lleno) | Posible devolución sin preguntar motivo; detectar el acto de comer por los cubiertos |
+| 14 | Mesas que se juntan o se mueven | Detección automática de mesas; el admin corrige a mano desde la vista |
 | **Opciones técnicas con impacto en el negocio** | | |
-| 15 | Detector de platos: seguir con YOLO entrenado, YOLO-World, entrenar más | Probar YOLO-World; entrenar solo con fotos propias (B-3) |
-| 16 | Modelo que mira el plato: Haiku, Sonnet, modelo propio | Haiku; modelo propio (D-8) cuando haya 1.000 recortes etiquetados |
-| 17 | Qué va a la nube: solo recortes de platos, o la mesa entera | Solo recortes; la mesa entera nunca en producción |
-| 18 | Cadencia de lectura y costo por mesa por hora | 30 s; el costo medido en B-3 fija el precio mínimo |
+| 15 | Detector de platos: seguir con YOLO entrenado, YOLO-World, entrenar más | Benchmark de detectores en paralelo, sin frenar nada; solución agnóstica al detector |
+| 16 | Modelo que mira el plato: Haiku, Sonnet, modelo propio | Haiku; Sonnet y modelo propio descartados |
+| 17 | Qué va a la nube: solo recortes de platos, o la mesa entera | Mesa entera al modelo con las personas tapadas por un bloque de color; manos visibles (detrás del flag hasta resolver 26) |
+| 18 | Cadencia de lectura y costo por mesa por hora | Sin decisión; si se mide el cubierto hacen falta fotos más seguidas |
 | **Negocio** | | |
-| 19 | Cliente objetivo del primer piloto | Restaurante de 15 a 40 mesas en Montevideo, con encargado |
-| 20 | Qué se vende: el número de cabecera | Minutos de mesa terminada sin atender, antes vs. después |
-| 21 | Precio y modelo de cobro | Por mes por local, escalonado por mesas; piloto gratis 4 semanas |
-| 22 | Hardware: celular con DroidCam o cámara IP, quién la pone | Cámara IP que ponemos nosotros, el celular solo para probar |
-| 23 | Canal al mozo: Telegram, WhatsApp, app propia | Telegram ahora, WhatsApp cuando haya cliente que lo pida |
-| 24 | Reloj: ¿se vende con reloj o con el celular en el bolsillo? | El celular alcanza para vender; el reloj es el «premium» |
-| 25 | Integración con la comanda (POS) | Sin POS en el piloto: la carta y los mozos se cargan una vez |
-| 26 | Legal: cartel, inscripción en la URCDP, aviso a los mozos, abogado | Paquete mínimo antes del piloto; abogado antes de cobrar |
-| 27 | Datos de los mozos: ¿se muestran por nombre al dueño? | Sí al encargado y dueño; nunca al grupo de mozos |
-| 28 | Piloto: modo sombra primero y cuánto dura | 1 semana en sombra, 3 con avisos, una hoja de resultados |
+| 19 | Cliente objetivo del primer piloto | No se define cliente ahora: todo es configurable |
+| 20 | Qué se vende: el número de cabecera | Para después del 25/11 |
+| 21 | Precio y modelo de cobro | Para después del 25/11 |
+| 22 | Hardware: celular con DroidCam o cámara IP, quién la pone | Para después del 25/11 |
+| 23 | Canal al mozo: Telegram, WhatsApp, app propia | Telegram |
+| 24 | Reloj: ¿se vende con reloj o con el celular en el bolsillo? | Reloj y celular, sin limitar |
+| 25 | Integración con la comanda (POS) | Sin POS en el piloto; el software preparado para integrar; sin comanda nada rompe |
+| 26 | Legal: cartel, inscripción en la URCDP, aviso a los mozos, abogado | Para después del 25/11 |
+| 27 | Datos de los mozos: ¿se muestran por nombre al dueño? | El mozo no ve métricas, ninguna; `/metricas` solo a encargado y dueño |
+| 28 | Piloto: modo sombra primero y cuánto dura | Para después del 25/11 |
 | **El 25/11** | | |
-| 29 | Qué muestra la demo | Una comida real: salón + aviso contestado + dashboard |
-| 30 | Qué tiene que decir la hoja de métricas | Un número antes/después, el costo por mesa, el acierto |
+| 29 | Qué muestra la demo | Sin decisión puntual: va la propuesta (comida real, 3 minutos) |
+| 30 | Qué tiene que decir la hoja de métricas | Sin decisión puntual: lo esperado quedó en 3 y 4 |
 
 ---
 
@@ -94,7 +94,7 @@ Los tres diseños están en [diseno-front.md](diseno-front.md) con un prototipo 
 
 **Propuesta.** La del diseño. Y una regla de negocio: contestar es opcional, la cámara cierra los avisos sola cuando ve el plato retirado. El mozo que no contesta nunca no rompe nada; solo no tiene métrica de tiempo de respuesta.
 
-**Decisión:** Botones («Voy», «Listo», «No hacía falta») más el texto libre de qué pasó con el plato, como hoy. El aviso se cierra solo cuando la cámara ve que el plato se sacó. Cada mozo recibe solo los avisos de **sus** mesas; si no hay mesas definidas por mozo, todo va a un solo chat. No hay pregunta «¿Mesa 2 o Mesa 3?»: «Mesa X» va en negrita al principio del mensaje para que resalte.
+**Decisión:** Botones («Voy», «Listo», «No hacía falta») más el texto libre de qué pasó con el plato, como hoy. El aviso se cierra solo cuando la cámara ve que el plato se sacó. Cada mozo recibe solo los avisos de **sus** mesas; si no hay mesas definidas por mozo, todo va a un solo chat. No hay pregunta «¿Mesa 2 o Mesa 3?»: «Mesa X» va en negrita al principio del mensaje para que resalte. *Cómo se aplica (completado al revisar, a confirmar):* los botones llevan el aviso al que responden, así que no hay ambigüedad; una respuesta escrita (respuesta rápida del reloj, dictado) se aplica al aviso **más reciente** de ese mozo con aviso abierto, y si quería otro usa el botón. Si en el reloj no se ven los botones (lo que F-3 asume hasta probarlo), ahí todo entra por este camino.
 
 ### 6. F-3: tiempos de recordatorio y escalado
 
@@ -140,7 +140,7 @@ Lo que Servio tiene que hacer cuando pasa algo que no es «dos personas, dos pla
 
 **Propuesta.** Pausar el reloj mientras no hay nadie: si alguien se fue 8 minutos y vuelve, no le cae «¿está todo bien?» a los 2 minutos de sentarse. Aviso esperado: ninguno mientras no hay nadie; «sigue lleno» solo si el plato sigue lleno 10 minutos **con gente**.
 
-**Decisión:** Pausar el reloj del plato mientras no hay nadie, nada más.
+**Decisión:** Pausar el reloj del plato mientras no hay nadie, nada más. *Alcance (completado al revisar):* se pausa el reloj de «sigue lleno» (T2), que es el único que necesita gente; el de «retirar» (T1) sigue corriendo, porque un plato vacío sin gente igual hay que retirarlo (punto 10 y `05-reglas-alertas.md`).
 
 ### 10. Mesa con platos y sin gente
 
@@ -166,7 +166,7 @@ Lo que Servio tiene que hacer cuando pasa algo que no es «dos personas, dos pla
 
 **Propuesta.** Confirmar que así está bien. Un posible cambio: «mesa terminó» con el 80 % de los platos vacíos en mesas de 6 o más, para que el mozo vaya con la cuenta antes. Para el piloto, no.
 
-**Decisión:** Estado «terminando» solo para mesas de N o más personas (default 4): si terminó el 80 %, la mesa pasa a «terminando»; si está mucho tiempo así, pasa a «mesa terminó». El porcentaje, el N y el tiempo son configurables por el admin.
+**Decisión:** Estado «terminando» solo para mesas de N o más personas (default 4): si terminó el 80 %, la mesa pasa a «terminando»; si está mucho tiempo así, pasa a «mesa terminó». El porcentaje, el N y el tiempo son configurables por el admin. *Para implementar (completado al revisar):* default del tiempo 5 min; «terminando» es un estado de mesa nuevo al lado de `por_terminar` (que sigue siendo solo el color) y cambia cuándo se abre `mesa_terminada` en mesas grandes, así que el PR actualiza `03-contratos.md`, `05-reglas-alertas.md` y los fixtures en el mismo paso (regla 1 de `AGENTS.md`).
 
 ### 13. Cliente que rechaza el plato
 
@@ -192,26 +192,26 @@ Lo que Servio tiene que hacer cuando pasa algo que no es «dos personas, dos pla
 
 ### 15. Detector de platos
 
-**Contexto.** El YOLO del repo (`best.pt`) sabe una sola cosa, «plato», entrenado en Colab con fotos de datasets públicos. No sabemos si detecta una tabla, una fuente o un bowl (casos 7 y 8). Opciones en la industria hoy:
+**Contexto.** El YOLO del repo (`best.pt`, entrenado en Colab con datasets públicos) sabe dos clases, comida y comida terminada: ubica los platos y, si Claude falla o tarda, su clase es el plan B para el estado (`04-vision.md`). Sin esos pesos, el pipeline ya usa YOLOE con las palabras «plate» y «bowl» (detección por texto, sin entrenar). Ninguno de los dos sabe decir «fuente», «tabla» o «canasta», que es lo que piden los casos 7 y 8. Opciones en la industria hoy:
 
 | Opción | Qué da | Qué cuesta | Licencia |
 |---|---|---|---|
-| Seguir con `best.pt` y entrenarle más clases | Lo que etiquetemos | Etiquetar cientos de fotos por clase (B-3) | AGPL (ultralytics) |
-| **YOLO-World** (misma librería, sin entrenar) | Detecta lo que se le pide por texto: plato, bowl, fuente, tabla, canasta, vaso | Un día de prueba | GPL |
+| Seguir con `best.pt` y entrenarle más clases | Lo que etiquetemos, y conserva el plan B de estado | Etiquetar cientos de fotos por clase (B-3) | AGPL (ultralytics) |
+| **YOLO-World** o el YOLOE que ya está, con más palabras | Detecta lo que se le pide por texto: plato, bowl, fuente, tabla, canasta, vaso | Un día de prueba; **pierde el plan B de estado** si reemplaza a `best.pt` en vez de sumarse | GPL |
 | RF-DETR (Roboflow) | Más preciso que YOLO en datasets propios | Etiquetar igual que la primera | Apache 2.0 |
 | Claude mirando la mesa entera | Entiende la escena («picada al medio y tres platitos») | Más caro por lectura y manda la mesa con gente a la nube (punto 17) | — |
 
-**Propuesta.** Probar YOLO-World sobre las sesiones grabadas y adoptarlo si no empeora el acierto por estado. Entrenar solo con fotos de nuestras cámaras cuando B-3 tenga etiquetas. La licencia GPL/AGPL se revisa antes de cobrar (hoy ya es así con `ultralytics`).
+**Propuesta.** Probar YOLO-World (o YOLOE con más palabras) sobre las sesiones grabadas y adoptarlo si no empeora el acierto por estado, sumado a `best.pt` para no perder el plan B. Entrenar solo con fotos de nuestras cámaras cuando B-3 tenga etiquetas. La licencia GPL/AGPL se revisa antes de cobrar (hoy ya es así con `ultralytics`).
 
-**Decisión:** Benchmark de detectores en paralelo, sin frenar nada (no es showstopper). La solución tiene que ser agnóstica al modelo de detección, para cambiarlo y escalar como queramos.
+**Decisión:** Benchmark de detectores en paralelo, sin frenar nada (no es showstopper). La solución tiene que ser agnóstica al modelo de detección, para cambiarlo y escalar como queramos. *Para implementar (completado al revisar):* el detector queda detrás de una interfaz (cajas + tipo de recipiente + clase de estado si la tiene) y el benchmark se corre contra esa interfaz; el plan B de estado de `best.pt` no se pierde al cambiar de detector.
 
 ### 16. Modelo que estima cuánta comida queda
 
-**Contexto.** Hoy Claude Haiku mira cada recorte de plato (unos 4 s por lectura). Sonnet y Opus son más precisos y más caros; no se compararon. D-8 propone un modelo propio chico entrenado con las etiquetas de B-3, dejando Claude solo para los casos dudosos (corta el 80 % de las llamadas).
+**Contexto.** Hoy Claude Haiku mira cada recorte de plato (1 a 3 s por llamada, `04-vision.md`). Sonnet y Opus son más precisos y más caros; no se compararon. D-8 propone un modelo propio chico entrenado con las etiquetas de B-3, dejando Claude solo para los casos dudosos (corta el 80 % de las llamadas).
 
 **Propuesta.** Haiku hasta el 25/11; comparar con Sonnet en el tablero de números (B-3) solo si el acierto por estado queda abajo del 85 %. Modelo propio cuando haya 1.000 recortes etiquetados, no antes.
 
-**Decisión:** Haiku. Sonnet queda descartado por costo (analizamos imágenes todo el rato). El modelo propio también queda descartado.
+**Decisión:** Haiku. Sonnet queda descartado por costo (analizamos imágenes todo el rato). El modelo propio también queda descartado (el que estima cuánta comida queda, D-8; un detector local chico de cubiertos, punto 18, es otra cosa y sigue abierto).
 
 ### 17. Qué va a la nube
 
@@ -219,11 +219,11 @@ Lo que Servio tiene que hacer cuando pasa algo que no es «dos personas, dos pla
 
 **Propuesta.** Solo recortes de platos, siempre, en producción. El modo mesa entera se queda para experimentar en casa y no se vende. Esto es un argumento de venta y va en el cartel: «ninguna imagen de personas sale del local».
 
-**Decisión:** Mandar la mesa entera, pero sacando a las personas: se tapan con un bloque de un color que el modelo sepa que es censura de persona. Las manos no se tapan. (La parte legal del envío se revisa con el punto 26.)
+**Decisión:** Mandar la mesa entera, pero sacando a las personas: se tapan con un bloque de un color que el modelo sepa que es censura de persona. Las manos no se tapan. *Cómo se aplica (completado al revisar):* esto cambia lo que C-3 dejó integrado y lo que `legal-uruguay.md` da por única base para que el dato deje de ser personal (solo el plato). Hasta que el punto 26 se resuelva, el modo mesa entera se implementa con el bloque de color **detrás del flag que ya existe** (`CLAUDE_ALLOW_TABLE_IMAGES`), y en producción el default siguen siendo los recortes de platos.
 
 ### 18. Cadencia y costo por mesa por hora
 
-**Contexto.** Una lectura cada 30 segundos por mesa; cada lectura con platos que cambiaron llama al modelo. El costo por mesa por hora no está medido todavía (sale del tablero de B-3) y es lo que define el precio mínimo. C-2 lo baja a la mitad (caché por plato, no volver a preguntar por un plato vacío).
+**Contexto.** Una lectura cada 30 segundos por mesa, y hoy cada lectura llama al modelo (no hay detector de cambios; mandar solo lo que cambió es C-2). El costo por mesa por hora no está medido todavía (sale del tablero de B-3) y es lo que define el precio mínimo. C-2 lo baja a la mitad (caché por plato, no volver a preguntar por un plato vacío).
 
 **Opciones.** 30 s; 60 s (la mitad del costo, avisos un minuto más tarde); adaptativo (rápido cuando la mesa cambia, lento cuando no).
 
@@ -315,7 +315,7 @@ Lo que Servio tiene que hacer cuando pasa algo que no es «dos personas, dos pla
 
 **Propuesta.** Métricas por nombre solo para encargado y dueño; el mozo ve las suyas si las pide; nunca comparativas en el grupo. En el pitch: «para que el encargado sepa a quién ayudar», no «para controlar».
 
-**Decisión:** El mozo no ve métricas, ninguna, ni aunque las pida.
+**Decisión:** El mozo no ve métricas, ninguna, ni aunque las pida. *Para implementar (completado al revisar):* `/metricas` deja de responderse en el grupo donde están los mozos; se responde solo en los chats de encargado y dueño (los de C-7). En el grupo, el comando no contesta.
 
 ### 28. Piloto: modo sombra y duración
 
@@ -335,7 +335,7 @@ Lo que Servio tiene que hacer cuando pasa algo que no es «dos personas, dos pla
 
 **Propuesta.** Una comida real en una casa, grabada en pantalla y celular: el salón en reconstrucción, una mesa que termina, el aviso que llega y se contesta «Voy», el «✅ ya resuelto» cuando se retiran los platos, y el dashboard del encargado al final. Tres minutos.
 
-**Decisión:** Para después del 25/11.
+**Decisión:** Sin decisión puntual (el equipo lo dejó para después, pero la demo es el 25/11): va la propuesta, una comida real de tres minutos, salvo que el equipo diga otra cosa antes.
 
 ### 30. Qué tiene que decir la hoja de métricas
 
@@ -351,7 +351,7 @@ Lo que Servio tiene que hacer cuando pasa algo que no es «dos personas, dos pla
 
 - **RAG sobre las métricas y los datos del negocio:** poder consultar en lenguaje natural lo que Servio recolecta (avisos, tiempos, platos, respuestas), sin depender de las pantallas fijas del dashboard. Va al Trello como tarjeta nueva.
 - **Detectar el acto de comer** (punto 13) es una capacidad nueva de visión: cubiertos que entran y salen del plato. Pide fotos más seguidas que cada 30 s (punto 18); se investiga aparte antes de prometerlo.
-- **La implementación no se reparte entre personas:** la hacen agentes tarjeta por tarjeta, y el tablero marca cuáles se pueden tomar (ver «Tablero y trabajo en paralelo» en `AGENTS.md`).
+- **La implementación no se reparte entre personas:** la hacen agentes tarjeta por tarjeta, y el tablero marca cuáles se pueden tomar (ver «Tablero y trabajo en paralelo» en `AGENTS.md`, que llega con `vision/tools/tablero.py`).
 
 ## Lo que Claude no puede hacer solo
 
