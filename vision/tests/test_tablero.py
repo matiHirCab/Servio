@@ -492,7 +492,9 @@ def test_overlapping_card_locked_but_not_yet_moved_counts():
             "c9",
             tablero.lock_text("eeeeeeeeeeee", "otro", "Semana 3", datetime.now(UTC)),
         )
-        api.comments["c9"][-1]["date"] = "2026-11-09T09:00:00.000Z"
+        api.comments["c9"][-1]["date"] = (
+            "2026-11-09T10:00:00.500Z"  # fresco, anterior al nuestro
+        )
 
     api.before_comment_read = sneak
     with pytest.raises(SystemExit) as e:
@@ -528,6 +530,88 @@ def test_api_retries_on_429(monkeypatch):
     monkeypatch.setattr(tablero.time, "sleep", lambda s: None)
     assert tablero.Api("K", "T").get("/x") == {"ok": True}
     assert len(calls) == 2
+
+
+def test_header_field_after_a_prose_line_still_counts():
+    desc = "**Toca:**\n- `a.py` (solo lectura)\n**Depende de:** C-5 (cccccc05)\n\ntexto (cccccc07)"
+    h = tablero.parse_header(desc)
+    assert h.depends_on == ["cccccc05"]
+
+
+def test_paths_overlap_with_globs_and_dot_slash():
+    assert tablero.paths_overlap(["vision/tools/*.py"], ["vision/tools/tablero.py"])
+    assert tablero.paths_overlap(["./docs/a.md"], ["docs/a.md"])
+    assert not tablero.paths_overlap(
+        ["vision/tools/*.py"], ["vision/servio_vision/x.py"]
+    )
+
+
+def test_slug_strips_any_accent():
+    assert tablero.slug("P1 · D-2 · Überprüfen çà") == "d-2-uberprufen-ca"
+
+
+def test_retry_after_parsing():
+    assert tablero._retry_after("3") == 3.0
+    assert tablero._retry_after("Wed, 09 Nov 2026 10:00:05 GMT") == 2.0
+    assert tablero._retry_after(None) == 2.0
+
+
+def test_release_of_a_stale_lock_does_not_need_the_same_agent():
+    api, board = board_with(
+        card("a4", "aaaaaaa4", "A-4", "", "LD"),
+        card("c5", "cccccc05", "P1 · C-5 · Voy", HEADER_C5),
+    )
+    board.take("cccccc05", "viejo")
+    api.cards["c5"]["idList"] = "L3"  # la arrastraron de vuelta a mano
+    board.release("cccccc05", "colgada", agent="yo")  # lo que la herramienta recomienda
+    board.take("cccccc05", "yo")
+    assert api.list_of("cccccc05") == "In progress"
+
+
+def test_forced_take_does_not_wipe_a_fresh_lock():
+    api, board = board_with(
+        card("a4", "aaaaaaa4", "A-4", "", "L3"),  # no hecha: C-5 bloqueada
+        card("c5", "cccccc05", "P1 · C-5 · Voy", HEADER_C5),
+    )
+    api.add_comment(
+        "c5", tablero.lock_text("ffffffffffff", "ana", "Semana 3", datetime.now(UTC))
+    )
+    with pytest.raises(SystemExit) as e:
+        board.take(
+            "cccccc05", "beto", force=True
+        )  # fuerza el bloqueo, pero ana la está tomando
+    assert e.value.code == ("P1 · C-5 · Voy: la tomó ana justo antes.", 2)
+    texts = [c["data"]["text"] for c in api.comments["c5"]]
+    assert len(texts) == 1 and "ana" in texts[0]  # el candado de ana sigue solo
+
+
+def test_network_error_in_the_second_look_rolls_the_card_back():
+    api, board = board_with(
+        card("a4", "aaaaaaa4", "A-4", "", "LD"),
+        card("c5", "cccccc05", "P1 · C-5 · Voy", HEADER_C5),
+        card(
+            "c9",
+            "cccccc09",
+            "P2 · C-9 · Otra",
+            "**Toca:** `vision/servio_vision/alerts/engine.py`\n\nx",
+        ),
+    )
+    real_get = api.get
+
+    def flaky(path, **params):
+        if path == "/cards/c9/actions":
+            raise SystemExit("Trello respondió 503")
+        return real_get(path, **params)
+
+    def arm(cid):  # C-9 entra en curso y, a partir de la segunda mirada, la red falla
+        api.cards["c9"]["idList"] = "LP"
+        api.get = flaky
+
+    api.before_comment_read = arm
+    with pytest.raises(SystemExit, match="503"):
+        board.take("cccccc05", "yo")
+    assert api.list_of("cccccc05").startswith("Semana 3")
+    assert api.comments["c5"][-1]["data"]["text"].startswith("🔓")
 
 
 def test_credentials_from_env_files(tmp_path):
@@ -748,6 +832,7 @@ def test_take_forced_overrides_a_stale_lock():
     api.add_comment(
         "c5", tablero.lock_text("ffffffffffff", "viejo", "Semana 3", datetime.now(UTC))
     )
+    api.comments["c5"][-1]["date"] = "2026-01-01T00:00:00.000Z"  # hace meses
     with pytest.raises(SystemExit):
         board.take("cccccc05", "yo")
     board.take("cccccc05", "yo", force=True)

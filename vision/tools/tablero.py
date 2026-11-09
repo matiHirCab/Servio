@@ -7,8 +7,8 @@ queda y pasa a «In progress» en el mismo paso.
 
     python tools/tablero.py listar                 # qué se puede tomar y qué no, y por qué
     python tools/tablero.py tomar 9oDZRoKz --agente claude-jessica
-    python tools/tablero.py soltar 9oDZRoKz        # devolverla a su lista si no se termina
-    python tools/tablero.py terminar 9oDZRoKz --pr 72
+    python tools/tablero.py soltar 9oDZRoKz --agente claude-jessica    # devolverla si no se termina
+    python tools/tablero.py terminar 9oDZRoKz --pr 72 --agente claude-jessica
     python tools/tablero.py sincronizar            # recalcula Libre / Bloqueada en todas
 
 En la descripción de cada tarjeta, las primeras líneas son el encabezado que este
@@ -43,6 +43,7 @@ import os
 import re
 import sys
 import time
+import unicodedata
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -125,16 +126,18 @@ def header_lines(desc: str) -> str:
     párrafo), y tampoco un título o una viñeta antes del primer campo («## Contexto»,
     «- **Toca:** …»); la primera línea de texto común después de un campo, sí."""
     taken: list[str] = []
+    previous_was_header = False
     for line in desc.replace("\r", "").split("\n"):
         stripped = re.sub(r"^(?:[-*•]\s+|#+\s+)", "", line.strip())  # viñeta o título
         if not stripped:
             continue
         if _HEADER_FIELD.search(stripped) or (
-            taken and _ONLY_PATHS.fullmatch(stripped)
+            previous_was_header and _ONLY_PATHS.fullmatch(stripped)
         ):
             taken.append(stripped)
-        elif taken:
-            break
+            previous_was_header = True
+        else:
+            previous_was_header = False
     return " ".join(taken)
 
 
@@ -173,7 +176,11 @@ def paths_overlap(a: list[str], b: list[str]) -> list[str]:
 
 
 def _norm(path: str) -> str:
-    return path.replace("\\", "/").strip().rstrip("/")
+    """`./vision/tools/*.py` → `vision/tools`: lo que hay antes del comodín es la carpeta."""
+    path = path.replace("\\", "/").strip()
+    path = re.split(r"[*?\[]", path, maxsplit=1)[0]
+    path = path.removeprefix("./")
+    return path.rstrip("/")
 
 
 def card_code(name: str) -> str | None:
@@ -189,14 +196,12 @@ def slug(name: str) -> str:
     if code:
         rest = name.split(code, 1)[1]
     rest = re.sub(r"P\d\s*·", "", rest)
-    words = re.findall(r"[a-záéíóúñ0-9]+", rest.lower())
-    words = [_ascii(w) for w in words[:4]]
+    plain = (
+        unicodedata.normalize("NFKD", rest.lower()).encode("ascii", "ignore").decode()
+    )
+    words = re.findall(r"[a-z0-9]+", plain)[:4]
     base = "-".join(w for w in [code.lower() if code else ""] + words if w)
     return base or "tarjeta"
-
-
-def _ascii(word: str) -> str:
-    return word.translate(str.maketrans("áéíóúñ", "aeioun"))
 
 
 def lock_text(token: str, agent: str, origin: str, now: datetime) -> str:
@@ -276,6 +281,14 @@ def credentials(
 # ------------------------------------------------------------------ Trello
 
 
+def _retry_after(value: str | None) -> float:
+    """Segundos a esperar según Retry-After; si es una fecha o basura, 2 s."""
+    try:
+        return max(0.0, float(value or 2))
+    except ValueError:
+        return 2.0
+
+
 class Api:
     """Lo mínimo de la API REST de Trello, con urllib. La clave y el token van
     siempre en la URL, que es como Trello los documenta."""
@@ -313,7 +326,7 @@ class Api:
                 if (
                     e.code == 429 and attempt < RETRIES_429
                 ):  # tope de Trello: esperar y seguir
-                    time.sleep(float(e.headers.get("Retry-After") or 2))
+                    time.sleep(_retry_after(e.headers.get("Retry-After")))
                     continue
                 detail = e.read().decode(errors="replace")[:200]
                 raise SystemExit(
@@ -575,8 +588,13 @@ class Board:
             raise SystemExit(
                 f"{card.name}: {state}: {'; '.join(why)}. Con --forzar se toma igual."
             )
-        if force and winner(self.comments(card)) is not None:
-            # un candado viejo (la movieron a mano, se cortó la red): se pisa a propósito
+        # Con --forzar, un candado viejo (la movieron a mano, se cortó la red) se pisa a
+        # propósito; uno fresco es otro agente tomándola ahora y sigue la carrera normal.
+        if (
+            force
+            and (old := winner(before := self.comments(card))) is not None
+            and lock_age_minutes(before, old[0]) > STALE_LOCK_MIN
+        ):
             self.comment(card, f"{UNLOCK} candado viejo pisado por {agent}")
         token = uuid.uuid4().hex[:12]
         origin = card.list_name
@@ -595,45 +613,64 @@ class Board:
         if won is None or won[0] != token:
             self.api.delete(f"/actions/{mine}")  # no dejar candados huérfanos
             who = won[1] if won else "otro"
-            if won is not None and lock_age_minutes(comments, won[0]) > STALE_LOCK_MIN:
+            now = lock_date(comments, token)  # la hora de Trello, no la de esta máquina
+            if (
+                won is not None
+                and lock_age_minutes(comments, won[0], now) > STALE_LOCK_MIN
+            ):
                 raise SystemExit(
                     f"{card.name}: tiene un candado viejo de {who} (hace "
-                    f"{lock_age_minutes(comments, won[0]):.0f} min) y no está en curso: "
-                    "`soltar` lo limpia, o `tomar --forzar` lo pisa."
+                    f"{lock_age_minutes(comments, won[0], now):.0f} min) y no está en curso: "
+                    "`soltar --agente <quién>` lo limpia, o `tomar --forzar` lo pisa."
                 )
             raise SystemExit((f"{card.name}: la tomó {who} justo antes.", 2))
         self.move(card, LIST_IN_PROGRESS)
         # Ya en curso, los choques de archivos se miran de nuevo: otro agente pudo tomar
         # una tarjeta que toca lo mismo en el medio. Si las dos entraron a la vez, retrocede
         # la del candado más nuevo (la otra, al mirar, ve que la suya es la vieja y sigue).
-        if state != "choca":
-            mine_at = lock_date(comments, token)
-            for other in self.cards():
-                if other.id == card.id or other.closed or other.list_name == LIST_DONE:
-                    continue
-                hit = paths_overlap(card.header.touches, other.header.touches)
-                if not hit:
-                    continue
-                # en curso, o con un candado reciente (la está tomando y todavía no la movió)
-                theirs = winner(other_comments := self.comments(other))
-                theirs_at = lock_date(other_comments, theirs[0]) if theirs else None
-                if other.list_name != LIST_IN_PROGRESS and (
-                    theirs is None
-                    or lock_age_minutes(other_comments, theirs[0]) > STALE_LOCK_MIN
-                ):
-                    continue
-                if theirs_at is None or theirs_at <= mine_at:
-                    self.comment(
-                        card,
-                        f"{UNLOCK} soltada: toca lo mismo que {other.code or other.short}",
-                    )
-                    self.move(card, origin)
-                    raise SystemExit(
-                        (
-                            f"{card.name}: {other.code or other.short} toca lo mismo y entró antes ({hit[0]}).",
-                            2,
+        rolled_back = False
+        try:
+            if state != "choca":
+                mine_at = lock_date(comments, token)
+                for other in self.cards():
+                    if (
+                        other.id == card.id
+                        or other.closed
+                        or other.list_name == LIST_DONE
+                    ):
+                        continue
+                    hit = paths_overlap(card.header.touches, other.header.touches)
+                    if not hit:
+                        continue
+                    # en curso, o con un candado reciente (la está tomando y todavía no la movió)
+                    theirs = winner(other_comments := self.comments(other))
+                    theirs_at = lock_date(other_comments, theirs[0]) if theirs else None
+                    if other.list_name != LIST_IN_PROGRESS and (
+                        theirs is None
+                        or lock_age_minutes(other_comments, theirs[0], mine_at)
+                        > STALE_LOCK_MIN
+                    ):
+                        continue
+                    if theirs_at is None or theirs_at <= mine_at:
+                        self.comment(
+                            card,
+                            f"{UNLOCK} soltada: toca lo mismo que {other.code or other.short}",
                         )
-                    )
+                        self.move(card, origin)
+                        rolled_back = True
+                        raise SystemExit(
+                            (
+                                f"{card.name}: {other.code or other.short} toca lo mismo y entró antes ({hit[0]}).",
+                                2,
+                            )
+                        )
+        except SystemExit:
+            if (
+                not rolled_back
+            ):  # un error de red en la segunda mirada no deja la tarjeta colgada
+                self.comment(card, f"{UNLOCK} soltada: falló la segunda mirada")
+                self.move(card, origin)
+            raise
         self.set_label(card, LABEL_FREE, False)
         self.set_label(card, LABEL_BLOCKED, False)
         me = self.me()
@@ -648,8 +685,13 @@ class Board:
         self, short: str, reason: str, agent: str = "", force: bool = False
     ) -> Card:
         card = self.card(short)
-        won = winner(self.comments(card))
-        if won is not None and agent and won[1] != agent and not force:
+        won = winner(comments := self.comments(card))
+        fresh = (
+            won is not None
+            and card.list_name == LIST_IN_PROGRESS
+            and lock_age_minutes(comments, won[0]) <= STALE_LOCK_MIN
+        )
+        if fresh and won is not None and agent and won[1] != agent and not force:
             raise SystemExit(
                 f"{card.name}: la tiene tomada {won[1]}, no {agent}. Con --forzar se suelta igual."
             )
