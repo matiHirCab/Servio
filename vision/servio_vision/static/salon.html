@@ -499,12 +499,13 @@ function renderVideo() {
   pending.video.clear();
 }
 // La imagen de la cámara que vino con la foto (solo con `/eventos?video=1`). Un `data:`
-// URL: nada que liberar ni emparejar. Una foto sin imagen y sin error (la suscripción no la
-// pedía, o justo cambió la lectura) deja la que había; solo un error la saca y dice por qué.
+// URL: nada que liberar ni emparejar. Una foto sin imagen (la suscripción no la pedía, o
+// justo cambió la lectura) saca la que había: la de otra lectura no va bajo estas capas.
 function showFrame(s) {
   const cam = $("cam"), wait = $("cam-wait");
-  if (s.frame_jpeg) { cam.src = "data:image/jpeg;base64," + s.frame_jpeg; cam.hidden = false; wait.hidden = true; }
-  else if (s.frame_error || !cam.src) { cam.hidden = true; cam.removeAttribute("src"); wait.textContent = s.frame_error || "Esperando la imagen de la cámara"; wait.hidden = false; }
+  if (s.frame_jpeg) { cam.src = "data:image/jpeg;base64," + s.frame_jpeg; cam.hidden = false; wait.hidden = true; return; }
+  cam.hidden = true; cam.removeAttribute("src");
+  wait.textContent = s.frame_error || "Esperando la imagen de la cámara"; wait.hidden = false;
 }
 
 // ---------- panel ----------
@@ -624,8 +625,8 @@ function showMode(m) {
   if (changed && snap && snap.video) {
     connect();  // en video, la SSE trae el frame con cada foto; en reconstrucción, no
     // al volver al video, la imagen que había es de la última vez que se miró: se saca
-    // hasta que llegue la de la foto actual (si la foto actual ya la trae, esa)
-    if (m === "video") { if (snap.frame_jpeg) showFrame(snap); else showFrame({frame_error: "Esperando la imagen de la cámara"}); }
+    // hasta que llegue la de la foto actual (apply la pinta si esta foto ya la trae)
+    if (m === "video") showFrame({});
   }
   $("floor").toggleAttribute("hidden", m !== "recon");
   $("video").toggleAttribute("hidden", m !== "video");
@@ -679,7 +680,12 @@ connect();
 render();
 setInterval(() => { renderStatus(); refreshAges($("floor")); refreshAges($("overlay")); }, 1000);
 // las etiquetas se midieron con la fuente de reserva: al llegar Barlow Condensed, de nuevo
-if (document.fonts) document.fonts.ready.then(() => { fitTags($("floor")); fitTags($("overlay")); });
+if (document.fonts) document.fonts.ready.then(() => {
+  fitTags($("floor")); fitTags($("overlay"));
+  // el svg que esté oculto no se puede medir: se redibuja cuando se muestre
+  if (isHidden($("floor"))) dirty.floor = true;
+  if (isHidden($("overlay"))) dirty.video = true;
+});
 </script>
 </body>
 </html>

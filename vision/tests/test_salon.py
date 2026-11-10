@@ -65,7 +65,10 @@ def test_wait_returns_as_soon_as_a_new_reading_arrives():
     )
     timer = threading.Timer(0.05, read, args=(pipeline, 1))
     timer.start()
-    version, snap = feed.wait(0, timeout=5)
+    published = feed.wait_published(0, timeout=5)
     timer.join()
-    assert version == 1 and snap is not None
-    assert feed.wait(1, timeout=0.01)[0] == 1  # sin lectura nueva, la misma versión
+    assert published.version == 1 and published.snapshot is not None
+    assert published.frame is None  # sin modo video no se publica el frame
+    assert (
+        feed.wait_published(1, timeout=0.01).version == 1
+    )  # sin lectura nueva, la misma versión

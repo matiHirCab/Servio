@@ -22,6 +22,7 @@ abre desde el celular o la tablet en la misma red. No tiene usuarios ni contrase
 no la expongas a internet.
 """
 
+import base64
 import ipaddress
 import json
 import logging
@@ -93,9 +94,9 @@ def _is_loopback(host: str) -> bool:
 
 def _handler(server: SalonServer) -> type[BaseHTTPRequestHandler]:
     feed = server.feed
-    # el JSON de la última publicación, por (versión, con video): se arma una vez
-    # por lectura y lo mandan todos los navegadores suscriptos
-    payloads: dict[tuple[int, bool], bytes] = {}
+    # el JSON de la última publicación, con y sin video: se arma una vez por lectura
+    # y lo mandan todos los navegadores suscriptos (una publicación vieja no se guarda)
+    payloads: dict[bool, tuple[int, bytes]] = {}
     payloads_lock = threading.Lock()
 
     class Handler(BaseHTTPRequestHandler):
@@ -131,25 +132,24 @@ def _handler(server: SalonServer) -> type[BaseHTTPRequestHandler]:
             frame de esa misma publicación en base64 (`frame_jpeg`), o `frame_error`
             si no se pudo codificar: imagen y datos viajan juntos, nunca se desfasan.
             Se serializa una vez por lectura, para todos los suscriptos."""
-            key = (published.version, with_video)
             with payloads_lock:
-                cached = payloads.get(key)
-            if cached is not None:
-                return cached
+                cached = payloads.get(with_video)
+            if cached is not None and cached[0] == published.version:
+                return cached[1]
             snapshot = published.snapshot
             if with_video and feed.video and snapshot is not None:
                 found = feed.encode(published)
                 if found is not None:
                     snapshot = dict(snapshot)
-                    if found.base64 is not None:
-                        snapshot["frame_jpeg"] = found.base64
+                    if found.jpeg is not None:
+                        snapshot["frame_jpeg"] = base64.b64encode(found.jpeg).decode()
                     else:
                         snapshot["frame_error"] = BROKEN_FRAME
             data = json.dumps(snapshot, ensure_ascii=False).encode()
             with payloads_lock:
-                for k in [k for k in payloads if k[0] < published.version]:
-                    del payloads[k]  # lo de lecturas viejas ya no lo pide nadie
-                payloads[key] = data
+                cached = payloads.get(with_video)
+                if cached is None or cached[0] < published.version:
+                    payloads[with_video] = (published.version, data)
             return data
 
         def _frame(self) -> None:

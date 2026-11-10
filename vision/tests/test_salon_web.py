@@ -152,9 +152,9 @@ def test_events_carry_the_frame_of_their_own_reading_when_asked(video_server):
 
 
 def test_payload_encodes_the_frame_of_its_own_publication():
-    """Foto y frame se toman juntos: si llega otra lectura mientras se codifica, el
-    JSON lleva el frame de SU foto, no el último (y el de una lectura vieja no
-    pisa la caché)."""
+    """Foto y frame se toman juntos: el JSON nunca lleva el frame de otra foto. Una
+    publicación que ya no es la actual no se codifica (va sin imagen; la lectura
+    siguiente trae la suya) y no pisa la caché."""
     feed = SalonFeed("casa-1", video=True)
     pipeline = Pipeline(
         FakeClassifier(), ZONES, lambda o: None, on_reading=feed.on_reading
@@ -162,11 +162,11 @@ def test_payload_encodes_the_frame_of_its_own_publication():
     pipeline.process_frame(FRAME, T0)
     first = feed.published()
     pipeline.process_frame(FRAME + 200, T0)  # otra lectura antes de codificar
-    old = feed.encode(first)
-    assert old is not None and old.version == 1
+    assert feed.encode(first) is None  # vieja: sin imagen, sin codificar
     new = feed.frame_jpeg()
-    assert new is not None and new.version == 2 and new.jpeg != old.jpeg
-    assert feed.frame_jpeg() is new  # la caché quedó con la lectura actual
+    assert new is not None and new.version == 2 and new.jpeg is not None
+    assert feed.frame_jpeg() is new  # la caché es la de la lectura actual
+    assert feed.encode(first) is None  # y la vieja sigue sin codificarse
 
 
 def test_events_without_web_video_ignore_the_video_flag(server):
@@ -184,8 +184,7 @@ def test_frame_is_encoded_once_per_reading_and_follows_the_snapshot():
     pipeline.process_frame(FRAME, T0)
     first = feed.frame_jpeg()
     assert first is not None and first.version == 1 and first.jpeg is not None
-    assert feed.frame_jpeg() is first  # cacheado, con su base64 (una vez por lectura)
-    assert first.base64 is not None and base64.b64decode(first.base64) == first.jpeg
+    assert feed.frame_jpeg() is first  # cacheado: una codificación por lectura
     pipeline.process_frame(FRAME + 200, T0)  # otro cuadro (más claro)
     second = feed.frame_jpeg()
     assert second is not None and second.version == 2 and second.jpeg != first.jpeg

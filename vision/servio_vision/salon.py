@@ -12,7 +12,7 @@ la lee, así no comparte nada con las reglas de avisos.
 Modo video (F-1b, decisión 2): con `video=True` el feed guarda además, **en
 memoria**, el frame (ya difuminado) que `on_reading` recibe con cada lectura, junto
 con la foto: el frame y las capas que se dibujan encima son siempre del mismo
-cuadro. Se codifica a JPEG (y a base64) recién cuando alguien lo pide, una vez
+cuadro. Se codifica a JPEG recién cuando alguien lo pide, una vez
 por lectura: la página en modo video lo recibe dentro de la misma foto por SSE
 (`/eventos?video=1`) y `frame.jpg` lo sirve suelto para mirar la cámara con un
 `curl`. Apagado, no se guarda ni se sirve nada.
@@ -22,7 +22,6 @@ Coordenadas: todo normalizado 0–1 en la imagen de la cámara ([x, y, w, h]).
 
 import logging
 import threading
-from base64 import b64encode
 from collections import Counter
 from collections.abc import Iterable
 from datetime import datetime
@@ -191,12 +190,10 @@ class Published(NamedTuple):
 
 
 class EncodedFrame(NamedTuple):
-    """Lo que `frame_jpeg` devuelve: el frame de la foto `version` como JPEG y en
-    base64 (lo que va dentro de la foto por SSE), o `None` en los dos si no se pudo
-    codificar (ya quedó logueado). Distinto de `capture.Frame` (el cuadro crudo)."""
+    """Lo que `encode` devuelve: el frame de la foto `version` como JPEG, o `None`
+    si no se pudo codificar (ya quedó logueado). Distinto de `capture.Frame`."""
 
     jpeg: bytes | None
-    base64: str | None
     version: int
 
 
@@ -227,32 +224,39 @@ class SalonFeed:
         self._encode_lock = threading.Lock()  # un solo navegador codifica por vez
 
     def encode(self, published: Published) -> EncodedFrame | None:
-        """El frame de esa publicación como JPEG y en base64. Se codifica la primera
-        vez que se pide, una vez por lectura aunque lo pidan varios navegadores (el
-        de la última lectura queda cacheado). `None`: sin frame (modo video apagado
-        o sin lecturas). Un frame que no se pudo codificar vuelve con `jpeg=None`
-        (queda logueado una vez; la vista sigue sin imagen, el pipeline sigue)."""
+        """El frame de esa publicación como JPEG. Se codifica la primera vez que se
+        pide, una vez por lectura aunque lo pidan varios navegadores. `None`: sin
+        frame (modo video apagado o sin lecturas), o una publicación que ya no es la
+        actual: un frame viejo no se codifica (nadie lo cachea y haría esperar a los
+        demás); la foto va sin imagen y la lectura siguiente trae la suya. Un frame
+        que no se pudo codificar vuelve con `jpeg=None` (queda logueado una vez; la
+        vista sigue sin imagen, el pipeline sigue)."""
         if published.frame is None:
             return None
         version = published.version
         with self._changed:
-            encoded = self._encoded
+            encoded, current = self._encoded, self._version
         if encoded is not None and encoded.version == version:
             return encoded  # ya resuelto: sale sin esperar a nadie
+        if version != current:
+            return None
         # el pipeline nunca espera este candado: `on_reading` solo toma `_changed`
         with self._encode_lock:
-            with self._changed:  # otro pudo codificarlo mientras esperaba
-                encoded = self._encoded
+            with (
+                self._changed
+            ):  # otro pudo codificarlo mientras esperaba, o hay otra lectura
+                encoded, current = self._encoded, self._version
             if encoded is not None and encoded.version == version:
                 return encoded
+            if version != current:
+                return None
             try:
-                jpeg = to_jpeg(display_size(published.frame))
-                result = EncodedFrame(jpeg, b64encode(jpeg).decode(), version)
+                result = EncodedFrame(to_jpeg(display_size(published.frame)), version)
             except (ValueError, cv2.error) as e:
                 logger.warning("No se pudo codificar el frame para la vista: %s", e)
-                result = EncodedFrame(None, None, version)
+                result = EncodedFrame(None, version)
             with self._changed:
-                if self._version == version:  # el de una lectura vieja no se guarda
+                if self._version == version:  # si no, ya hay otra lectura: no se guarda
                     self._encoded = result
             return result
 
@@ -310,8 +314,3 @@ class SalonFeed:
         with self._changed:
             self._changed.wait_for(lambda: self._version > after, timeout)
             return Published(self._version, self._snapshot, self._frame)
-
-    def wait(self, after: int, timeout: float) -> tuple[int, dict[str, Any] | None]:
-        """Como `wait_published`, solo (versión, foto)."""
-        published = self.wait_published(after, timeout)
-        return published.version, published.snapshot
