@@ -27,7 +27,6 @@ carpeta compartida del proyecto, `servio-eval/`.
 
 import argparse
 import contextlib
-import csv
 import io
 import json
 import logging
@@ -39,17 +38,18 @@ from collections import Counter
 from collections.abc import Iterator
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, get_args
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+import etiquetar  # vecino en tools/: las etiquetas se leen igual que se escriben
 from PIL import Image
 
-from servio_vision import app
+from servio_vision import alerts, settings, utf8_console
 from servio_vision.llm import EstimateRequest, make_estimator
-from servio_vision.schemas import state_from_fill_ratio
+from servio_vision.schemas import PlateState, state_from_fill_ratio
 
-STATES = ["lleno", "comiendo", "por_terminar", "vacio"]
+STATES: list[str] = list(get_args(PlateState))  # los del contrato, en su orden
 CROP_SIDE = 384
 DEFAULT_SET = Path("data/eval")
 DEFAULT_OUT = Path("out/eval")
@@ -80,11 +80,10 @@ def table_sheet(imgs: list[Image.Image], side: int = 256) -> Image.Image:
 
 
 def load_labels(folder: Path) -> list[dict[str, str]]:
-    """Las filas de `labels.csv` con un estado de verdad: un archivo repetido vale
-    por su última fila (así corrige `etiquetar.py`), y las saltadas no cuentan."""
-    with open(folder / "labels.csv", encoding="utf-8", newline="") as f:
-        last = {r["archivo"]: r for r in csv.DictReader(f) if r.get("archivo")}
-    return [r for r in last.values() if r.get("estado") in STATES]
+    """Las filas de `labels.csv` con un estado de verdad (`etiquetar.read_labels`:
+    un archivo repetido vale por su última fila); las saltadas no cuentan."""
+    rows = etiquetar.read_labels(folder).values()
+    return [r for r in rows if r.get("estado") in STATES]
 
 
 def summarize(results: list[dict]) -> dict:
@@ -205,16 +204,18 @@ def _isolated_run(workdir: Path) -> Iterator[None]:
     imprime (los avisos por consola, el chequeo de encuadre de una foto negra) no es
     del tablero: se calla, salvo los errores. Cada cosa que se cambia se deshace en
     el mismo `ExitStack`, así una que falle a mitad de camino no deja nada a medias."""
-    from servio_vision import alerts, settings
-
     servio_log = logging.getLogger("servio")
     with contextlib.ExitStack() as stack:
         stack.enter_context(contextlib.redirect_stdout(io.StringIO()))
-        saved_level = servio_log.level
-        stack.callback(servio_log.setLevel, saved_level)
+        stack.callback(servio_log.setLevel, servio_log.level)
         servio_log.setLevel(logging.ERROR)
         saved_env = dict(os.environ)
-        stack.callback(_restore_environ, saved_env)
+
+        def restore_env() -> None:
+            os.environ.clear()
+            os.environ.update(saved_env)
+
+        stack.callback(restore_env)
         # ninguna variable de configuración de la casa ni de los avisos
         for name in settings.Settings.model_fields:
             os.environ.pop(
@@ -223,37 +224,28 @@ def _isolated_run(workdir: Path) -> Iterator[None]:
         os.environ.pop("DEMO_MODE", None)
         os.environ["DEMO_MODE"] = "false"
         os.environ["DATABASE_URL"] = f"sqlite:///{(workdir / 'eval.db').as_posix()}"
-        saved = alerts.DEFAULT_LOG, settings.ENV_FILE
-        stack.callback(_restore_modules, saved)
+        saved_log, saved_env_file = alerts.DEFAULT_LOG, settings.ENV_FILE
+
+        def restore_modules() -> None:
+            alerts.DEFAULT_LOG, settings.ENV_FILE = saved_log, saved_env_file
+
+        stack.callback(restore_modules)
         alerts.DEFAULT_LOG = workdir / "eventos.jsonl"
         settings.ENV_FILE = None
-        # lo que la corrida deja armado (el procesador de avisos con su base, la
-        # configuración activa) no tiene que llegar al escenario siguiente
-        stack.callback(_reset_run_state)
+
+        def reset_run_state() -> None:
+            # lo que la corrida deja armado (el procesador de avisos con su base, la
+            # configuración activa) no tiene que llegar al escenario siguiente
+            if alerts._processor is not None:
+                alerts._processor.close()
+                alerts._processor = None
+            settings._active = None
+
+        stack.callback(reset_run_state)
         stack.callback(os.chdir, Path.cwd())
         (workdir / "frames").mkdir()
         os.chdir(workdir)
         yield
-
-
-def _restore_environ(saved: dict[str, str]) -> None:
-    os.environ.clear()
-    os.environ.update(saved)
-
-
-def _restore_modules(saved: tuple) -> None:
-    from servio_vision import alerts, settings
-
-    alerts.DEFAULT_LOG, settings.ENV_FILE = saved
-
-
-def _reset_run_state() -> None:
-    from servio_vision import alerts, settings
-
-    if alerts._processor is not None:
-        alerts._processor.close()
-        alerts._processor = None
-    settings._active = None
 
 
 def run_scenario(name: str, workdir: Path) -> dict[str, Any]:
@@ -264,7 +256,6 @@ def run_scenario(name: str, workdir: Path) -> dict[str, Any]:
     import numpy as np
 
     import main as loop
-    from servio_vision import alerts
     from servio_vision.zones import TableZone, Zones, save_zones
 
     fixture = FIXTURES / "observations" / f"{name}.jsonl"
@@ -296,19 +287,25 @@ def run_scenario(name: str, workdir: Path) -> dict[str, Any]:
         )
         zones_path = workdir / "zones.json"
         save_zones(zones, zones_path)
-        code = loop.main(
-            [
-                "--source", str(frames),
-                "--zones", str(zones_path),
-                "--classifier", "fake",
-                "--fake-mode", "replay",
-                "--fixture", str(fixture),
-                "--interval", str(SCENARIO_INTERVAL),
-                "--no-telegram",
-            ]
-        )  # fmt: skip
+        failure = None
+        try:
+            code = loop.main(
+                [
+                    "--source", str(frames),
+                    "--zones", str(zones_path),
+                    "--classifier", "fake",
+                    "--fake-mode", "replay",
+                    "--fixture", str(fixture),
+                    "--interval", str(SCENARIO_INTERVAL),
+                    "--no-telegram",
+                ]
+            )  # fmt: skip
+        except Exception as e:  # noqa: BLE001  (se informa en el tablero, no se oculta)
+            code = -1
+            failure = f"el pipeline reventó: {type(e).__name__}: {e}"
         got: list[dict] = []
-        failure = None if code == 0 else f"el pipeline salió con {code}"
+        if failure is None and code != 0:
+            failure = f"el pipeline salió con {code}"
         if failure is None:
             try:
                 got = alert_events(alerts.DEFAULT_LOG)
@@ -569,7 +566,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     ap.add_argument("--out", type=Path, default=DEFAULT_OUT)
     a = ap.parse_args(argv)
-    app.utf8_console()
+    utf8_console()
     logging.basicConfig(level=logging.WARNING)
 
     if a.comparar:

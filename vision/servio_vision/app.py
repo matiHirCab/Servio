@@ -18,7 +18,15 @@ from typing import Any
 import cv2
 from pydantic import ValidationError
 
-from servio_vision import alerts, framing, llm, privacy, prompt, recording
+from servio_vision import (
+    alerts,
+    framing,
+    llm,
+    privacy,
+    prompt,
+    recording,
+    utf8_console,
+)
 from servio_vision.alerts.config import load_config
 from servio_vision.alerts.notify import TelegramNotifier
 from servio_vision.capture import (
@@ -600,15 +608,6 @@ NOISY_LOGGERS = (
 def _quiet_libraries(record: logging.LogRecord) -> bool:
     noisy = record.name.split(".")[0] in NOISY_LOGGERS
     return not noisy or record.levelno >= logging.WARNING
-
-
-def utf8_console() -> None:
-    """La consola de Windows (cp1252) no puede escribir los emojis de los avisos ni
-    las flechas del tablero: sin esto, imprimirlos tira UnicodeEncodeError. Para el
-    loop y las herramientas de `tools/`."""
-    for stream in (sys.stdout, sys.stderr):
-        if hasattr(stream, "reconfigure"):
-            stream.reconfigure(encoding="utf-8", errors="replace")
 
 
 def setup_logging(verbose: bool = False) -> None:

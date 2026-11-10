@@ -150,6 +150,32 @@ def test_labels_are_written_once_per_crop_and_read_by_eval(tmp_path):
         etiquetar.write_label(out, todo[2], "vacio", "postre", "")
     with pytest.raises(ValueError, match="recorte"):
         etiquetar.write_label(out, "../otro.jpg", "vacio", "plato", "")
+    with pytest.raises(ValueError, match="recorte"):
+        etiquetar.write_label(
+            out, "C:otro.jpg", "vacio", "plato", ""
+        )  # relativo a una unidad
+
+
+def test_labels_survive_an_empty_or_unterminated_csv(tmp_path):
+    session = make_session(tmp_path / "sesion", readings=1)
+    out = tmp_path / "set"
+    etiquetar.crop_session(session, out)
+    a, b = etiquetar.pending(out)
+    (out / "labels.csv").write_bytes(b"")  # un archivo vacío: el encabezado va igual
+    etiquetar.write_label(out, a, "lleno", "plato", "")
+    assert (
+        (out / "labels.csv")
+        .read_text(encoding="utf-8")
+        .startswith("archivo,estado,tipo,nota")
+    )
+    with open(out / "labels.csv", "ab") as f:  # una edición a mano sin salto final
+        f.write(b"x.jpg,vacio,plato,sin salto")
+    etiquetar.write_label(out, b, "vacio", "plato", "")
+    rows = etiquetar.read_labels(out)
+    assert rows[a]["estado"] == "lleno" and rows[b]["estado"] == "vacio"
+    assert (
+        rows["x.jpg"]["nota"] == "sin salto"
+    )  # la fila a mano no se mezcló con la nueva
 
 
 @pytest.fixture
@@ -215,6 +241,13 @@ def test_web_labels_a_set_end_to_end(server):
 def test_web_rejects_bad_labels_and_unknown_paths(server):
     base = server.url.rstrip("/")
     first = json.loads(get(f"{base}/siguiente")[2])["archivo"]
+    req = urllib.request.Request(
+        f"{base}/otra", b'{"x": 1}', {"Content-Type": "application/json"}
+    )
+    with pytest.raises(HTTPError) as e:  # un POST a otra ruta: 404, y el cuerpo leído
+        urllib.request.urlopen(req, timeout=5)
+    assert e.value.code == 404
+    assert get(f"{base}/siguiente")[0] == 200  # la conexión siguiente sigue sana
     for body in (b"[]", b"no es json"):  # un cuerpo raro es 400, no un hilo caído
         req = urllib.request.Request(
             f"{base}/etiqueta", body, {"Content-Type": "application/json"}

@@ -32,7 +32,7 @@ import threading
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any, Protocol, get_args
 from urllib.parse import unquote, urlsplit
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -40,13 +40,13 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import cv2
 import numpy as np
 
-from servio_vision import recording
-from servio_vision.app import utf8_console
-from servio_vision.zones import table_rect, to_jpeg
+from servio_vision import recording, utf8_console
+from servio_vision.schemas import PlateState
+from servio_vision.zones import crop_table, to_jpeg
 
 logger = logging.getLogger("servio")
 
-STATES = ("lleno", "comiendo", "por_terminar", "vacio")
+STATES: tuple[str, ...] = get_args(PlateState)  # los del contrato, en su orden
 SKIP = (
     "saltado"  # no es un plato (o no se ve): queda anotado para no volver a mostrarlo
 )
@@ -117,11 +117,10 @@ def crop_session(
             continue
         stamp = ts.strftime("%Y%m%dT%H%M%S")
         if zones is None:
-            regions = [("frame", (0, 0, frame.shape[1], frame.shape[0]))]
+            regions = [("frame", frame)]
         else:
-            regions = [(z.table_id, table_rect(frame, z, zones)) for z in zones.tables]
-        for table_id, (x0, y0, x1, y1) in regions:
-            crop = frame[y0:y1, x0:x1]
+            regions = [(z.table_id, crop_table(frame, z, zones)) for z in zones.tables]
+        for table_id, crop in regions:
             if crop.size == 0:
                 continue
             if detector is None:
@@ -164,6 +163,15 @@ def is_image(path: Path) -> bool:
     return path.is_file() and path.suffix.lower() in IMAGE_TYPES
 
 
+def crop_in(folder: Path, name: str) -> Path | None:
+    """El recorte `name` de la carpeta, o `None` si no es un nombre de archivo de
+    ahí adentro (nada de `..`, carpetas ni `C:foo.jpg`) o no es una imagen."""
+    target = folder / name
+    if Path(name).name != name or target.resolve().parent != folder.resolve():
+        return None
+    return target if is_image(target) else None
+
+
 def pending(folder: Path) -> list[str]:
     """Los recortes de la carpeta sin etiqueta, en orden."""
     done = read_labels(folder)
@@ -180,13 +188,17 @@ def write_label(folder: Path, archivo: str, estado: str, tipo: str, nota: str) -
         raise ValueError(f"estado desconocido: {estado!r}")
     if tipo not in KINDS:
         raise ValueError(f"tipo desconocido: {tipo!r}")
-    if "/" in archivo or "\\" in archivo or not is_image(folder / archivo):
+    if crop_in(folder, archivo) is None:
         raise ValueError(f"no es un recorte de la carpeta: {archivo!r}")
     path = folder / LABELS_FILE
-    new = not path.exists()
+    # el encabezado va si el archivo no existe o está vacío; y si la última línea
+    # quedó sin salto (una edición a mano), la fila nueva no se le pega
+    existing = path.read_bytes() if path.exists() else b""
     with open(path, "a", encoding="utf-8", newline="") as f:
+        if existing and not existing.endswith(b"\n"):
+            f.write("\r\n")
         writer = csv.writer(f)
-        if new:
+        if not existing:
             writer.writerow(COLUMNS)
         writer.writerow([archivo, estado, tipo, nota.replace("\n", " ").strip()])
 
@@ -233,7 +245,9 @@ input{background:#1a1d22;color:#eef1f4;border:1px solid rgba(255,255,255,.12);bo
 let current = null, kind = "plato";
 const $ = id => document.getElementById(id);
 async function next() {
-  const r = await fetch("siguiente"); const d = await r.json();
+  let d;
+  try { const r = await fetch("siguiente"); if (!r.ok) throw new Error(await r.text()); d = await r.json(); }
+  catch (e) { current = null; $("name").textContent = "Sin conexión con la herramienta (¿se cortó? recargá la página)"; return; }
   current = d.archivo;
   $("progress").textContent = `${d.etiquetados} etiquetados · ${d.pendientes} pendientes`;
   $("img").hidden = !current; $("done").hidden = !!current;
@@ -260,7 +274,8 @@ async function label(state) {
 document.querySelectorAll("#kinds button").forEach(b => b.onclick = () => setKind(b.dataset.kind));
 document.querySelectorAll("#states button").forEach(b => b.onclick = () => label(b.dataset.state));
 document.addEventListener("keydown", e => {
-  if (e.target === $("note") && e.key !== "Enter") return;
+  if (e.ctrlKey || e.metaKey || e.altKey) return;  // Ctrl+2 cambia de pestaña, no etiqueta
+  if (e.target === $("note")) return;
   const k = {q: "plato", w: "guarnicion", e: "otro"}[e.key.toLowerCase()];
   if (k) return setKind(k);
   const s = {"1": "lleno", "2": "comiendo", "3": "por_terminar", "4": "vacio", "0": "saltado"}[e.key];
@@ -332,9 +347,8 @@ def _handler(folder: Path) -> type[BaseHTTPRequestHandler]:
                     "application/json",
                 )
             if len(parts) == 2 and parts[0] == "img":
-                name = parts[1]
-                target = folder / name
-                if "/" in name or "\\" in name or not is_image(target):
+                target = crop_in(folder, parts[1])
+                if target is None:
                     return self._send(HTTPStatus.NOT_FOUND, b"No existe", "text/plain")
                 return self._send(
                     HTTPStatus.OK,
@@ -345,11 +359,15 @@ def _handler(folder: Path) -> type[BaseHTTPRequestHandler]:
 
         def do_POST(self) -> None:
             parts = [p for p in urlsplit(self.path).path.split("/") if p]
-            if parts != ["etiqueta"]:
-                return self._send(HTTPStatus.NOT_FOUND, b"No existe", "text/plain")
             try:
                 length = int(self.headers.get("Content-Length") or 0)
-                data = json.loads(self.rfile.read(length) or b"{}")
+                body = self.rfile.read(
+                    length
+                )  # siempre: con keep-alive, un cuerpo sin leer
+                # se tomaría como el pedido siguiente
+                if parts != ["etiqueta"]:
+                    return self._send(HTTPStatus.NOT_FOUND, b"No existe", "text/plain")
+                data = json.loads(body or b"{}")
                 if not isinstance(data, dict):
                     return self._send(
                         HTTPStatus.BAD_REQUEST,

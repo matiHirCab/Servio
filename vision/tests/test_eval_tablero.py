@@ -190,6 +190,14 @@ def test_run_scenario_reports_a_broken_run_instead_of_crashing(tmp_path, monkeyp
     assert "no dejó avisos" in result["diferencias"][0]
 
 
+def test_a_crashing_pipeline_is_one_failed_scenario(tmp_path, monkeypatch):
+    import main as loop
+
+    monkeypatch.setattr(loop, "main", lambda argv: 1 / 0)
+    result = evaluation.run_scenario("plato_lleno_mucho", tmp_path)
+    assert result["pasa"] is False and "ZeroDivisionError" in result["diferencias"][0]
+
+
 def test_scenarios_ignore_the_house_env(tmp_path, monkeypatch):
     """El .env de la máquina (o lo que `load_dotenv` ya dejó en el entorno) no
     cambia los escenarios: corren con los umbrales de producción."""
