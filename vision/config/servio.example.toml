@@ -33,6 +33,11 @@ demo = false
 # alert_reminder = 180
 # finished_after = 360
 
+[salon]
+# web_port = 8000                          # la vista del salón en vivo en http://localhost:8000/<local_id>/salon (F-1)
+# web_host = "127.0.0.1"                   # 0.0.0.0 para abrirla desde otro equipo de la red (sin usuario ni contraseña: nunca a internet)
+# web_video = false                         # servir también la imagen de la cámara (caras difuminadas) para el modo video; solo para armar la cámara o una demo
+
 [suavizado]
 # smooth_readings = 2
 # smooth_hard_readings = 3

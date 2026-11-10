@@ -229,7 +229,13 @@ def build_pipeline(settings: Settings) -> Pipeline | None:
         mirror_log=settings.record / recording.EVENTS_FILE if settings.record else None,
     )
     feed = (
-        SalonFeed(settings.local_id, processor, restaurant, settings.interval)
+        SalonFeed(
+            settings.local_id,
+            processor,
+            restaurant,
+            settings.interval,
+            video=settings.web_video,
+        )
         if settings.web_port is not None
         else None
     )
@@ -250,6 +256,11 @@ def build_pipeline(settings: Settings) -> Pipeline | None:
         state_db=processor.db,
         on_reading=feed.on_reading if feed is not None else None,
     )
+    if feed is None and settings.web_video:
+        logger.warning(
+            "--web-video sin --web: no hay vista del salón que mostrar, el modo video "
+            "no hace nada"
+        )
     if feed is not None:
         assert settings.web_port is not None
         try:
@@ -265,6 +276,15 @@ def build_pipeline(settings: Settings) -> Pipeline | None:
             pipeline.close()
             return None
         logger.info("Salón en vivo: %s", server.url)
+        if feed.video:
+            logger.warning(
+                "Modo video (--web-video): la imagen de la cámara, difuminada, se "
+                "sirve en %s/frame.jpg %s. Apagalo después de armar la cámara",
+                server.reachable_url,
+                f"a cualquiera en la red (--web-host {settings.web_host})"
+                if server.exposed
+                else "(solo en esta máquina)",
+            )
     if live:
         pipeline.resume()  # los ids y el suavizado, para que sigan siendo los mismos
     return pipeline

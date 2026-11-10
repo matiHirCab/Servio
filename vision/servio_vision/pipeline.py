@@ -37,9 +37,12 @@ SAVE_STATE_EVERY_S = 5.0  # cada cuánto se guarda lo que recuerda el pipeline
 LOG_SAVE_ERROR_EVERY_S = 60.0  # una base caída falla en cada guardado
 
 ObservationHandler = Callable[[TableObservation], object]
-# Después de cada lectura: el pipeline, las observaciones de esa lectura y la hora.
-# Lo usa la vista del salón en vivo (salon.py); no puede cortar el loop.
-ReadingHandler = Callable[["Pipeline", list[TableObservation], datetime], object]
+# Después de cada lectura: el pipeline, las observaciones de esa lectura, la hora y
+# el frame (BGR, ya difuminado). Lo usa la vista del salón en vivo (salon.py), que
+# con el frame arma el modo video; no puede cortar el loop.
+ReadingHandler = Callable[
+    ["Pipeline", list[TableObservation], datetime, np.ndarray], object
+]
 
 
 class Pipeline:
@@ -315,7 +318,7 @@ class Pipeline:
             self.save_state()
         if self.on_reading is not None:
             try:
-                self.on_reading(self, observations, ts)
+                self.on_reading(self, observations, ts, frame)
             except Exception:
                 logger.exception("%s: la vista del salón falló con esta lectura", ts)
         return observations

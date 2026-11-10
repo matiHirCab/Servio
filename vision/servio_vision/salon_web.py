@@ -6,6 +6,15 @@ navegador. Rutas (`<local>` es el `local_id` de la casa, `local` por defecto):
 - `/<local>/salon`          la página (static/salon.html)
 - `/<local>/salon/estado`   la última foto del salón en JSON (`salon.py`)
 - `/<local>/salon/eventos`  la misma foto por Server-Sent Events, cada vez que cambia
+- `…?video=1`               (en las dos) la foto lleva además el frame de la cámara de
+                            esa misma lectura, ya difuminado, en base64 (`frame_jpeg`;
+                            o `frame_error` si no se pudo codificar): la página del
+                            modo video recibe imagen y datos juntos. Solo con
+                            `--web-video` (`SalonFeed(video=True)`); si no, se ignora
+- `/<local>/salon/frame.jpg` el último frame, con la versión de su foto en
+                            `X-Salon-Version`: para mirar la cámara con un `curl` o
+                            el navegador al armarla. Solo con `--web-video`, si no
+                            404; 503 si no se pudo codificar
 - `/`                       redirige a `/<local>/salon`
 
 Por defecto escucha solo en esta máquina (127.0.0.1). Con `--web-host 0.0.0.0` se
@@ -13,15 +22,15 @@ abre desde el celular o la tablet en la misma red. No tiene usuarios ni contrase
 no la expongas a internet.
 """
 
-import json
+import ipaddress
 import logging
 import threading
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import quote, unquote, urlsplit
+from urllib.parse import parse_qs, quote, unquote, urlsplit
 
-from servio_vision.salon import SalonFeed
+from servio_vision.salon import BROKEN_FRAME, SalonFeed
 
 logger = logging.getLogger("servio")
 
@@ -44,10 +53,28 @@ class SalonServer:
         return self.httpd.server_address[1]
 
     @property
+    def host(self) -> str:
+        return str(self.httpd.server_address[0])
+
+    @property
+    def exposed(self) -> bool:
+        """Si escucha para otros equipos de la red (no solo esta máquina)."""
+        return not _is_loopback(self.host)
+
+    @property
     def url(self) -> str:
-        host = str(self.httpd.server_address[0])
-        if host in ("0.0.0.0", ""):
-            host = "localhost"
+        """La dirección para abrirla desde esta máquina."""
+        return self._url("localhost" if self.host in ("0.0.0.0", "") else self.host)
+
+    @property
+    def reachable_url(self) -> str:
+        """La dirección que usan los demás equipos de la red (con todas las
+        interfaces no hay una sola: la IP de esta máquina)."""
+        return self._url(
+            "<IP de esta PC>" if self.host in ("0.0.0.0", "") else self.host
+        )
+
+    def _url(self, host: str) -> str:
         return f"http://{host}:{self.port}/{quote(self.feed.local_id)}/salon"
 
     def start(self) -> "SalonServer":
@@ -63,6 +90,15 @@ class SalonServer:
         self.httpd.server_close()
 
 
+def _is_loopback(host: str) -> bool:
+    """Una dirección que solo ve esta máquina. `host` es la ya ligada
+    (`server_address`, siempre numérica); un valor raro cuenta como expuesto."""
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
+
+
 def _handler(server: SalonServer) -> type[BaseHTTPRequestHandler]:
     feed = server.feed
 
@@ -73,7 +109,8 @@ def _handler(server: SalonServer) -> type[BaseHTTPRequestHandler]:
             logger.debug("web: " + format, *args)
 
         def do_GET(self) -> None:
-            parts = [unquote(p) for p in urlsplit(self.path).path.split("/") if p]
+            url = urlsplit(self.path)
+            parts = [unquote(p) for p in url.path.split("/") if p]
             if not parts:
                 return self._redirect(f"/{quote(feed.local_id)}/salon")
             if parts[0] != feed.local_id or len(parts) < 2 or parts[1] != "salon":
@@ -83,12 +120,44 @@ def _handler(server: SalonServer) -> type[BaseHTTPRequestHandler]:
                 return self._send(
                     HTTPStatus.OK, PAGE.read_bytes(), "text/html; charset=utf-8"
                 )
+            # el frame con la foto: solo si el modo video está prendido (si no, la foto
+            # de siempre, y una sola en la caché)
+            with_video = feed.video and parse_qs(url.query).get("video", [""])[0] == "1"
             if rest == ["estado"]:
-                body = json.dumps(feed.snapshot(), ensure_ascii=False).encode()
+                body = feed.payload(feed.published(), with_video)
                 return self._send(HTTPStatus.OK, body, "application/json")
             if rest == ["eventos"]:
-                return self._events()
+                return self._events(with_video)
+            if rest == ["frame.jpg"]:
+                return self._frame()
             return self._send(HTTPStatus.NOT_FOUND, b"No existe", "text/plain")
+
+        def _frame(self) -> None:
+            if not feed.video:
+                return self._send(
+                    HTTPStatus.NOT_FOUND,
+                    "El modo video está apagado (--web-video)".encode(),
+                    "text/plain; charset=utf-8",
+                )
+            found = feed.frame_jpeg()
+            if found is None:
+                return self._send(
+                    HTTPStatus.NOT_FOUND,
+                    "Todavía no hay frame".encode(),
+                    "text/plain; charset=utf-8",
+                )
+            if found.jpeg is None:
+                return self._send(
+                    HTTPStatus.SERVICE_UNAVAILABLE,
+                    BROKEN_FRAME.encode(),
+                    "text/plain; charset=utf-8",
+                )
+            self._send(
+                HTTPStatus.OK,
+                found.jpeg,
+                "image/jpeg",
+                {"X-Salon-Version": str(found.version)},
+            )
 
         def _redirect(self, location: str) -> None:
             self.send_response(HTTPStatus.FOUND)
@@ -96,15 +165,26 @@ def _handler(server: SalonServer) -> type[BaseHTTPRequestHandler]:
             self.send_header("Content-Length", "0")
             self.end_headers()
 
-        def _send(self, status: HTTPStatus, body: bytes, content_type: str) -> None:
+        def _send(
+            self,
+            status: HTTPStatus,
+            body: bytes,
+            content_type: str,
+            headers: dict[str, str] | None = None,
+        ) -> None:
             self.send_response(status)
             self.send_header("Content-Type", content_type)
+            for name, value in (headers or {}).items():
+                self.send_header(name, value)
             self.send_header("Content-Length", str(len(body)))
             self.send_header("Cache-Control", "no-store")
-            self.end_headers()
-            self.wfile.write(body)
+            try:
+                self.end_headers()
+                self.wfile.write(body)
+            except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
+                pass  # el navegador cortó (una bajada de frame.jpg que ya no quería)
 
-        def _events(self) -> None:
+        def _events(self, with_video: bool) -> None:
             self.send_response(HTTPStatus.OK)
             self.send_header("Content-Type", "text/event-stream")
             self.send_header("Cache-Control", "no-store")
@@ -114,13 +194,14 @@ def _handler(server: SalonServer) -> type[BaseHTTPRequestHandler]:
             version = -1  # la primera vez manda lo que haya
             try:
                 while not server.closing.is_set():
-                    new, snapshot = feed.wait(version, KEEPALIVE_S)
-                    if new != version and snapshot is not None:
-                        data = json.dumps(snapshot, ensure_ascii=False)
-                        self.wfile.write(f"data: {data}\n\n".encode())
+                    published = feed.wait_published(version, KEEPALIVE_S)
+                    if published.version != version and published.snapshot is not None:
+                        data = feed.payload(published, with_video)
+                        self.wfile.write(b"data: " + data + b"\n\n")
                     else:
                         self.wfile.write(b": sigo\n\n")
-                    version = new
+                    version = published.version
+                    del published  # no retener el frame (es grande) mientras se espera la foto siguiente
                     self.wfile.flush()
             except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
                 pass  # el navegador cerró la pestaña

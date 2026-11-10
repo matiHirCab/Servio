@@ -1,7 +1,7 @@
 """Tests de tools/tablero.py: el protocolo para tomar tarjetas sin pisarse, con un Trello falso."""
 
 import sys
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -18,6 +18,17 @@ LISTS = {
     "Ideas a futuro": "LI",
 }
 ME = "me1"
+
+
+# Las fechas de los comentarios del fake salen de «ahora»: la frescura de un candado se
+# mide contra el reloj real, así que una fecha fija dejaba de ser fresca al día siguiente.
+BASE = datetime.now(UTC).replace(microsecond=0)
+
+
+def stamp(seconds: float) -> str:
+    """Fecha de Trello (ISO con milisegundos y Z) a `seconds` de la base."""
+    when = BASE + timedelta(seconds=seconds)
+    return when.strftime("%Y-%m-%dT%H:%M:%S.") + f"{when.microsecond // 1000:03d}Z"
 
 
 class FakeTrello:
@@ -108,7 +119,7 @@ class FakeTrello:
         self.clock += 1
         row = {
             "id": f"a{self.clock}",
-            "date": f"2026-11-09T10:00:{self.clock:02d}.000Z",
+            "date": stamp(self.clock),
             "data": {"text": text},
         }
         self.comments[cid].append(row)
@@ -408,7 +419,7 @@ def test_two_overlapping_cards_taken_at_once_the_newer_lock_backs_off():
             "c9",
             tablero.lock_text("eeeeeeeeeeee", "otro", "Semana 3", datetime.now(UTC)),
         )
-        api.comments["c9"][-1]["date"] = "2026-11-09T09:00:00.000Z"
+        api.comments["c9"][-1]["date"] = stamp(-3600)  # una hora antes
 
     api.before_comment_read = sneak
     with pytest.raises(SystemExit) as e:
@@ -436,7 +447,7 @@ def test_two_overlapping_cards_taken_at_once_the_older_lock_keeps_going():
             "c9",
             tablero.lock_text("eeeeeeeeeeee", "otro", "Semana 3", datetime.now(UTC)),
         )
-        api.comments["c9"][-1]["date"] = "2026-11-09T11:00:00.000Z"
+        api.comments["c9"][-1]["date"] = stamp(3600)  # una hora después
 
     api.before_comment_read = sneak
     board.take("cccccc05", "yo")
@@ -493,9 +504,7 @@ def test_overlapping_card_locked_but_not_yet_moved_counts():
             "c9",
             tablero.lock_text("eeeeeeeeeeee", "otro", "Semana 3", datetime.now(UTC)),
         )
-        api.comments["c9"][-1]["date"] = (
-            "2026-11-09T10:00:00.500Z"  # fresco, anterior al nuestro
-        )
+        api.comments["c9"][-1]["date"] = stamp(0.5)  # fresco, anterior al nuestro
 
     api.before_comment_read = sneak
     with pytest.raises(SystemExit) as e:
@@ -926,7 +935,7 @@ def test_lost_race_deletes_own_lock_once():
             cid,
             tablero.lock_text("ffffffffffff", "otro", "Semana 3", datetime.now(UTC)),
         )
-        mine["date"] = "2026-11-09T10:00:59.000Z"
+        mine["date"] = stamp(59)  # fresco, posterior al nuestro
         api.comments[cid].append(mine)
 
     api.before_comment_read = sneak
@@ -1053,9 +1062,7 @@ def test_late_listed_older_lock_makes_us_back_off_after_the_move():
                         "ffffffffffff", "otro", "Semana 3", datetime.now(UTC)
                     ),
                 )
-                api.comments["c5"][-1]["date"] = (
-                    "2026-11-09T10:00:00.500Z"  # más viejo que el nuestro
-                )
+                api.comments["c5"][-1]["date"] = stamp(0.5)  # más viejo que el nuestro
         return rows
 
     api.get = late_listing
@@ -1144,7 +1151,7 @@ def test_late_loser_only_removes_its_lock_and_leaves_the_card_to_the_winner():
                         "ffffffffffff", "otro", "Semana 3", datetime.now(UTC)
                     ),
                 )
-                api.comments["c5"][-1]["date"] = "2026-11-09T10:00:00.500Z"
+                api.comments["c5"][-1]["date"] = stamp(0.5)
         return rows
 
     api.get = late_listing
@@ -1371,7 +1378,7 @@ def test_race_second_agent_loses_and_backs_off():
                 "ffffffffffff", "otro-agente", "Semana 3", datetime.now(UTC)
             ),
         )
-        mine["date"] = "2026-11-09T10:00:59.000Z"
+        mine["date"] = stamp(59)  # fresco, posterior al nuestro
         api.comments[cid].append(mine)
 
     api.before_comment_read = sneak
