@@ -694,7 +694,7 @@ function connect() {
 }
 connect();
 render();
-setInterval(() => { renderStatus(); refreshAges($("floor")); refreshAges($("overlay")); }, 1000);
+setInterval(() => { renderStatus(); refreshAges($("floor")); refreshAges($("overlay")); connect(); }, 1000);  // connect: reabre la SSE si quedó cerrada
 // las etiquetas se midieron con la fuente de reserva: al llegar Barlow Condensed, de nuevo
 if (document.fonts) document.fonts.ready.then(() => {
   fitTags($("floor")); fitTags($("overlay"));
