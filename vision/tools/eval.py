@@ -80,10 +80,11 @@ def table_sheet(imgs: list[Image.Image], side: int = 256) -> Image.Image:
 
 
 def load_labels(folder: Path) -> list[dict[str, str]]:
-    """Las filas de `labels.csv` con un estado de verdad (las saltadas de
-    `etiquetar.py` no cuentan)."""
+    """Las filas de `labels.csv` con un estado de verdad: un archivo repetido vale
+    por su última fila (así corrige `etiquetar.py`), y las saltadas no cuentan."""
     with open(folder / "labels.csv", encoding="utf-8", newline="") as f:
-        return [r for r in csv.DictReader(f) if r.get("estado") in STATES]
+        last = {r["archivo"]: r for r in csv.DictReader(f) if r.get("archivo")}
+    return [r for r in last.values() if r.get("estado") in STATES]
 
 
 def summarize(results: list[dict]) -> dict:
@@ -146,7 +147,11 @@ def evaluate_set(
             )
         )
         latencies.append(time.monotonic() - t0)
-        for r, est in zip(batch, report.plates if report else [None] * len(batch)):
+        # por `index`, no por posición: una respuesta que saltea un plato no corre
+        # las demás, y un plato sin respuesta cuenta como tal
+        by_index = {p.index: p for p in report.plates} if report else {}
+        for n, r in enumerate(batch, 1):
+            est = by_index.get(n)
             visible = est is not None and est.visible
             results.append(
                 {
@@ -171,11 +176,12 @@ def scenario_names() -> list[str]:
 
 def alert_events(log: Path) -> list[dict]:
     """Los avisos del log con el formato de `fixtures/pipeline/`: segundos desde la
-    primera observación."""
+    primera observación. `ValueError` si el log no tiene observaciones."""
     events = [json.loads(line) for line in log.read_text("utf-8").splitlines()]
-    start = datetime.fromisoformat(
-        next(e["ts"] for e in events if e["event"] == "observation")
-    )
+    first = next((e["ts"] for e in events if e.get("event") == "observation"), None)
+    if first is None:
+        raise ValueError(f"{log.name} no tiene observaciones")
+    start = datetime.fromisoformat(first)
     return [
         {
             "at_seconds": int(
@@ -212,8 +218,9 @@ def _isolated_run(workdir: Path) -> Iterator[None]:
         # ninguna variable de configuración de la casa ni de los avisos
         for name in settings.Settings.model_fields:
             os.environ.pop(
-                "DEMO_MODE" if name == "demo" else settings._alias(name).upper(), None
-            )
+                settings._alias(name).upper(), None
+            )  # SERVIO_DEMO entre ellas
+        os.environ.pop("DEMO_MODE", None)
         os.environ["DEMO_MODE"] = "false"
         os.environ["DATABASE_URL"] = f"sqlite:///{(workdir / 'eval.db').as_posix()}"
         saved = alerts.DEFAULT_LOG, settings.ENV_FILE
@@ -300,14 +307,20 @@ def run_scenario(name: str, workdir: Path) -> dict[str, Any]:
                 "--no-telegram",
             ]
         )  # fmt: skip
-        got = alert_events(alerts.DEFAULT_LOG) if code == 0 else []
+        got: list[dict] = []
+        failure = None if code == 0 else f"el pipeline salió con {code}"
+        if failure is None:
+            try:
+                got = alert_events(alerts.DEFAULT_LOG)
+            except (OSError, ValueError) as e:  # sin log, o sin observaciones
+                failure = f"la corrida no dejó avisos que comparar: {e}"
     expected = json.loads(golden.read_text("utf-8")) if golden.exists() else None
-    passes = code == 0 and expected is not None and got == expected
+    passes = failure is None and expected is not None and got == expected
     detail = []
-    if expected is None:
+    if failure is not None:
+        detail.append(failure)
+    elif expected is None:
         detail.append("sin esperado en fixtures/pipeline/")
-    elif code != 0:
-        detail.append(f"el pipeline salió con {code}")
     elif not passes:
         want, have = (
             Counter(json.dumps(e) for e in expected),
@@ -315,7 +328,16 @@ def run_scenario(name: str, workdir: Path) -> dict[str, Any]:
         )
         detail += [f"esperado y no salió: {e}" for e in (want - have).elements()]
         detail += [f"salió y no se esperaba: {e}" for e in (have - want).elements()]
-    return {"escenario": name, "pasa": passes, "diferencias": detail, "avisos": got}
+        if not detail:
+            detail.append("los mismos avisos, en otro orden")
+    return {
+        "escenario": name,
+        "pasa": passes,
+        "corrida_ok": failure
+        is None,  # la corrida anduvo: sus avisos valen para regenerar
+        "diferencias": detail,
+        "avisos": got,
+    }
 
 
 def run_scenarios(names: list[str] | None = None) -> list[dict[str, Any]]:
@@ -373,7 +395,8 @@ def build_board(
             "pasan": passed,
             "total": len(scenarios),
             "detalle": [
-                {k: v for k, v in s.items() if k != "avisos"} for s in scenarios
+                {k: v for k, v in s.items() if k not in ("avisos", "corrida_ok")}
+                for s in scenarios
             ],
         },
         "avisos_falsos_por_hora": None,
@@ -513,6 +536,13 @@ def print_board(board: dict[str, Any]) -> None:
 # ---------------------------------------------------------------- línea de comandos
 
 
+def _positive(raw: str) -> float:
+    value = float(raw)
+    if value <= 0:
+        raise argparse.ArgumentTypeError("tiene que ser más de 0")
+    return value
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(
         description="Evaluación del modelo y tablero de números."
@@ -533,9 +563,9 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--max", type=int, default=0, help="evaluar solo los primeros N")
     ap.add_argument(
         "--interval",
-        type=float,
+        type=_positive,
         default=30,
-        help="cadencia del loop, para el costo por hora",
+        help="cadencia del loop en segundos (más de 0), para el costo por hora",
     )
     ap.add_argument("--out", type=Path, default=DEFAULT_OUT)
     a = ap.parse_args(argv)

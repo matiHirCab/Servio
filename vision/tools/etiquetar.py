@@ -42,7 +42,7 @@ import numpy as np
 
 from servio_vision import recording
 from servio_vision.app import utf8_console
-from servio_vision.zones import table_rect
+from servio_vision.zones import table_rect, to_jpeg
 
 logger = logging.getLogger("servio")
 
@@ -110,7 +110,8 @@ def crop_session(
     out.mkdir(parents=True, exist_ok=True)
     written: list[Path] = []
     for path, ts in frames:
-        frame = cv2.imread(str(path))
+        # como recording.py: cv2.imread/imwrite no pueden con acentos en Windows
+        frame = cv2.imdecode(np.fromfile(path, np.uint8), cv2.IMREAD_COLOR)
         if frame is None:
             logger.warning("%s no se pudo leer, lo salteo", path.name)
             continue
@@ -140,8 +141,10 @@ def _save(out: Path, name: str, image: np.ndarray) -> list[Path]:
     target = out / name
     if target.exists():
         return []
-    if not cv2.imwrite(str(target), image, [cv2.IMWRITE_JPEG_QUALITY, JPEG_QUALITY]):
-        raise OSError(f"No se pudo escribir {target}")
+    try:
+        target.write_bytes(to_jpeg(image, JPEG_QUALITY))
+    except ValueError as e:
+        raise OSError(f"No se pudo escribir {target}: {e}") from e
     return [target]
 
 
@@ -243,9 +246,15 @@ async function label(state) {
   if (!current) return;  // nada que etiquetar, o una respuesta en camino: la tecla se ignora
   const archivo = current;
   current = null;
-  const r = await fetch("etiqueta", {method: "POST", headers: {"Content-Type": "application/json"},
-    body: JSON.stringify({archivo, estado: state, tipo: kind, nota: $("note").value})});
-  if (!r.ok) { alert(await r.text()); current = archivo; return; }
+  try {
+    const r = await fetch("etiqueta", {method: "POST", headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({archivo, estado: state, tipo: kind, nota: $("note").value})});
+    if (!r.ok) throw new Error(await r.text());
+  } catch (e) {  // el servidor se cortó, o rechazó la etiqueta: se avisa y se vuelve a intentar
+    current = archivo;
+    alert("No se guardó la etiqueta: " + e.message);
+    return;
+  }
   next();
 }
 document.querySelectorAll("#kinds button").forEach(b => b.onclick = () => setKind(b.dataset.kind));
@@ -338,9 +347,15 @@ def _handler(folder: Path) -> type[BaseHTTPRequestHandler]:
             parts = [p for p in urlsplit(self.path).path.split("/") if p]
             if parts != ["etiqueta"]:
                 return self._send(HTTPStatus.NOT_FOUND, b"No existe", "text/plain")
-            length = int(self.headers.get("Content-Length") or 0)
             try:
+                length = int(self.headers.get("Content-Length") or 0)
                 data = json.loads(self.rfile.read(length) or b"{}")
+                if not isinstance(data, dict):
+                    return self._send(
+                        HTTPStatus.BAD_REQUEST,
+                        b"el cuerpo tiene que ser un objeto JSON",
+                        "text/plain; charset=utf-8",
+                    )
                 write_label(
                     folder,
                     str(data.get("archivo", "")),

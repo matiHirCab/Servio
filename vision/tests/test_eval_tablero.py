@@ -34,6 +34,8 @@ def make_set(folder: Path, rows):
         Image.new("RGB", (40, 30), (200, 150, 100)).save(folder / name)
         lines.append(f"{name},{state},plato,")
     lines.append("x.jpg,saltado,otro,")  # lo saltado en etiquetar.py no cuenta
+    if rows:  # una corrección: la última fila del mismo archivo es la que vale
+        lines.append(f"{rows[0][0]},{rows[0][1]},plato,corregido")
     (folder / "labels.csv").write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
@@ -56,6 +58,17 @@ def test_evaluate_set_sends_crops_in_batches_and_scores_them(tmp_path):
     )
     assert calls == [(2, "EVAL1"), (1, "EVAL2")]
     assert [r["predicho"] for r in results] == ["lleno", "vacio", "lleno"]
+
+    def skipping(plates, table_id, references=None):  # el modelo saltea el plato 1
+        return PlatesReport(
+            plates=[PlateEstimate(index=2, fill_ratio=0.0, confidence=0.9)]
+        )
+
+    skipped, _ = evaluation.evaluate_set(
+        folder, FakeEstimator(skipping), per_call=3, log=lambda s: None
+    )
+    # por índice, no por posición: el 1 queda sin respuesta, el 2 es «vacío»
+    assert [r["predicho"] for r in skipped] == [None, "vacio", None]
     assert len(latencies) == 2
     summary = evaluation.summarize(results)
     assert summary["acierto"] == round(2 / 3, 3)
@@ -166,21 +179,35 @@ def test_a_scenario_runs_through_the_whole_pipeline_and_passes(tmp_path):
     assert Path.cwd() == before  # volvió a la carpeta de antes
 
 
+def test_run_scenario_reports_a_broken_run_instead_of_crashing(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        evaluation,
+        "alert_events",
+        lambda log: (_ for _ in ()).throw(ValueError("vacío")),
+    )
+    result = evaluation.run_scenario("plato_lleno_mucho", tmp_path)
+    assert result["pasa"] is False and result["corrida_ok"] is False
+    assert "no dejó avisos" in result["diferencias"][0]
+
+
 def test_scenarios_ignore_the_house_env(tmp_path, monkeypatch):
     """El .env de la máquina (o lo que `load_dotenv` ya dejó en el entorno) no
     cambia los escenarios: corren con los umbrales de producción."""
     monkeypatch.setenv("FINISHED_AFTER", "1")  # haría otros avisos
     monkeypatch.setenv("DEMO_MODE", "true")
     monkeypatch.setenv("SERVIO_INTERVAL", "5")
+    monkeypatch.setenv("SERVIO_DEMO", "true")  # el alias que gana sobre DEMO_MODE
     result = evaluation.run_scenario("plato_lleno_mucho", tmp_path)
     assert result["pasa"], result["diferencias"]
     assert os.environ["FINISHED_AFTER"] == "1"  # y el entorno queda como estaba
 
 
-def test_sin_modelo_needs_all(tmp_path):
+def test_sin_modelo_needs_all_and_interval_is_positive(tmp_path):
     make_set(tmp_path / "set", [("a.jpg", "lleno")])
     with pytest.raises(SystemExit):
         evaluation.main(["--set", str(tmp_path / "set"), "--sin-modelo"])
+    with pytest.raises(SystemExit):
+        evaluation.main(["--all", "--sin-modelo", "--interval", "0"])
 
 
 def test_scenario_names_come_from_fixtures():

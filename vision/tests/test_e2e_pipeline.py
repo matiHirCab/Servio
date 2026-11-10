@@ -37,6 +37,8 @@ def test_pipeline_alerts_match_golden(name, tmp_path):
     propios log y base, comparado con `fixtures/pipeline/`."""
     result = evaluation.run_scenario(name, tmp_path)
     if UPDATE:
+        # un pipeline caído no regenera nada: el esperado quedaría vacío
+        assert result["corrida_ok"], result["diferencias"]
         golden = GOLDEN / f"{name}.alerts.json"
         golden.parent.mkdir(exist_ok=True)
         golden.write_text(

@@ -17,7 +17,7 @@ import etiquetar
 import eval as evaluation
 
 from servio_vision import recording
-from servio_vision.zones import TableZone, Zones
+from servio_vision.zones import TableZone, Zones, to_jpeg
 
 T0 = datetime(2026, 11, 10, 20, 0, tzinfo=UTC)
 ZONES = Zones(
@@ -40,10 +40,11 @@ def make_session(folder: Path, readings: int = 3, zones: Zones | None = ZONES) -
     frame = np.zeros((100, 200, 3), np.uint8)
     frame[:, :100] = (40, 80, 200)  # una mesa de cada color, para distinguir recortes
     frame[:, 100:] = (200, 80, 40)
-    for n in range(readings):
-        cv2.imwrite(
-            str(folder / recording.frame_name(T0 + timedelta(seconds=30 * n))), frame
-        )
+    for n in range(
+        readings
+    ):  # como recording.py: sin cv2.imwrite, que no puede con acentos
+        name = recording.frame_name(T0 + timedelta(seconds=30 * n))
+        (folder / name).write_bytes(to_jpeg(frame))
     info = {
         "started_at": T0.isoformat(),
         "rules": {"interval": 30},
@@ -116,6 +117,12 @@ def test_pending_accepts_png_and_serves_it_with_its_type(tmp_path):
         assert e.value.code == 404
     finally:
         srv.stop()
+
+
+def test_crop_session_handles_accents_in_paths(tmp_path):
+    session = make_session(tmp_path / "grabación", readings=1)
+    written = etiquetar.crop_session(session, tmp_path / "día")
+    assert len(written) == 2 and all(p.stat().st_size > 0 for p in written)
 
 
 def test_crop_session_rejects_a_bad_step(tmp_path):
@@ -208,6 +215,13 @@ def test_web_labels_a_set_end_to_end(server):
 def test_web_rejects_bad_labels_and_unknown_paths(server):
     base = server.url.rstrip("/")
     first = json.loads(get(f"{base}/siguiente")[2])["archivo"]
+    for body in (b"[]", b"no es json"):  # un cuerpo raro es 400, no un hilo caído
+        req = urllib.request.Request(
+            f"{base}/etiqueta", body, {"Content-Type": "application/json"}
+        )
+        with pytest.raises(HTTPError) as e:
+            urllib.request.urlopen(req, timeout=5)
+        assert e.value.code == 400
     with pytest.raises(HTTPError) as e:
         post(f"{base}/etiqueta", {"archivo": first, "estado": "casi", "tipo": "plato"})
     assert e.value.code == 400 and "estado" in e.value.read().decode()
