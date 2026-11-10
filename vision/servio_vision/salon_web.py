@@ -18,6 +18,7 @@ abre desde el celular o la tablet en la misma red. No tiene usuarios ni contrase
 no la expongas a internet.
 """
 
+import ipaddress
 import json
 import logging
 import threading
@@ -77,8 +78,12 @@ class SalonServer:
 
 
 def _is_loopback(host: str) -> bool:
-    """Una dirección que solo ve esta máquina (IPv4: el servidor es AF_INET)."""
-    return host.startswith("127.") or host == "localhost"
+    """Una dirección que solo ve esta máquina. `host` es la ya ligada
+    (`server_address`, siempre numérica); un valor raro cuenta como expuesto."""
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
 
 
 def _handler(server: SalonServer) -> type[BaseHTTPRequestHandler]:
@@ -119,9 +124,14 @@ def _handler(server: SalonServer) -> type[BaseHTTPRequestHandler]:
                 )
             found = feed.frame_jpeg()
             if found is None:
+                broken = feed.frame_broken  # distinto de «todavía no llegó»
                 return self._send(
-                    HTTPStatus.NOT_FOUND,
-                    "Todavía no hay frame".encode(),
+                    HTTPStatus.SERVICE_UNAVAILABLE if broken else HTTPStatus.NOT_FOUND,
+                    (
+                        "El frame de esta lectura no se pudo codificar (ver el log)"
+                        if broken
+                        else "Todavía no hay frame"
+                    ).encode(),
                     "text/plain; charset=utf-8",
                 )
             jpeg, version = found

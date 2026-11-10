@@ -153,8 +153,20 @@ def test_a_frame_that_cannot_be_encoded_is_logged_once_and_not_served(caplog):
         assert feed.frame_jpeg() is None
         assert feed.frame_jpeg() is None  # se avisa una vez, no en cada pedido
     assert caplog.text.count("No se pudo codificar") == 1
+    assert feed.frame_broken  # el servidor lo cuenta distinto de «todavía no hay»
     pipeline.process_frame(FRAME, T0)  # la lectura siguiente vuelve a servirse
-    assert feed.frame_jpeg() is not None
+    assert feed.frame_jpeg() is not None and not feed.frame_broken
+
+
+def test_a_broken_frame_is_a_503_not_a_404(video_server):
+    import numpy as np
+
+    pipeline = pipeline_for(video_server)
+    video_server.feed.on_reading(pipeline, [], T0, np.zeros((0, 0, 3), np.uint8))
+    code, text = status_of(
+        f"http://127.0.0.1:{video_server.port}/casa-1/salon/frame.jpg"
+    )
+    assert code == 503 and "no se pudo codificar" in text
 
 
 def test_server_says_whether_it_is_exposed_to_the_network():

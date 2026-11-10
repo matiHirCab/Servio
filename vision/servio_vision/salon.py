@@ -202,6 +202,12 @@ class SalonFeed:
         self._encode_lock = threading.Lock()  # un solo navegador codifica por vez
         self._encode_failed = 0  # la versión cuyo frame no se pudo codificar
 
+    @property
+    def frame_broken(self) -> bool:
+        """Si el frame de la última foto no se pudo codificar (ya quedó logueado)."""
+        with self._changed:
+            return self._frame is not None and self._encode_failed == self._version
+
     def frame_jpeg(self) -> tuple[bytes, int] | None:
         """El frame de la última foto como JPEG, con la versión de esa foto (la
         página lo muestra recién cuando dibuja esa foto). Se codifica la primera vez
@@ -244,8 +250,9 @@ class SalonFeed:
         ts: datetime,
         frame: np.ndarray,
     ) -> None:
-        """La foto de esta lectura y, con `video`, su frame (una copia: el loop puede
-        reusar el buffer de la cámara). La foto lleva el tamaño real del frame: las
+        """La foto de esta lectura y, con `video`, su frame (la misma referencia: el
+        loop no lo toca después de procesarlo y `capture` entrega un array nuevo por
+        lectura; acá solo se lee para codificarlo). La foto lleva el tamaño real del frame: las
         cajas van normalizadas y la página las dibuja sobre la imagen que recibe,
         aunque la cámara no tenga la proporción con que se dibujaron las zonas."""
         for obs in observations:
@@ -263,7 +270,7 @@ class SalonFeed:
             self.video,
             (int(frame.shape[1]), int(frame.shape[0])),
         )
-        kept = frame.copy() if self.video else None  # fuera del candado: es grande
+        kept = frame if self.video else None
         with self._changed:
             self._version += 1
             snapshot["version"] = self._version

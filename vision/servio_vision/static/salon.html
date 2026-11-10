@@ -315,7 +315,7 @@ function fitTags(svg, only = null) {
     r.setAttribute("width", w.toFixed(0)); r.setAttribute("x", x0.toFixed(0)); t.setAttribute("x", (x0 + w / 2).toFixed(0));
     const y = only ? g.getAttribute("transform").match(/ ([-\d.]+)\)/)[1] : g.dataset.y;  // la `y` ya decidida (alt) se respeta
     g.setAttribute("transform", `translate(${g.dataset.x} ${y})`);
-    const m = g.getCTM && svg.getCTM ? svg.getCTM().inverse().multiply(g.getCTM()) : null;
+    const m = ctmInto(svg, g);
     const absX = (m ? m.e : +g.dataset.x) + x0, absY = (m ? m.f : +y) - 11;
     let dx = Math.min(0, vw - w - 4 - absX);  // que no se corte contra el borde derecho
     if (absX + dx < 4) dx = 4 - absX;         // ni contra el izquierdo
@@ -338,9 +338,14 @@ function fitTags(svg, only = null) {
   }
 }
 // el rectángulo de una etiqueta en las unidades del viewBox del svg
+// la matriz de `g` en las unidades del viewBox del svg; null si no hay caja (sin layout)
+function ctmInto(svg, g) {
+  const outer = svg.getCTM && svg.getCTM(), inner = g.getCTM && g.getCTM();
+  return outer && inner ? outer.inverse().multiply(inner) : null;
+}
 function tagBox(svg, g) {
-  if (!g.getCTM || !svg.getCTM) return null;
-  const m = svg.getCTM().inverse().multiply(g.getCTM()), r = g.querySelector("rect");
+  const m = ctmInto(svg, g), r = g.querySelector("rect");
+  if (!m) return null;
   return {x: m.e + +r.getAttribute("x"), y: m.f + +r.getAttribute("y"), w: +r.getAttribute("width"), h: +r.getAttribute("height")};
 }
 const alertTagText = (al, name) => alertTitle(al.type, name).toUpperCase();
@@ -443,6 +448,7 @@ function renderFloor() {
 // y el aviso abierto de cada mesa y, por plato con caja, el anillo del estado y el
 // nombre. Un plato sin caja no se marca: solo se dibuja lo que la cámara ve de verdad.
 let camKey = null;  // la lectura (hora + versión) cuyo frame.jpg se pidió; tras un reinicio la versión vuelve a 1
+let videoWidth = 0;  // el ancho con que se dibujó el overlay (una unidad = un píxel)
 let framePending = null;  // {version, blob} que llegó antes que su foto: se muestra cuando se dibuje
 function renderVideo() {
   const svg = $("overlay");
@@ -457,11 +463,13 @@ function renderVideo() {
   $("video").style.aspectRatio = `${fw} / ${fh}`;
   $("video").style.width = `min(100%, calc(72vh * ${(fw / fh).toFixed(4)}))`;  // una cámara vertical no más alta que la pantalla
   const VW = $("video").clientWidth || 1000, VH = VW * fh / fw;  // medido después de fijar el ancho
+  videoWidth = VW;
   svg.setAttribute("viewBox", `0 0 ${VW} ${VH.toFixed(1)}`);
   $("cam-cap").textContent = `Cámara ${snap.camera} · caras difuminadas en la computadora`;
   const key = `${snap.ts}|${snap.version}`;
-  if (key !== camKey) { camKey = key; loadFrame([fw, fh]); }
-  else if (framePending && framePending.version === snap.version) showFrame(framePending.blob, [fw, fh]);
+  // el frame de esta foto: si ya llegó (se adelantó a la SSE), se muestra; si no, se pide
+  if (framePending && framePending.version === snap.version) { camKey = key; showFrame(framePending.blob, [fw, fh]); }
+  else if (key !== camKey) { camKey = key; loadFrame([fw, fh]); }
   let out = `<defs>${halos("v")}</defs>`;
   for (const t of snap.tables) {
     const sel = t.id === selected, x0 = t.box[0] * VW, y0 = t.box[1] * VH, w = t.box[2] * VW, h = t.box[3] * VH;
@@ -499,15 +507,19 @@ let fetching = false, frameWanted = null, retried = null;  // bajada en vuelo; l
 function loadFrame(drawn) {
   if (fetching) { frameWanted = drawn; return; }  // una sola bajada a la vez; al terminar se pide la última
   fetching = true;
-  const done = () => { fetching = false; if (frameWanted) { const d = frameWanted; frameWanted = null; loadFrame(d); } };
-  fetch(`${base}/frame.jpg`).then(r => r.ok ? r.blob().then(blob => [blob, +r.headers.get("X-Salon-Version")]) : null).then(got => {
-    if (!got || !snap) return done();
+  // al terminar, la bajada que quedó esperando, salvo que lo que llegó ya sea el frame de la foto actual
+  const done = shown => { fetching = false; if (frameWanted && shown !== (snap && snap.version)) { const d = frameWanted; frameWanted = null; loadFrame(d); } else frameWanted = null; };
+  fetch(`${base}/frame.jpg`).then(r => {
+    if (r.status === 503) $("cam-wait").textContent = "La imagen de la cámara no se pudo codificar (ver el log de Servio)";
+    return r.ok ? r.blob().then(blob => [blob, +r.headers.get("X-Salon-Version")]) : null;
+  }).then(got => {
+    if (!got || !snap) return done(null);
     const [blob, version] = got;
-    if (!version || version === snap.version) showFrame(blob, drawn);  // sin versión (un proxy la sacó): se muestra igual
-    else if (version > snap.version) framePending = {version, blob};  // su foto está por llegar
+    if (!version || version === snap.version) { showFrame(blob, drawn); return done(snap.version); }  // sin versión (un proxy la sacó): se muestra igual
+    if (version > snap.version) framePending = {version, blob};  // su foto está por llegar
     else if (retried !== snap.version) { retried = snap.version; frameWanted = drawn; }  // llegó viejo: una vez más, no en bucle
-    done();
-  }).catch(done);
+    done(null);
+  }).catch(() => done(null));
 }
 function showFrame(blob, drawn) {
   framePending = null;
@@ -632,7 +644,8 @@ function chooseMode(m) {
   try { localStorage.setItem("salon-mode", m); } catch (e) {}
   showMode(m === "video" && snap && snap.video ? "video" : "recon");
   if (mode === "recon" && dirty.floor) { renderFloor(); dirty.floor = false; }
-  if (mode === "video" && dirty.video) { renderVideo(); dirty.video = false; }
+  // el overlay se dibuja a un píxel por unidad: si el ancho cambió mientras no se veía, de nuevo
+  if (mode === "video" && (dirty.video || $("video").clientWidth !== videoWidth)) { renderVideo(); dirty.video = false; }
 }
 $("mode-recon").onclick = () => chooseMode("recon");
 $("mode-video").onclick = () => chooseMode("video");
@@ -640,7 +653,7 @@ $("mode-video").onclick = () => chooseMode("video");
 // el viewBox del video sigue al ancho: un redibujo por cuadro de animación, con el foco a salvo (render)
 let resizing = false;
 window.addEventListener("resize", () => {
-  if (mode !== "video" || !snap || resizing) return;
+  if (mode !== "video" || !snap || resizing) return;  // en reconstrucción, chooseMode lo redibuja al volver si cambió el ancho
   resizing = true;
   requestAnimationFrame(() => { resizing = false; render(); });
 });
