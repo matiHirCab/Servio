@@ -41,6 +41,7 @@ import cv2
 import numpy as np
 
 from servio_vision import recording
+from servio_vision.app import utf8_console
 from servio_vision.zones import table_rect
 
 logger = logging.getLogger("servio")
@@ -51,6 +52,9 @@ SKIP = (
 )
 KINDS = ("plato", "guarnicion", "otro")  # plato de comida · pan o guarnición · otro
 LABELS_FILE = "labels.csv"
+# lo que puede haber en un set: los recortes propios son JPEG, los de afuera
+# (Nutrition5k, Roboflow) también PNG
+IMAGE_TYPES = {".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png"}
 COLUMNS = ("archivo", "estado", "tipo", "nota")
 JPEG_QUALITY = 90
 PAD = 0.08  # aire alrededor de la caja del plato (fracción del lado)
@@ -153,10 +157,16 @@ def read_labels(folder: Path) -> dict[str, dict[str, str]]:
         return {row["archivo"]: row for row in csv.DictReader(f) if row.get("archivo")}
 
 
+def is_image(path: Path) -> bool:
+    return path.is_file() and path.suffix.lower() in IMAGE_TYPES
+
+
 def pending(folder: Path) -> list[str]:
     """Los recortes de la carpeta sin etiqueta, en orden."""
     done = read_labels(folder)
-    return sorted(p.name for p in folder.glob("*.jpg") if p.name not in done)
+    return sorted(
+        p.name for p in folder.iterdir() if is_image(p) and p.name not in done
+    )
 
 
 def write_label(folder: Path, archivo: str, estado: str, tipo: str, nota: str) -> None:
@@ -167,7 +177,7 @@ def write_label(folder: Path, archivo: str, estado: str, tipo: str, nota: str) -
         raise ValueError(f"estado desconocido: {estado!r}")
     if tipo not in KINDS:
         raise ValueError(f"tipo desconocido: {tipo!r}")
-    if "/" in archivo or "\\" in archivo or not (folder / archivo).is_file():
+    if "/" in archivo or "\\" in archivo or not is_image(folder / archivo):
         raise ValueError(f"no es un recorte de la carpeta: {archivo!r}")
     path = folder / LABELS_FILE
     new = not path.exists()
@@ -230,10 +240,12 @@ async function next() {
 }
 function setKind(k) { kind = k; for (const b of document.querySelectorAll("#kinds button")) b.setAttribute("aria-pressed", String(b.dataset.kind === k)); }
 async function label(state) {
-  if (!current) return;
+  if (!current) return;  // nada que etiquetar, o una respuesta en camino: la tecla se ignora
+  const archivo = current;
+  current = null;
   const r = await fetch("etiqueta", {method: "POST", headers: {"Content-Type": "application/json"},
-    body: JSON.stringify({archivo: current, estado: state, tipo: kind, nota: $("note").value})});
-  if (!r.ok) { alert(await r.text()); return; }
+    body: JSON.stringify({archivo, estado: state, tipo: kind, nota: $("note").value})});
+  if (!r.ok) { alert(await r.text()); current = archivo; return; }
   next();
 }
 document.querySelectorAll("#kinds button").forEach(b => b.onclick = () => setKind(b.dataset.kind));
@@ -270,6 +282,16 @@ class LabelServer:
         ).start()
         return self
 
+    def serve(self) -> None:
+        """Atiende en este hilo hasta Ctrl+C (un `Event().wait()` sin plazo no se
+        corta con Ctrl+C en Windows)."""
+        try:
+            self.httpd.serve_forever()
+        except KeyboardInterrupt:
+            pass
+        finally:
+            self.httpd.server_close()
+
     def stop(self) -> None:
         self.httpd.shutdown()
         self.httpd.server_close()
@@ -303,9 +325,13 @@ def _handler(folder: Path) -> type[BaseHTTPRequestHandler]:
             if len(parts) == 2 and parts[0] == "img":
                 name = parts[1]
                 target = folder / name
-                if "/" in name or "\\" in name or not target.is_file():
+                if "/" in name or "\\" in name or not is_image(target):
                     return self._send(HTTPStatus.NOT_FOUND, b"No existe", "text/plain")
-                return self._send(HTTPStatus.OK, target.read_bytes(), "image/jpeg")
+                return self._send(
+                    HTTPStatus.OK,
+                    target.read_bytes(),
+                    IMAGE_TYPES[target.suffix.lower()],
+                )
             self._send(HTTPStatus.NOT_FOUND, b"No existe", "text/plain")
 
         def do_POST(self) -> None:
@@ -364,9 +390,7 @@ def main(argv: list[str] | None = None) -> int:
     if argv and argv[0] not in ("recortar", "etiquetar", "-h", "--help"):
         argv = ["etiquetar", *argv]
     args = parser.parse_args(argv)
-    for stream in (sys.stdout, sys.stderr):  # la consola de Windows y los acentos
-        if hasattr(stream, "reconfigure"):
-            stream.reconfigure(encoding="utf-8", errors="replace")
+    utf8_console()
     logging.basicConfig(level=logging.INFO, format="%(message)s")
     if args.cmd == "recortar":
         if not recording.is_session(args.sesion):
@@ -381,16 +405,11 @@ def main(argv: list[str] | None = None) -> int:
     if args.cmd == "etiquetar":
         if not args.set.is_dir():
             parser.error(f"{args.set} no es una carpeta")
-        server = LabelServer(args.set, args.web_host, args.web).start()
+        server = LabelServer(args.set, args.web_host, args.web)
         print(
             f"Etiquetar en {server.url}  ({len(pending(args.set))} pendientes; Ctrl+C para cortar)"
         )
-        try:
-            threading.Event().wait()
-        except KeyboardInterrupt:
-            pass
-        finally:
-            server.stop()
+        server.serve()  # en el hilo principal: Ctrl+C corta también en Windows
         return 0
     parser.print_help()
     return 2

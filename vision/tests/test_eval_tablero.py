@@ -2,6 +2,7 @@
 comparado con el anterior."""
 
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -123,6 +124,12 @@ def test_board_is_saved_with_a_date_and_compared_with_the_previous_one(tmp_path)
     text = "\n".join(lines)
     assert "acierto: – → 1" in text
     assert "escenarios que pasan: 1 de 2 → 2 de 2  ↑ mejor" in text
+    # un escenario nuevo que pasa no es una mejora: se compara la proporción
+    same = evaluation.compare_boards(
+        {"fecha": "a", "escenarios": {"pasan": 4, "total": 4}},
+        {"fecha": "b", "escenarios": {"pasan": 5, "total": 5}},
+    )
+    assert "escenarios que pasan: 4 de 4 → 5 de 5  igual" in "\n".join(same)
     assert "latencia media: – → 3 s" in text
     assert "costo por mesa por hora: – → 0.6 USD" in text
     evaluation.print_board(evaluation.load_board(saved[1]))  # no rompe
@@ -150,12 +157,30 @@ def test_a_scenario_runs_through_the_whole_pipeline_and_passes(tmp_path):
     herramienta)."""
     before = Path.cwd()
     result = evaluation.run_scenario("plato_lleno_mucho", tmp_path)
-    assert result == {
-        "escenario": "plato_lleno_mucho",
-        "pasa": True,
-        "diferencias": [],
-    }
+    assert (result["escenario"], result["pasa"], result["diferencias"]) == (
+        "plato_lleno_mucho",
+        True,
+        [],
+    )
+    assert result["avisos"][0]["event"] == "alert_opened"
     assert Path.cwd() == before  # volvió a la carpeta de antes
+
+
+def test_scenarios_ignore_the_house_env(tmp_path, monkeypatch):
+    """El .env de la máquina (o lo que `load_dotenv` ya dejó en el entorno) no
+    cambia los escenarios: corren con los umbrales de producción."""
+    monkeypatch.setenv("FINISHED_AFTER", "1")  # haría otros avisos
+    monkeypatch.setenv("DEMO_MODE", "true")
+    monkeypatch.setenv("SERVIO_INTERVAL", "5")
+    result = evaluation.run_scenario("plato_lleno_mucho", tmp_path)
+    assert result["pasa"], result["diferencias"]
+    assert os.environ["FINISHED_AFTER"] == "1"  # y el entorno queda como estaba
+
+
+def test_sin_modelo_needs_all(tmp_path):
+    make_set(tmp_path / "set", [("a.jpg", "lleno")])
+    with pytest.raises(SystemExit):
+        evaluation.main(["--set", str(tmp_path / "set"), "--sin-modelo"])
 
 
 def test_scenario_names_come_from_fixtures():

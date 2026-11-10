@@ -602,14 +602,19 @@ def _quiet_libraries(record: logging.LogRecord) -> bool:
     return not noisy or record.levelno >= logging.WARNING
 
 
-def setup_logging(verbose: bool = False) -> None:
-    """Terminal limpia: arranque, mesas y platos nuevos, avisos y errores.
-    Con `--verbose`, todo (cada llamada a Claude, pedidos HTTP, advertencias)."""
-    # La consola de Windows (cp1252) no puede escribir los emojis de los avisos:
-    # sin esto, el aviso impreso con --no-telegram tira UnicodeEncodeError.
+def utf8_console() -> None:
+    """La consola de Windows (cp1252) no puede escribir los emojis de los avisos ni
+    las flechas del tablero: sin esto, imprimirlos tira UnicodeEncodeError. Para el
+    loop y las herramientas de `tools/`."""
     for stream in (sys.stdout, sys.stderr):
         if hasattr(stream, "reconfigure"):
             stream.reconfigure(encoding="utf-8", errors="replace")
+
+
+def setup_logging(verbose: bool = False) -> None:
+    """Terminal limpia: arranque, mesas y platos nuevos, avisos y errores.
+    Con `--verbose`, todo (cada llamada a Claude, pedidos HTTP, advertencias)."""
+    utf8_console()
     logging.basicConfig(
         level=logging.DEBUG if verbose else logging.INFO,
         format="%(asctime)s %(levelname)s %(message)s",

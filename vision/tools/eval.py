@@ -45,6 +45,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from PIL import Image
 
+from servio_vision import app
 from servio_vision.llm import EstimateRequest, make_estimator
 from servio_vision.schemas import state_from_fill_ratio
 
@@ -193,44 +194,59 @@ def alert_events(log: Path) -> list[dict]:
 def _isolated_run(workdir: Path) -> Iterator[None]:
     """`main.py` escribe `out/eventos.jsonl` y la base donde se lo corre y lee el
     entorno: se corre en una carpeta temporal, con umbrales de producción y una
-    SQLite propia, y se vuelve todo atrás al salir. Lo que el pipeline imprime (los
-    avisos por consola, el chequeo de encuadre de una foto negra) no es del tablero:
-    se calla, salvo los errores."""
+    SQLite propia, sin nada del `.env` de esta máquina (ni lo que `load_dotenv` ya
+    haya metido en el entorno), y se vuelve todo atrás al salir. Lo que el pipeline
+    imprime (los avisos por consola, el chequeo de encuadre de una foto negra) no es
+    del tablero: se calla, salvo los errores. Cada cosa que se cambia se deshace en
+    el mismo `ExitStack`, así una que falle a mitad de camino no deja nada a medias."""
     from servio_vision import alerts, settings
 
-    frames = workdir / "frames"
-    frames.mkdir()
-    saved_cwd = Path.cwd()
     servio_log = logging.getLogger("servio")
-    saved_level = servio_log.level
-    servio_log.setLevel(logging.ERROR)
-    quiet = contextlib.redirect_stdout(io.StringIO())
-    quiet.__enter__()
-    saved_env = {k: os.environ.get(k) for k in ("DEMO_MODE", "DATABASE_URL")}
-    saved_log, saved_envfile = alerts.DEFAULT_LOG, settings.ENV_FILE
-    os.chdir(workdir)
-    os.environ["DEMO_MODE"] = "false"
-    os.environ["DATABASE_URL"] = f"sqlite:///{(workdir / 'eval.db').as_posix()}"
-    alerts.DEFAULT_LOG = workdir / "eventos.jsonl"
-    settings.ENV_FILE = None  # el .env de esta máquina no cambia el resultado
-    try:
-        yield
-    finally:
-        quiet.__exit__(None, None, None)
-        servio_log.setLevel(saved_level)
-        os.chdir(saved_cwd)
-        for k, v in saved_env.items():
-            if v is None:
-                os.environ.pop(k, None)
-            else:
-                os.environ[k] = v
-        alerts.DEFAULT_LOG, settings.ENV_FILE = saved_log, saved_envfile
-        # lo que la corrida dejó armado (el procesador de avisos con su base, la
+    with contextlib.ExitStack() as stack:
+        stack.enter_context(contextlib.redirect_stdout(io.StringIO()))
+        saved_level = servio_log.level
+        stack.callback(servio_log.setLevel, saved_level)
+        servio_log.setLevel(logging.ERROR)
+        saved_env = dict(os.environ)
+        stack.callback(_restore_environ, saved_env)
+        # ninguna variable de configuración de la casa ni de los avisos
+        for name in settings.Settings.model_fields:
+            os.environ.pop(
+                "DEMO_MODE" if name == "demo" else settings._alias(name).upper(), None
+            )
+        os.environ["DEMO_MODE"] = "false"
+        os.environ["DATABASE_URL"] = f"sqlite:///{(workdir / 'eval.db').as_posix()}"
+        saved = alerts.DEFAULT_LOG, settings.ENV_FILE
+        stack.callback(_restore_modules, saved)
+        alerts.DEFAULT_LOG = workdir / "eventos.jsonl"
+        settings.ENV_FILE = None
+        # lo que la corrida deja armado (el procesador de avisos con su base, la
         # configuración activa) no tiene que llegar al escenario siguiente
-        if alerts._processor is not None:
-            alerts._processor.close()
-            alerts._processor = None
-        settings._active = None
+        stack.callback(_reset_run_state)
+        stack.callback(os.chdir, Path.cwd())
+        (workdir / "frames").mkdir()
+        os.chdir(workdir)
+        yield
+
+
+def _restore_environ(saved: dict[str, str]) -> None:
+    os.environ.clear()
+    os.environ.update(saved)
+
+
+def _restore_modules(saved: tuple) -> None:
+    from servio_vision import alerts, settings
+
+    alerts.DEFAULT_LOG, settings.ENV_FILE = saved
+
+
+def _reset_run_state() -> None:
+    from servio_vision import alerts, settings
+
+    if alerts._processor is not None:
+        alerts._processor.close()
+        alerts._processor = None
+    settings._active = None
 
 
 def run_scenario(name: str, workdir: Path) -> dict[str, Any]:
@@ -299,7 +315,7 @@ def run_scenario(name: str, workdir: Path) -> dict[str, Any]:
         )
         detail += [f"esperado y no salió: {e}" for e in (want - have).elements()]
         detail += [f"salió y no se esperaba: {e}" for e in (have - want).elements()]
-    return {"escenario": name, "pasa": passes, "diferencias": detail}
+    return {"escenario": name, "pasa": passes, "diferencias": detail, "avisos": got}
 
 
 def run_scenarios(names: list[str] | None = None) -> list[dict[str, Any]]:
@@ -356,7 +372,9 @@ def build_board(
         "escenarios": {
             "pasan": passed,
             "total": len(scenarios),
-            "detalle": scenarios,
+            "detalle": [
+                {k: v for k, v in s.items() if k != "avisos"} for s in scenarios
+            ],
         },
         "avisos_falsos_por_hora": None,
         "avisos_falsos_nota": "sale de «No hacía falta» (C-5) y de los escenarios de B-2; todavía no hay datos",
@@ -393,6 +411,14 @@ def _fmt(value: Any, unit: str = "") -> str:
     return f"{value}{unit}"
 
 
+def _ratio(part: Any, total: Any) -> float | None:
+    return (
+        part / total
+        if isinstance(part, int) and isinstance(total, int) and total
+        else None
+    )
+
+
 def compare_boards(before: dict[str, Any], after: dict[str, Any]) -> list[str]:
     """Qué cambió entre dos tableros, en palabras: una línea por número que importa."""
     lines = [f"antes {before['fecha']} · después {after['fecha']}"]
@@ -413,11 +439,16 @@ def compare_boards(before: dict[str, Any], after: dict[str, Any]) -> list[str]:
         if pa is not None or pb is not None:
             row(f"  {state}", pa, pb)
     ea, eb = before.get("escenarios", {}), after.get("escenarios", {})
-    row(
-        "escenarios que pasan",
-        ea.get("pasan"),
-        eb.get("pasan"),
-        f" de {eb.get('total', ea.get('total', '?'))}",
+    ra = _ratio(ea.get("pasan"), ea.get("total"))
+    rb = _ratio(eb.get("pasan"), eb.get("total"))
+    mark = (
+        "  igual"
+        if ra == rb
+        else ("  ↑ mejor" if (rb or 0) > (ra or 0) else "  ↓ peor")
+    )
+    lines.append(
+        f"escenarios que pasan: {_fmt(ea.get('pasan'))} de {_fmt(ea.get('total'))}"
+        f" → {_fmt(eb.get('pasan'))} de {_fmt(eb.get('total'))}{mark}"
     )
     row(
         "avisos falsos por hora",
@@ -482,13 +513,6 @@ def print_board(board: dict[str, Any]) -> None:
 # ---------------------------------------------------------------- línea de comandos
 
 
-def utf8_console() -> None:
-    """La consola de Windows (cp1252) no puede con «→» ni «–»: como `app.setup_logging`."""
-    for stream in (sys.stdout, sys.stderr):
-        if hasattr(stream, "reconfigure"):
-            stream.reconfigure(encoding="utf-8", errors="replace")
-
-
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(
         description="Evaluación del modelo y tablero de números."
@@ -515,7 +539,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     ap.add_argument("--out", type=Path, default=DEFAULT_OUT)
     a = ap.parse_args(argv)
-    utf8_console()
+    app.utf8_console()
     logging.basicConfig(level=logging.WARNING)
 
     if a.comparar:
@@ -533,6 +557,16 @@ def main(argv: list[str] | None = None) -> int:
     if set_dir is not None and not (set_dir / "labels.csv").exists():
         ap.error(f"{set_dir} no tiene labels.csv (ver tools/etiquetar.py)")
 
+    if a.sin_modelo and not a.all:
+        ap.error("--sin-modelo va con --all")
+
+    scenarios: list[dict[str, Any]] = []
+    if a.all:
+        # antes que el modelo: armar el estimador lee el .env de esta máquina y lo
+        # deja en el entorno, y los escenarios se corren con los umbrales de producción
+        print("Escenarios por el pipeline entero…", flush=True)
+        scenarios = run_scenarios()
+
     accuracy, results, latencies, cost = None, [], [], None
     if set_dir is not None and not a.sin_modelo:
         from servio_vision.llm import runtime
@@ -543,8 +577,10 @@ def main(argv: list[str] | None = None) -> int:
         cost = cost_summary(runtime._meter, 3600 / a.interval)
 
     if not a.all:
-        assert accuracy is not None
-        accuracy["latencia_media_s"] = round(sum(latencies) / len(latencies), 1)
+        assert accuracy is not None  # hay --set y no hay --sin-modelo
+        accuracy["latencia_media_s"] = (
+            round(sum(latencies) / len(latencies), 1) if latencies else None
+        )
         accuracy["platos_por_llamada"] = a.por_llamada
         a.out.mkdir(parents=True, exist_ok=True)
         with open(a.out / "resultados.json", "w", encoding="utf-8") as f:
@@ -558,8 +594,6 @@ def main(argv: list[str] | None = None) -> int:
         print(f"Detalle por plato en {a.out / 'resultados.json'}")
         return 0
 
-    print("Escenarios por el pipeline entero…", flush=True)
-    scenarios = run_scenarios()
     board = build_board(
         accuracy=accuracy,
         scenarios=scenarios,

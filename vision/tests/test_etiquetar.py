@@ -100,6 +100,24 @@ def test_crop_session_without_zones_uses_the_whole_frame(tmp_path):
     assert len(written) == 2 and all(p.name.endswith("_frame.jpg") for p in written)
 
 
+def test_pending_accepts_png_and_serves_it_with_its_type(tmp_path):
+    folder = tmp_path / "set"
+    folder.mkdir()
+    cv2.imwrite(str(folder / "b.PNG"), np.zeros((10, 10, 3), np.uint8))
+    cv2.imwrite(str(folder / "a.jpg"), np.zeros((10, 10, 3), np.uint8))
+    (folder / "labels.csv").write_text("archivo,estado,tipo,nota\n", encoding="utf-8")
+    assert etiquetar.pending(folder) == ["a.jpg", "b.PNG"]  # el csv no es un recorte
+    srv = etiquetar.LabelServer(folder, "127.0.0.1", 0).start()
+    try:
+        base = srv.url.rstrip("/")
+        assert get(f"{base}/img/b.PNG")[1] == "image/png"
+        with pytest.raises(HTTPError) as e:
+            get(f"{base}/img/labels.csv")  # no es una imagen
+        assert e.value.code == 404
+    finally:
+        srv.stop()
+
+
 def test_crop_session_rejects_a_bad_step(tmp_path):
     session = make_session(tmp_path / "sesion")
     with pytest.raises(ValueError, match="--cada"):
