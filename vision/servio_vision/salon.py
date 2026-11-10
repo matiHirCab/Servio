@@ -23,7 +23,7 @@ import threading
 from collections import Counter
 from collections.abc import Iterable
 from datetime import datetime
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, NamedTuple
 
 import cv2
 import numpy as np
@@ -176,6 +176,15 @@ def display_size(frame: np.ndarray) -> np.ndarray:
     )
 
 
+class Frame(NamedTuple):
+    """Lo que `frame_jpeg` devuelve: el JPEG de la foto `version`, o `None` con
+    `broken` si ese frame no se pudo codificar (ya quedó logueado)."""
+
+    jpeg: bytes | None
+    version: int
+    broken: bool
+
+
 class SalonFeed:
     """La última foto del salón y una forma de esperar la siguiente (para el
     navegador). `on_reading` va en `Pipeline(on_reading=...)`."""
@@ -202,46 +211,49 @@ class SalonFeed:
         self._encode_lock = threading.Lock()  # un solo navegador codifica por vez
         self._encode_failed = 0  # la versión cuyo frame no se pudo codificar
 
-    @property
-    def frame_broken(self) -> bool:
-        """Si el frame de la última foto no se pudo codificar (ya quedó logueado)."""
+    def frame_jpeg(self) -> Frame | None:
+        """El frame de la última foto como JPEG, con la versión de esa foto. Se
+        codifica la primera vez que se pide, una vez por lectura aunque lo pidan
+        varios navegadores. `None`: modo video apagado o sin lecturas. Un frame que
+        no se pudo codificar vuelve con `jpeg=None, broken=True` (queda logueado una
+        vez; la vista sigue sin imagen, el pipeline sigue)."""
         with self._changed:
-            return self._frame is not None and self._encode_failed == self._version
-
-    def frame_jpeg(self) -> tuple[bytes, int] | None:
-        """El frame de la última foto como JPEG, con la versión de esa foto (la
-        página lo muestra recién cuando dibuja esa foto). Se codifica la primera vez
-        que se pide, una vez por lectura aunque lo pidan varios navegadores. `None`:
-        modo video apagado, sin lecturas, o un frame que no se pudo codificar (queda
-        logueado una vez; la vista sigue sin imagen, el pipeline sigue)."""
-        with self._changed:
-            frame, jpeg, version = self._frame, self._jpeg, self._version
+            frame, jpeg, version, failed = (
+                self._frame,
+                self._jpeg,
+                self._version,
+                self._encode_failed,
+            )
         if frame is None:
             return None
-        if jpeg is not None:
-            return jpeg, version  # lo ya codificado sale sin esperar a nadie
+        if jpeg is not None or failed == version:  # resuelto: sale sin esperar a nadie
+            return Frame(jpeg, version, jpeg is None)
         # el pipeline nunca espera este candado: `on_reading` solo toma `_changed`
         with self._encode_lock:
             with (
                 self._changed
             ):  # lo de ahora: otro pudo codificarlo, o hay lectura nueva
-                frame, jpeg, version = self._frame, self._jpeg, self._version
+                frame, jpeg, version, failed = (
+                    self._frame,
+                    self._jpeg,
+                    self._version,
+                    self._encode_failed,
+                )
             if frame is None:
                 return None
-            if jpeg is not None:
-                return jpeg, version
-            if self._encode_failed == version:
-                return None
+            if jpeg is not None or failed == version:
+                return Frame(jpeg, version, jpeg is None)
             try:
                 jpeg = to_jpeg(display_size(frame))
             except (ValueError, cv2.error) as e:
                 logger.warning("No se pudo codificar el frame para la vista: %s", e)
-                self._encode_failed = version
-                return None
+                with self._changed:
+                    self._encode_failed = version
+                return Frame(None, version, True)
             with self._changed:
                 if self._version == version:  # si no, ya hay otra lectura
                     self._jpeg = jpeg
-            return jpeg, version
+            return Frame(jpeg, version, False)
 
     def on_reading(
         self,
@@ -270,13 +282,12 @@ class SalonFeed:
             self.video,
             (int(frame.shape[1]), int(frame.shape[0])),
         )
-        kept = frame if self.video else None
         with self._changed:
             self._version += 1
             snapshot["version"] = self._version
             self._snapshot = snapshot
-            if kept is not None:
-                self._frame, self._jpeg = kept, None
+            if self.video:
+                self._frame, self._jpeg = frame, None
             self._changed.notify_all()
 
     def snapshot(self) -> dict[str, Any] | None:

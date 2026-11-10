@@ -8,8 +8,10 @@ navegador. Rutas (`<local>` es el `local_id` de la casa, `local` por defecto):
 - `/<local>/salon/eventos`  la misma foto por Server-Sent Events, cada vez que cambia
 - `/<local>/salon/frame.jpg` el último frame de la cámara, ya difuminado, para el
                             modo video de la página, con la versión de su foto
-                            en `X-Salon-Version` (la página lo muestra cuando
-                            dibuja esa foto); solo con `--web-video`
+                            en `X-Salon-Version`. Con `?v=N` espera (hasta
+                            FRAME_WAIT_S) a que la foto N exista y da su frame;
+                            si esa lectura ya pasó, 404; si el frame no se pudo
+                            codificar, 503. Solo con `--web-video`
                             (`SalonFeed(video=True)`), si no, 404
 - `/`                       redirige a `/<local>/salon`
 
@@ -25,7 +27,7 @@ import threading
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import quote, unquote, urlsplit
+from urllib.parse import parse_qs, quote, unquote, urlsplit
 
 from servio_vision.salon import SalonFeed
 
@@ -33,6 +35,7 @@ logger = logging.getLogger("servio")
 
 PAGE = Path(__file__).with_name("static") / "salon.html"
 KEEPALIVE_S = 15.0  # un comentario SSE cada tanto, para que no se corte la conexión
+FRAME_WAIT_S = 10.0  # cuánto espera `frame.jpg?v=N` a que exista la foto N
 
 
 class SalonServer:
@@ -96,7 +99,8 @@ def _handler(server: SalonServer) -> type[BaseHTTPRequestHandler]:
             logger.debug("web: " + format, *args)
 
         def do_GET(self) -> None:
-            parts = [unquote(p) for p in urlsplit(self.path).path.split("/") if p]
+            url = urlsplit(self.path)
+            parts = [unquote(p) for p in url.path.split("/") if p]
             if not parts:
                 return self._redirect(f"/{quote(feed.local_id)}/salon")
             if parts[0] != feed.local_id or len(parts) < 2 or parts[1] != "salon":
@@ -112,31 +116,45 @@ def _handler(server: SalonServer) -> type[BaseHTTPRequestHandler]:
             if rest == ["eventos"]:
                 return self._events()
             if rest == ["frame.jpg"]:
-                return self._frame()
+                wanted = parse_qs(url.query).get("v", [""])[0]
+                # un `v` que no es un número normal se ignora (sin reventar el hilo)
+                ok = 0 < len(wanted) <= 12 and wanted.isascii() and wanted.isdigit()
+                return self._frame(int(wanted) if ok else None)
             return self._send(HTTPStatus.NOT_FOUND, b"No existe", "text/plain")
 
-        def _frame(self) -> None:
+        def _frame(self, version: int | None) -> None:
+            """El frame de la foto `version` (la que la página dibujó), esperando a
+            que exista si todavía no llegó; sin `version`, el último."""
             if not feed.video:
                 return self._send(
                     HTTPStatus.NOT_FOUND,
                     "El modo video está apagado (--web-video)".encode(),
                     "text/plain; charset=utf-8",
                 )
+            if version is not None:
+                feed.wait(version - 1, FRAME_WAIT_S)  # hasta que haya foto >= version
             found = feed.frame_jpeg()
-            if found is None:
-                broken = feed.frame_broken  # distinto de «todavía no llegó»
+            if found is None or (version is not None and found.version != version):
                 return self._send(
-                    HTTPStatus.SERVICE_UNAVAILABLE if broken else HTTPStatus.NOT_FOUND,
+                    HTTPStatus.NOT_FOUND,
                     (
-                        "El frame de esta lectura no se pudo codificar (ver el log)"
-                        if broken
-                        else "Todavía no hay frame"
+                        "Todavía no hay frame"
+                        if found is None
+                        else "Esa lectura ya pasó; pedí el frame de la foto actual"
                     ).encode(),
                     "text/plain; charset=utf-8",
                 )
-            jpeg, version = found
+            if found.jpeg is None:
+                return self._send(
+                    HTTPStatus.SERVICE_UNAVAILABLE,
+                    b"El frame de esta lectura no se pudo codificar (ver el log)",
+                    "text/plain; charset=utf-8",
+                )
             self._send(
-                HTTPStatus.OK, jpeg, "image/jpeg", {"X-Salon-Version": str(version)}
+                HTTPStatus.OK,
+                found.jpeg,
+                "image/jpeg",
+                {"X-Salon-Version": str(found.version)},
             )
 
         def _redirect(self, location: str) -> None:

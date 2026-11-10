@@ -11,7 +11,7 @@ import pytest
 from servio_vision.classifiers.fake import FakeClassifier
 from servio_vision.pipeline import Pipeline
 from servio_vision.salon import SalonFeed
-from servio_vision.salon_web import SalonServer
+from servio_vision.salon_web import SalonServer, _is_loopback
 from tests.test_main import FRAME, T0, ZONES
 from tests.test_salon import read
 
@@ -124,6 +124,29 @@ def test_frame_is_served_with_web_video_once_there_is_a_reading(video_server):
     # con la versión de su foto: la página lo muestra cuando dibuja esa foto
     assert headers["X-Salon-Version"] == "1"
     assert json.loads(get(f"{base}/estado")[2])["video"] is True
+    # el de la foto que la página dibujó (el plazo de espera se prueba aparte)
+    assert get_with_headers(f"{base}/frame.jpg?v=1")[1]["X-Salon-Version"] == "1"
+
+
+def test_frame_request_waits_for_its_reading(video_server, monkeypatch):
+    """`?v=N` espera a que exista la foto N: la página pide el frame de la foto
+    que dibujó y el servidor se lo da aunque la foto llegue un instante después
+    (sin eso, una conexión lenta nunca alcanzaba al frame)."""
+    from servio_vision import salon_web
+
+    monkeypatch.setattr(salon_web, "FRAME_WAIT_S", 0.3)
+    base = f"http://127.0.0.1:{video_server.port}/casa-1/salon"
+    pipeline = pipeline_for(video_server)
+    read(pipeline, 1)  # foto 1
+    threading.Timer(0.05, read, args=(pipeline, 1)).start()  # la foto 2, enseguida
+    status, headers, _ = get_with_headers(f"{base}/frame.jpg?v=2")
+    assert status == 200 and headers["X-Salon-Version"] == "2"
+    pipeline.process_frame(FRAME, T0)  # foto 3: la 2 ya pasó
+    code, text = status_of(f"{base}/frame.jpg?v=2")
+    assert code == 404 and "ya pasó" in text
+    assert status_of(f"{base}/frame.jpg?v=99")[0] == 404  # nunca llega: plazo
+    for odd in ("rara", "%C2%B2", "9" * 40):  # un `v` raro se ignora
+        assert get(f"{base}/frame.jpg?v={odd}")[0] == 200
 
 
 def test_frame_is_encoded_once_per_reading_and_follows_the_snapshot():
@@ -133,11 +156,11 @@ def test_frame_is_encoded_once_per_reading_and_follows_the_snapshot():
     )
     pipeline.process_frame(FRAME, T0)
     first = feed.frame_jpeg()
-    assert first is not None and first[1] == 1
-    assert feed.frame_jpeg()[0] is first[0]  # cacheado
+    assert first is not None and first.version == 1 and not first.broken
+    assert feed.frame_jpeg().jpeg is first.jpeg  # cacheado
     pipeline.process_frame(FRAME + 200, T0)  # otro cuadro (más claro)
     second = feed.frame_jpeg()
-    assert second is not None and second[1] == 2 and second[0] != first[0]
+    assert second is not None and second.version == 2 and second.jpeg != first.jpeg
 
 
 def test_a_frame_that_cannot_be_encoded_is_logged_once_and_not_served(caplog):
@@ -150,12 +173,13 @@ def test_a_frame_that_cannot_be_encoded_is_logged_once_and_not_served(caplog):
     )
     feed.on_reading(pipeline, [], T0, np.zeros((0, 0, 3), np.uint8))
     with caplog.at_level("WARNING", logger="servio"):
-        assert feed.frame_jpeg() is None
-        assert feed.frame_jpeg() is None  # se avisa una vez, no en cada pedido
+        broken = feed.frame_jpeg()
+        assert broken is not None and broken.jpeg is None and broken.broken
+        assert feed.frame_jpeg() == broken  # se avisa una vez, no en cada pedido
     assert caplog.text.count("No se pudo codificar") == 1
-    assert feed.frame_broken  # el servidor lo cuenta distinto de «todavía no hay»
     pipeline.process_frame(FRAME, T0)  # la lectura siguiente vuelve a servirse
-    assert feed.frame_jpeg() is not None and not feed.frame_broken
+    served = feed.frame_jpeg()
+    assert served is not None and served.jpeg is not None and not served.broken
 
 
 def test_a_broken_frame_is_a_503_not_a_404(video_server):
@@ -169,14 +193,12 @@ def test_a_broken_frame_is_a_503_not_a_404(video_server):
     assert code == 503 and "no se pudo codificar" in text
 
 
-def test_server_says_whether_it_is_exposed_to_the_network():
-    for host, exposed in (("127.0.0.1", False), ("0.0.0.0", True)):
-        srv = SalonServer(SalonFeed("casa-1"), host, 0)
-        try:
-            assert srv.exposed is exposed
-            assert srv.url.startswith("http://localhost" if exposed else "http://127.")
-        finally:
-            srv.httpd.server_close()
+def test_server_says_whether_it_is_exposed_to_the_network(server):
+    # sin escuchar en 0.0.0.0 desde un test (el firewall de Windows pregunta)
+    assert server.exposed is False and server.url.startswith("http://127.")
+    assert _is_loopback("127.0.0.1") and _is_loopback("::1")
+    assert not _is_loopback("0.0.0.0") and not _is_loopback("192.168.0.5")
+    assert not _is_loopback("raro")  # algo que no es una IP cuenta como expuesto
 
 
 def test_snapshot_carries_the_real_frame_size():
@@ -211,9 +233,9 @@ def test_video_frame_is_served_at_display_size():
     )
     pipeline.process_frame(np.zeros((2160, 3840, 3), np.uint8), T0)
     assert feed.snapshot()["frame"] == [3840, 2160]  # la foto dice el tamaño real
-    jpeg = feed.frame_jpeg()
-    assert jpeg is not None
+    found = feed.frame_jpeg()
+    assert found is not None and found.jpeg is not None
     import cv2
 
-    served = cv2.imdecode(np.frombuffer(jpeg[0], np.uint8), cv2.IMREAD_COLOR)
+    served = cv2.imdecode(np.frombuffer(found.jpeg, np.uint8), cv2.IMREAD_COLOR)
     assert served.shape[:2] == (720, 1280)  # misma proporción, menos píxeles

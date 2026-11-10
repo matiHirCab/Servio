@@ -313,15 +313,17 @@ function fitTags(svg, only = null) {
     if (!t.getComputedTextLength) continue;
     const w = t.getComputedTextLength() + 22, x0 = g.dataset.anchor === "end" ? -w : 0;
     r.setAttribute("width", w.toFixed(0)); r.setAttribute("x", x0.toFixed(0)); t.setAttribute("x", (x0 + w / 2).toFixed(0));
-    const y = only ? g.getAttribute("transform").match(/ ([-\d.]+)\)/)[1] : g.dataset.y;  // la `y` ya decidida (alt) se respeta
+    // la `y` de partida: la del dibujo, o la ya decidida (`alt`) si solo se vuelve a medir
+    const y = +(only && g.dataset.fy !== undefined ? g.dataset.fy : g.dataset.y);
     g.setAttribute("transform", `translate(${g.dataset.x} ${y})`);
     const m = ctmInto(svg, g);
-    const absX = (m ? m.e : +g.dataset.x) + x0, absY = (m ? m.f : +y) - 11;
+    const absX = (m ? m.e : +g.dataset.x) + x0, absY = (m ? m.f : y) - 11;
     let dx = Math.min(0, vw - w - 4 - absX);  // que no se corte contra el borde derecho
     if (absX + dx < 4) dx = 4 - absX;         // ni contra el izquierdo
     let dy = Math.min(0, vh - 22 - 4 - absY);  // ni abajo
     if (absY + dy < 4) dy = 4 - absY;          // ni arriba
-    if (dx || dy) g.setAttribute("transform", `translate(${(+g.dataset.x + dx).toFixed(1)} ${(+y + dy).toFixed(1)})`);
+    g.dataset.fx = (+g.dataset.x + dx).toFixed(1); g.dataset.fy = (y + dy).toFixed(1);  // donde quedó
+    if (dx || dy) g.setAttribute("transform", `translate(${g.dataset.fx} ${g.dataset.fy})`);
   }
   if (only) return;
   const placed = [];
@@ -329,8 +331,7 @@ function fitTags(svg, only = null) {
     let box = tagBox(svg, g);
     if (!box) continue;
     if (g.dataset.alt !== undefined && placed.some(b => b.x < box.x + box.w && b.x + b.w > box.x && b.y < box.y + box.h && b.y + b.h > box.y)) {
-      const x = g.getAttribute("transform").match(/translate\(([-\d.]+)/)[1];
-      g.setAttribute("transform", `translate(${x} ${g.dataset.alt})`);
+      g.dataset.fy = g.dataset.alt;
       fitTags(svg, [g]);  // bajada: que tampoco se salga
       box = tagBox(svg, g) || box;
     }
@@ -449,7 +450,6 @@ function renderFloor() {
 // nombre. Un plato sin caja no se marca: solo se dibuja lo que la cámara ve de verdad.
 let camKey = null;  // la lectura (hora + versión) cuyo frame.jpg se pidió; tras un reinicio la versión vuelve a 1
 let videoWidth = 0;  // el ancho con que se dibujó el overlay (una unidad = un píxel)
-let framePending = null;  // {version, blob} que llegó antes que su foto: se muestra cuando se dibuje
 function renderVideo() {
   const svg = $("overlay");
   if (!snap) { svg.innerHTML = ""; return; }
@@ -467,9 +467,7 @@ function renderVideo() {
   svg.setAttribute("viewBox", `0 0 ${VW} ${VH.toFixed(1)}`);
   $("cam-cap").textContent = `Cámara ${snap.camera} · caras difuminadas en la computadora`;
   const key = `${snap.ts}|${snap.version}`;
-  // el frame de esta foto: si ya llegó (se adelantó a la SSE), se muestra; si no, se pide
-  if (framePending && framePending.version === snap.version) { camKey = key; showFrame(framePending.blob, [fw, fh]); }
-  else if (key !== camKey) { camKey = key; loadFrame([fw, fh]); }
+  if (key !== camKey) { camKey = key; loadFrame(snap.version, [fw, fh]); }  // el frame de esta foto
   let out = `<defs>${halos("v")}</defs>`;
   for (const t of snap.tables) {
     const sel = t.id === selected, x0 = t.box[0] * VW, y0 = t.box[1] * VH, w = t.box[2] * VW, h = t.box[3] * VH;
@@ -496,46 +494,48 @@ function renderVideo() {
   fitTags(svg);
   pending.video.clear();
 }
-// El último frame del servidor, con la versión de su foto (X-Salon-Version). Se muestra
-// solo bajo las capas de esa misma foto: si es el de la foto dibujada, ya; si es de una más
-// nueva (la SSE viene en camino), queda esperando y se muestra cuando se dibuje; si es de
-// una más vieja (una conexión lenta), se pide de nuevo. Nunca capas de una lectura sobre la
-// imagen de otra, y una conexión lenta no se queda sin imagen. Sin `<img src>` directo: un
-// error ahí deja el cuadro roto en vez de la imagen que había.
-let shownUrl = null, loadingUrl = null;  // el blob que se ve y el que está cargando (se liberan: la pantalla queda prendida todo el turno)
-let fetching = false, frameWanted = null, retried = null;  // bajada en vuelo; la que quedó esperando; la foto que ya se volvió a pedir
-function loadFrame(drawn) {
-  if (fetching) { frameWanted = drawn; return; }  // una sola bajada a la vez; al terminar se pide la última
-  fetching = true;
-  // al terminar, la bajada que quedó esperando, salvo que lo que llegó ya sea el frame de la foto actual
-  const done = shown => { fetching = false; if (frameWanted && shown !== (snap && snap.version)) { const d = frameWanted; frameWanted = null; loadFrame(d); } else frameWanted = null; };
-  fetch(`${base}/frame.jpg`).then(r => {
-    if (r.status === 503) $("cam-wait").textContent = "La imagen de la cámara no se pudo codificar (ver el log de Servio)";
-    return r.ok ? r.blob().then(blob => [blob, +r.headers.get("X-Salon-Version")]) : null;
-  }).then(got => {
-    if (!got || !snap) return done(null);
-    const [blob, version] = got;
-    if (!version || version === snap.version) { showFrame(blob, drawn); return done(snap.version); }  // sin versión (un proxy la sacó): se muestra igual
-    if (version > snap.version) framePending = {version, blob};  // su foto está por llegar
-    else if (retried !== snap.version) { retried = snap.version; frameWanted = drawn; }  // llegó viejo: una vez más, no en bucle
-    done(null);
-  }).catch(() => done(null));
+// El frame de la foto `version`: el servidor espera a tener esa foto (`?v=`) y da su frame
+// con la versión en X-Salon-Version; 404 si esa lectura ya pasó, 503 si no se pudo
+// codificar. Solo se muestra bajo las capas de esa misma foto; si no llega (ya pasó, se
+// rompió, se cortó la red) la caja queda sin imagen y dice por qué: nunca capas de una
+// lectura sobre la imagen de otra. Una bajada que quedó vieja se cancela; una pestaña de
+// fondo no baja frames (al volver, se pide el de la foto actual). Sin `<img src>` directo:
+// un error ahí deja el cuadro roto en vez de un texto.
+let shownUrl = null, frameCtl = null;  // el blob que se ve (se libera: la pantalla queda prendida todo el turno) y la bajada en curso
+function loadFrame(version, drawn) {
+  if (frameCtl) frameCtl.abort();
+  frameCtl = null;
+  if (document.visibilityState === "hidden") return;
+  const ctl = frameCtl = new AbortController();
+  fetch(`${base}/frame.jpg?v=${version}`, {signal: ctl.signal}).then(r => {
+    const v = r.headers.get("X-Salon-Version");
+    if (r.ok && (v === null || +v === version)) return r.blob();  // sin encabezado (un proxy lo sacó): se confía
+    noFrame(r.status === 503 ? "La imagen de esta lectura no se pudo codificar (ver el log de Servio)" : "Esperando la imagen de la cámara");
+    return null;
+  }).then(blob => { if (blob && snap && snap.version === version) showFrame(blob, drawn); })
+    .catch(e => { if (e.name !== "AbortError") noFrame("Sin conexión para la imagen de la cámara"); });
+}
+function noFrame(text) {
+  const cam = $("cam");
+  cam.hidden = true; cam.removeAttribute("src");
+  if (shownUrl) { URL.revokeObjectURL(shownUrl); shownUrl = null; }
+  $("cam-wait").textContent = text; $("cam-wait").hidden = false;
 }
 function showFrame(blob, drawn) {
-  framePending = null;
   const cam = $("cam"), url = URL.createObjectURL(blob);
-  if (loadingUrl) URL.revokeObjectURL(loadingUrl);  // uno que no terminó de cargar y ya quedó viejo
-  loadingUrl = url;
   cam.onload = () => {
-    if (cam.src !== url) return;  // ya lo pisó otro
-    if (shownUrl) URL.revokeObjectURL(shownUrl);
-    shownUrl = url; loadingUrl = null; cam.hidden = false; $("cam-wait").hidden = true;
+    if (cam.src !== url) { URL.revokeObjectURL(url); return; }  // ya lo pisó otro
+    if (shownUrl && shownUrl !== url) URL.revokeObjectURL(shownUrl);
+    shownUrl = url; cam.hidden = false; $("cam-wait").hidden = true;
     // la cámara no tiene la proporción con que se dibujó: las capas, sobre la imagen real
     if (Math.abs(cam.naturalWidth / cam.naturalHeight - drawn[0] / drawn[1]) > .01 && mode === "video") renderVideo();  // el frame viene achicado: solo importa la proporción
   };
-  cam.onerror = () => { URL.revokeObjectURL(url); if (loadingUrl === url) loadingUrl = null; };  // no se pudo decodificar: queda la imagen anterior
+  cam.onerror = () => { URL.revokeObjectURL(url); noFrame("La imagen de la cámara no se pudo mostrar"); };
   cam.src = url;
 }
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "visible" && mode === "video" && snap) { camKey = null; renderVideo(); }  // la pestaña vuelve: el frame de la foto actual
+});
 
 // ---------- panel ----------
 function renderSide() {
@@ -561,24 +561,36 @@ ${rows}<div class="label num" style="margin-top:10px">${esc(since)} · ${t.plate
   $("alerts-card").className = "card" + (alerts.length ? " warn" : "");
   $("alerts-card").innerHTML = `<div class="card-h"><h2>Avisos</h2><span class="label num">${alerts.length} ${alerts.length === 1 ? "abierto" : "abiertos"}</span></div>` +
     (alerts.length ? alerts.map(a => `<div class="alert"><span class="sev" style="background:${alertColor(a.type)}"></span>
-<p>${esc(alertTitle(a.type, tableName(a.table_id)))}<small>${esc(plainMessage(a.message))}</small>${taken(a)}</p><time class="num">${ago(a.created_at)}</time></div>`).join("")
+<p>${esc(alertTitle(a.type, tableName(a.table_id)))}<small>${esc(plainMessage(a.message))}</small>${taken(a)}</p><time class="num" data-age="${esc(a.created_at)}">${ago(a.created_at)}</time></div>`).join("")
       : `<p class="muted">Nada pendiente: todas las mesas atendidas.</p>`);
 
   const tables = snap ? snap.tables : [];
   const occ = tables.filter(occupied);
   const plates = tables.reduce((n, x) => n + x.plates.length, 0);
-  const sinces = occ.map(x => x.since).filter(Boolean).map(s => (nowTs() - Date.parse(s)) / 60000);  // de las mismas mesas que «ocupadas»; el promedio se calcula acá
-  const avg = sinces.length ? Math.round(sinces.reduce((a, b) => a + b, 0) / sinces.length) : null;
   $("shift-card").innerHTML = `<div class="card-h"><h2>Ahora</h2><span class="label">En el salón</span></div><div class="metrics">
 <div class="metric"><div class="label">Mesas ocupadas</div><div class="v num">${occ.length}<small>de ${tables.length}</small></div></div>
 <div class="metric"><div class="label">Platos en mesa</div><div class="v num">${plates}</div></div>
 <div class="metric"><div class="label">Avisos abiertos</div><div class="v num">${alerts.length}</div></div>
-<div class="metric"><div class="label">Tiempo en mesa</div><div class="v num">${avg ?? "–"}${avg !== null ? "<small>min</small>" : ""}</div></div></div>`;
+<div class="metric"><div class="label">Tiempo en mesa</div><div class="v num" id="avg">${avgHtml(occ)}</div></div></div>`;
 
   $("legend").innerHTML = STATES.map(s => `<span class="chip" style="color:${COLOR[s]}"><i style="background:${COLOR[s]}"></i><span>${STATE_NAME[s]} <b class="num">${snap ? snap.counts[s] : 0}</b></span></span>`).join("");
   $("occupied").textContent = snap ? `${occ.length} de ${tables.length} mesas ocupadas` : "";
-  if (snap) $("clock").textContent = hhmm(nowTs());
   $("local").textContent = snap ? `${snap.local} · Salón` : "Salón";
+  renderStatus();
+}
+// el promedio de tiempo en mesa, de las mismas mesas que «ocupadas»; se calcula acá
+function avgHtml(occ) {
+  const sinces = occ.map(x => x.since).filter(Boolean).map(s => (nowTs() - Date.parse(s)) / 60000);
+  const avg = sinces.length ? Math.round(sinces.reduce((a, b) => a + b, 0) / sinces.length) : null;
+  return `${avg ?? "–"}${avg !== null ? "<small>min</small>" : ""}`;
+}
+// lo que cambia con el tiempo aunque no llegue una lectura: el reloj, las edades, el estado
+// de la conexión. Cada segundo (`tick`) y al final de cada `renderSide`.
+function renderStatus() {
+  if (snap) $("clock").textContent = hhmm(nowTs());
+  for (const t of document.querySelectorAll("time[data-age]")) t.textContent = ago(t.dataset.age);
+  const avg = $("avg");
+  if (avg && snap) avg.innerHTML = avgHtml(snap.tables.filter(occupied));
   // pasadas 3 lecturas + 10 s sin novedades, la cámara se da por caída
   const late = snap && snap.interval && (Date.now() - receivedAt) / 1000 > 3 * snap.interval + 10;
   $("live").className = "live" + (!connected ? (everConnected ? "" : " wait") : late ? "" : snap ? " on" : " wait");
@@ -672,7 +684,7 @@ events.onopen = () => { connected = everConnected = true; renderSide(); };
 events.onmessage = e => { connected = everConnected = true; apply(JSON.parse(e.data)); };
 events.onerror = () => { connected = false; renderSide(); };
 render();
-setInterval(() => { renderSide(); refreshAges($("floor")); refreshAges($("overlay")); }, 1000);
+setInterval(() => { renderStatus(); refreshAges($("floor")); refreshAges($("overlay")); }, 1000);
 // las etiquetas se midieron con la fuente de reserva: al llegar Barlow Condensed, de nuevo
 if (document.fonts) document.fonts.ready.then(() => { fitTags($("floor")); fitTags($("overlay")); });
 </script>
