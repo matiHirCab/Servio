@@ -97,34 +97,43 @@ class Alert(BaseModel):
     message: str            # texto que se manda
     created_at: datetime   # con zona horaria (UTC), igual que ts
     status: AlertStatus     # "abierta" | "resuelta"
-    reminders_sent: int
+    reminders_sent: int     # ≥ 0; el máximo es max_reminders de la config (C-5)
     telegram_message_id: int | None
+    # respuestas del mozo (C-5), en el reloj del motor (el ts de la última lectura
+    # de la mesa), con zona horaria (UTC); None hasta que pasen
+    answered_by: str | None        # quién lo tomó: «Voy» (o «Listo» / un motivo, si nadie había dicho «Voy»)
+    done_at: datetime | None       # «Listo»
+    nudged_at: datetime | None     # la única insistencia después de «Listo»
+    escalated_at: datetime | None  # cuándo escaló porque nadie respondió
 ```
 
-Telegram: `sendMessage` al grupo `TELEGRAM_GROUP_CHAT_ID` al abrir o recordar; `editMessageText` con "✅ ya resuelto" al cerrar. Ver [06-notificaciones.md](06-notificaciones.md).
+Telegram: un `sendMessage` por aviso al grupo `TELEGRAM_GROUP_CHAT_ID`, con los botones «Voy», «Listo» y «No hacía falta» (y los motivos del plato en el de plato lleno); otro, sin botones, al recordar o escalar; `editMessageText` con "✅ ya resuelto" al cerrar. Ver [06-notificaciones.md](06-notificaciones.md).
+
+Por qué se cerró un aviso (`close_reason` en el log, `avisos.motivo_cierre` en la base): `retirados` (mesa terminada y la mesa quedó libre), `servido` (mesa terminada y llegó algo nuevo), `no_hacia_falta` (cualquier aviso: lo cerró el mozo con «No hacía falta», C-5), o nada (la condición dejó de cumplirse).
 
 ## Fixtures — `fixtures/`
 
 Ejemplos concretos de este contrato para probar sin video ni modelo:
 
 - `fixtures/observations/*.jsonl`: una observación de mesa por línea (formato de arriba). Escenarios mínimos: mesa que pasa de lleno a vacío y se retira, plato lleno 12 min con gente y después sin gente, id que cambia en la misma posición.
-- `fixtures/expected/*.alerts.json`: avisos que tienen que salir para cada escenario, con el segundo en que salen. Una lista de eventos en orden, con los nombres del log: `{ "at_seconds": 130, "event": "alert_opened" | "alert_reminder" | "alert_resolved", "type": "mesa_terminada" | "plato_vacio" | "plato_lleno_mucho", "table_id": "T1" }`, con `at_seconds` contado desde la primera línea del `.jsonl` (umbrales de producción).
+- `fixtures/expected/*.alerts.json`: avisos que tienen que salir para cada escenario, con el segundo en que salen. Una lista de eventos en orden, con los nombres del log: `{ "at_seconds": 130, "event": "alert_opened" | "alert_reminder" | "alert_escalated" | "alert_resolved", "type": "mesa_terminada" | "plato_vacio" | "plato_lleno_mucho", "table_id": "T1" }`, con `at_seconds` contado desde la primera línea del `.jsonl` (umbrales de producción).
+- `fixtures/replies/*.jsonl` (opcional, C-5): lo que contesta el mozo en ese escenario, una respuesta por línea: `{"at_seconds": 240, "table_id": "T4", "type": "mesa_terminada", "action": "voy" | "listo" | "no_hacia_falta" | "motivo", "who": "Lucía"}`. Se aplica después de la lectura de ese segundo, al aviso abierto de esa mesa y ese tipo (sin `alert_id`: lleva el tiempo de apertura). Las respuestas no van en `expected/`: ahí solo lo que hace el motor.
 
 Los modelos de la observación de mesa (`TableObservation`, `ObservedPlate`) y del aviso (`Alert`) están en `vision/servio_vision/alerts/models.py`. Rechazan campos desconocidos y un `state` que no coincide con su `fill_ratio`.
 
 ## Log — `vision/out/eventos.jsonl`
 
-Con datos del restaurante, lo mismo queda también en una base relacional (`vision/out/servio.db`, esquema en `vision/servio_vision/db.py`). Además de observaciones y avisos, las respuestas de los mozos al aviso de plato lleno: `{"event": "alert_feedback", "ts", "alert_id", "table_id", "type", "dish", "waiter", "answer", "free_text", "answered_by", "seconds_to_answer"}`.
+Con datos del restaurante, lo mismo queda también en una base relacional (`vision/out/servio.db`, esquema en `vision/servio_vision/db.py`). Además de observaciones y avisos, las respuestas de los mozos: `{"event": "alert_feedback", "ts", "alert_id", "table_id", "type", "dish", "waiter", "answer", "action", "free_text", "answered_by", "seconds_to_answer"}`. `action` es `voy`, `listo`, `no_hacia_falta` o `motivo` (C-5; en la base, `respuestas.accion`); `answer` es la etiqueta del botón («Voy», «Listo», «No hacía falta») o el motivo del plato. `ts` y `seconds_to_answer` son de reloj (de que se mandó el aviso a la respuesta), no del video.
 
 
 Una línea JSON por evento, en el orden en que pasan. Lo escribe `alerts.process()` (`EventLogOutput` en `alerts/outputs.py`). El archivo se **agrega** (no se pisa): varias corridas quedan una detrás de otra; borralo antes de la corrida de la demo si querés una sola.
 
-- Inicio de corrida: `{"event": "run_started", "started_at": ..., "config": {"interval": 30, "t1": 60, "t2": 600, "reminder": 180, "max_reminders": 2}}`, la primera línea que escribe cada corrida (al hacer `alerts.configure()`), con la hora real y los umbrales resueltos (`AlertConfig`). `replay.py` corta el archivo acá y reproduce con esos umbrales.
+- Inicio de corrida: `{"event": "run_started", "started_at": ..., "config": {"interval": 30, "t1": 60, "t2": 600, "reminder": 180, "max_reminders": 2, "done_wait": 600}}`, la primera línea que escribe cada corrida (al hacer `alerts.configure()`), con la hora real y los umbrales resueltos (`AlertConfig`). `replay.py` corta el archivo acá y reproduce con esos umbrales.
 - Observación: `{"event": "observation", ...}` con los campos de la observación de mesa. Sin `event`, la línea valida como `TableObservation`. Se escribe antes de aplicarla, así queda aunque `alerts` la rechace (por ejemplo, un `ts` que va hacia atrás).
-- Aviso: `{"event": "alert_opened" | "alert_reminder" | "alert_resolved", "ts": ..., ...}`: `ts` de la observación que lo produjo, los campos del `Alert` (ya con `status`, `reminders_sent` y `telegram_message_id` de ese momento) y `text`, lo que se mandó (abrir, recordar) o cómo quedó el mensaje editado (cerrar); `null` al cerrar un aviso cuyo mensaje no se pudo mandar (no hubo nada que editar). Cada aviso se escribe apenas se manda o edita.
+- Aviso: `{"event": "alert_opened" | "alert_reminder" | "alert_escalated" | "alert_resolved", "ts": ..., ...}`: `ts` de la observación que lo produjo (o de la última lectura de la mesa, si lo cerró «No hacía falta»), los campos del `Alert` (ya con `status`, `reminders_sent`, `telegram_message_id` y las respuestas de ese momento) y `text`, lo que se mandó (abrir, recordar, escalar) o cómo quedó el mensaje editado (cerrar); `null` al cerrar un aviso cuyo mensaje no se pudo mandar (no hubo nada que editar). `alert_resolved` lleva `close_reason` cuando hay motivo. Cada aviso se escribe apenas se manda o edita.
 
 ```json
-{"event": "alert_opened", "ts": "2026-10-17T20:07:00Z", "id": "T1-plato_vacio-1792267620", "table_id": "T1", "type": "plato_vacio", "message": "🧹 Mesa 1: hay platos vacíos para retirar.", "created_at": "2026-10-17T20:07:00Z", "status": "abierta", "reminders_sent": 0, "telegram_message_id": 2, "text": "🧹 Mesa 1: hay platos vacíos para retirar."}
+{"event": "alert_opened", "ts": "2026-10-17T20:07:00Z", "id": "T1-plato_vacio-1792267620", "table_id": "T1", "type": "plato_vacio", "message": "Mesa 1 🧹 hay platos vacíos para retirar", "created_at": "2026-10-17T20:07:00Z", "status": "abierta", "reminders_sent": 0, "telegram_message_id": 2, "answered_by": null, "done_at": null, "nudged_at": null, "escalated_at": null, "text": "Mesa 1 🧹 hay platos vacíos para retirar"}
 ```
 
 Sirve para revisar una corrida, para reproducirla con `vision/tools/replay.py` (toma las líneas `run_started` y `observation`, corta el archivo en corridas y por defecto reproduce la última con sus umbrales; su propio log va a `vision/out/replay.jsonl`) y para el resumen de la demo.

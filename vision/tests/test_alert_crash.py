@@ -24,9 +24,10 @@ from servio_vision.alerts import processor
 from servio_vision.alerts.processor import AlertProcessor
 from servio_vision.db import Database
 from servio_vision.restaurant import Restaurant
-from tests.test_alert_engine import PROD, SCENARIOS, load
+from tests.test_alert_engine import PROD, SCENARIOS, due_replies, load, replies
+from tests.test_alert_process import press
 
-ALERT_EVENTS = {"alert_opened", "alert_reminder", "alert_resolved"}
+ALERT_EVENTS = {"alert_opened", "alert_reminder", "alert_escalated", "alert_resolved"}
 
 
 @pytest.fixture(autouse=True)
@@ -54,9 +55,12 @@ class Telegram:
         self.sent.append((message_id, text))
         return message_id
 
-    def edit(self, message_id: int, text: str) -> bool:
+    def edit(self, message_id: int, text: str, buttons=None) -> bool:
         self.edits.append((message_id, text))
         return True
+
+    def answer_callback(self, callback_id: str, text: str) -> None:
+        pass
 
 
 def start(directory: Path, ids, *, resume: bool) -> AlertProcessor:
@@ -85,19 +89,23 @@ def alert_lines(log: Path) -> list[dict]:
     return [line for line in lines if line["event"] in ALERT_EVENTS]
 
 
-def run(directory: Path, observations, cut: int | None):
-    """Corre el fixture, con un corte antes de la lectura `cut`. Devuelve los
-    avisos del log, lo mandado y lo editado."""
+def run(directory: Path, observations, cut: int | None, answers=()):
+    """Corre el fixture, con un corte antes de la lectura `cut`, y las respuestas
+    del mozo después de su lectura (C-5). Devuelve los avisos del log, lo mandado y
+    lo editado."""
     directory.mkdir()
     ids = itertools.count(1)
     p = start(directory, ids, resume=False)
     sent, edits = p.notifier.sent, p.notifier.edits
+    begin = observations[0].ts
     for n, o in enumerate(observations):
         if n == cut:
             crash(p)
             p = start(directory, ids, resume=True)
             p.notifier.sent, p.notifier.edits = sent, edits
         p.process(o)
+        for reply in due_replies(list(answers), int((o.ts - begin).total_seconds())):
+            press(p, reply)
     p.close()
     return alert_lines(directory / "eventos.jsonl"), sent, edits
 
@@ -107,11 +115,12 @@ def test_a_crash_mid_fixture_gives_the_same_alerts(tmp_path, name):
     """Corta antes de cada lectura, de a una: lo que se pierde en un corte depende
     de en cuál cae (sin guardar los cambios de las reglas, fallan solo algunas)."""
     observations = load(name)
-    whole = run(tmp_path / "entera", observations, None)
+    answers = replies(name)
+    whole = run(tmp_path / "entera", observations, None, answers)
     differ = [
         cut
         for cut in range(1, len(observations))
-        if run(tmp_path / f"corte-{cut}", observations, cut) != whole
+        if run(tmp_path / f"corte-{cut}", observations, cut, answers) != whole
     ]
     assert differ == []
 

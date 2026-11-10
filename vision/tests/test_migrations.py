@@ -113,3 +113,19 @@ def test_database_reopened_stays_at_head_and_keeps_rows(tmp_path):
         assert version == head
     finally:
         second.close()
+
+
+def test_0007_marks_old_answers_as_reasons(engine_for):
+    """Antes de C-5 toda respuesta era un motivo del plato lleno."""
+    engine = engine_for("d.db")
+    run(engine, command.upgrade, "0006")
+    with engine.begin() as conn:
+        conn.exec_driver_sql("PRAGMA foreign_keys=OFF")
+        conn.exec_driver_sql(
+            "INSERT INTO respuestas (local_id, aviso_id, texto, escrita, respondido_at)"
+            " VALUES ('casa', 'a1', 'Estaba frío', 0, '2026-10-18T21:10:00Z')"
+        )
+    run(engine, command.upgrade, "0007")
+    with engine.connect() as conn:
+        [(accion,)] = conn.exec_driver_sql("SELECT accion FROM respuestas").all()
+    assert accion == "motivo"

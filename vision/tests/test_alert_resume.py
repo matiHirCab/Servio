@@ -45,7 +45,8 @@ def test_plate_timers_survive_a_restart(tmp_path):
     second = start(tmp_path, resume=True)
     try:
         second.process(obs(60, VACIO, LLENO))  # 60 s desde el primer frame
-        assert len(second.notifier.sent) == 1  # abrió el aviso, sin esperar de nuevo
+        # abrió los dos avisos (uno por mensaje), sin esperar de nuevo
+        assert len(second.notifier.sent) == 2
     finally:
         second.close()
 
@@ -69,7 +70,7 @@ def test_open_alert_is_not_repeated_and_its_message_is_still_edited(tmp_path):
     first = start(tmp_path, resume=False)
     for s in (0, 30, 60):
         first.process(obs(s, VACIO, LLENO))
-    (message_id,) = {a.telegram_message_id for a in first.open_alerts.values()}
+    ids = {a.type: a.telegram_message_id for a in first.open_alerts.values()}
     opened = set(first.open_alerts)
     first.close()
 
@@ -79,7 +80,45 @@ def test_open_alert_is_not_repeated_and_its_message_is_still_edited(tmp_path):
         second.process(obs(90, VACIO, LLENO))
         assert second.notifier.sent == []  # el mismo problema no se avisa de nuevo
         second.process(obs(120, LLENO))  # retiran el plato vacío
-        assert [m for m, _ in second.notifier.edits] == [message_id]
+        assert [m for m, _ in second.notifier.edits] == [ids["plato_vacio"]]
+    finally:
+        second.close()
+
+
+def test_answers_mutes_and_buttons_survive_a_restart(tmp_path):
+    """C-5: quién dijo «Voy», el silencio de «No hacía falta» y los botones de un
+    aviso abierto siguen después de un reinicio."""
+    from tests.test_feedback import button
+
+    first = start(tmp_path, resume=False)
+    for s in (0, 30, 60):
+        first.process(obs(s, VACIO, LLENO))
+    by_type = {a.type: a for a in first.open_alerts.values()}
+    keyboards = dict(zip(first.notifier.sent, first.notifier.buttons, strict=True))
+    vacio_buttons = keyboards[by_type["plato_vacio"].message]
+    lleno_buttons = keyboards[by_type["plato_lleno_mucho"].message]
+    tap = {"id": "c", "from": {"first_name": "Ana"}}
+    first.feedback.handle(
+        {"callback_query": tap | {"data": button(vacio_buttons, "Voy")}}
+    )
+    first.feedback.handle(
+        {"callback_query": tap | {"data": button(lleno_buttons, "No hacía falta")}}
+    )
+    first.close()
+
+    second = start(tmp_path, resume=True)
+    try:
+        (alert,) = second.open_alerts.values()
+        assert (alert.type, alert.answered_by) == ("plato_vacio", "Ana")
+        # el plato lleno silenciado no vuelve a avisar
+        for s in (90, 120, 150):
+            second.process(obs(s, VACIO, LLENO))
+        assert second.notifier.sent == []
+        # los botones de antes del reinicio siguen andando
+        second.feedback.handle(
+            {"callback_query": tap | {"data": button(vacio_buttons, "Listo")}}
+        )
+        assert next(iter(second.open_alerts.values())).done_at is not None
     finally:
         second.close()
 

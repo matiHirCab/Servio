@@ -23,7 +23,7 @@ from servio_vision.alerts.notify import (
     TelegramNotifier,
 )
 
-TEST_MESSAGE = "🍽️ Juan · Mesa 1: terminó. (prueba de Servio)"
+TEST_MESSAGE = "Mesa 1 🍽️ terminó · Juan (prueba de Servio)"
 
 
 def main() -> int:

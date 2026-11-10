@@ -55,3 +55,45 @@ def test_config_is_immutable():
     config = load_config(interval=30, demo=True, env={})
     with pytest.raises(AttributeError):
         config.t1 = 1
+
+
+# --- C-5: recordatorios antes de escalar y los 10 min de «Listo» ---
+
+
+def test_escalation_and_done_wait_defaults():
+    prod = load_config(interval=30, demo=False, env={})
+    assert (prod.max_reminders, prod.done_wait) == (2, 600)
+    demo = load_config(interval=30, demo=True, env={})
+    # en demo los tiempos son 2 × interval, la cantidad de recordatorios no cambia
+    assert (demo.max_reminders, demo.done_wait) == (2, 60)
+
+
+def test_escalation_and_done_wait_from_env_and_flags():
+    env = {"ALERT_MAX_REMINDERS": "1", "ALERT_DONE_WAIT": "300"}
+    config = load_config(interval=30, demo=False, env=env)
+    assert (config.max_reminders, config.done_wait) == (1, 300)
+    config = load_config(interval=30, demo=False, max_reminders=0, env=env)
+    assert config.max_reminders == 0  # 0 vale: escala en el primer R
+
+
+def test_reads_escalation_settings_by_default(monkeypatch):
+    monkeypatch.setenv("ALERT_MAX_REMINDERS", "3")
+    monkeypatch.setenv("ALERT_DONE_WAIT", "240")
+    config = load_config(interval=30, demo=False)
+    assert (config.max_reminders, config.done_wait) == (3, 240)
+
+
+def test_rejects_a_done_wait_below_two_intervals():
+    with pytest.raises(ValueError, match="done_wait=45s"):
+        load_config(interval=30, demo=False, done_wait=45, env={})
+
+
+def test_rejects_negative_max_reminders():
+    with pytest.raises(ValueError, match="max_reminders"):
+        AlertConfig(interval=30, t1=60, t2=600, reminder=180, max_reminders=-1)
+
+
+def test_an_old_run_config_without_the_new_fields_still_loads():
+    # replay.py reconstruye la config de un log de antes de C-5
+    old = {"interval": 30, "t1": 60, "t2": 600, "reminder": 180, "max_reminders": 2}
+    assert AlertConfig(**old).done_wait == 600

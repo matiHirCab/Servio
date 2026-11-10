@@ -23,7 +23,7 @@ import time
 from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from servio_vision.alerts import persist
 from servio_vision.alerts.bot import Bot, BotChannel, send_metrics
@@ -181,16 +181,15 @@ class AlertProcessor:
         cierre vía `rewrite`, que lo toma."""
         if action not in ACTIONS:
             raise ValueError(f"acción desconocida: {action!r}")
-        act: Action = action  # type: ignore[assignment]
         with self._lock:
-            events = self.core.respond(alert_id, act, who)
+            events = self.core.respond(alert_id, cast(Action, action), who)
             if events is None:
                 return False
             for event in events:
                 self._dispatch(event)
-            if self.db_output is not None:
-                self._state_dirty = True
-                self._flush_state()
+            # se guarda en `_on_feedback`, que llega enseguida con la respuesta ya
+            # anotada en la pregunta: así un toque es un solo guardado
+            self._state_dirty = True
         return True
 
     def _dispatch(self, event: Any) -> list[dict[str, Any]]:
@@ -244,13 +243,19 @@ class AlertProcessor:
     # --- respuestas y comandos (bot.py) ---
 
     def _on_feedback(self, event: dict[str, Any]) -> None:
-        """Respuesta de un mozo: al log y a la base (si una falla, la otra igual)."""
+        """Respuesta de un mozo: al log y a la base (si una falla, la otra igual).
+        Llega del hilo del bot, sin el lock del `FeedbackDesk`; la pregunta ya tiene
+        la respuesta anotada, así que se guarda el estado (un corte justo después no
+        la pierde del mensaje)."""
         try:
             self.log.write(event)
         except Exception:
             logger.exception("No se pudo escribir la respuesta en el log")
         if self.db_output is not None:
             self.db_output.feedback(event)
+            with self._lock:
+                self._state_dirty = True
+                self._flush_state()
 
     # --- estado que sobrevive a un reinicio (A-5) ---
 

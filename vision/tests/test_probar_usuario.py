@@ -39,8 +39,8 @@ def test_video_and_zones_match(tmp_path, monkeypatch):
 def test_each_waiter_gets_only_their_tables():
     events = [
         {"event": "observation"},
-        alert("T1", "🍽️ Juan · Mesa 1: terminó."),
-        alert("T2", "❓ Sofía · Mesa 2: Lomo sigue lleno hace 1 min."),
+        alert("T1", "Mesa 1 🍽️ terminó · Juan"),
+        alert("T2", "Mesa 2 ❓ Lomo sigue lleno hace 1 min · Sofía. ¿Está todo bien?"),
     ]
     by_waiter, wrong = probar_usuario.waiter_reports(events, SALON)
     assert list(by_waiter) == ["Juan", "Sofía"]
@@ -50,9 +50,9 @@ def test_each_waiter_gets_only_their_tables():
 
 def test_alert_naming_another_waiter_is_flagged():
     _, wrong = probar_usuario.waiter_reports(
-        [alert("T2", "🍽️ Juan · Mesa 2: terminó.")], SALON
+        [alert("T2", "Mesa 2 🍽️ terminó · Juan")], SALON
     )
-    assert wrong == ["T2: 🍽️ Juan · Mesa 2: terminó."]
+    assert wrong == ["T2: Mesa 2 🍽️ terminó · Juan"]
 
 
 def test_last_run_starts_at_the_last_run_started(tmp_path):

@@ -16,8 +16,8 @@ Eventos:
 - `TableUpdated`: la mesa después de la lectura (y si cambió algo que usan las reglas);
 - `AlertsOpened`: un aviso nuevo, en su propio mensaje (el de plato lleno con datos
   del restaurante trae la pregunta «¿qué pasó?»);
-- `AlertsReminded`: recordatorios de una mesa, en un mensaje;
-- `AlertsEscalated`: avisos de una mesa que escalan (nadie respondió), en un mensaje;
+- `AlertsReminded`: el recordatorio de un aviso, en un mensaje nuevo;
+- `AlertsEscalated`: un aviso que escala (nadie respondió, o «Listo» y sigue igual);
 - `AlertsResolved`: avisos cerrados en esta lectura (o por «No hacía falta»), con el motivo.
 
 El `message_id` de cada aviso lo pone el canal: `attach` lo guarda en el aviso abierto.
@@ -84,7 +84,7 @@ class AlertsOpened:
 class AlertsReminded:
     table_id: str
     ts: datetime
-    alerts: tuple[Alert, ...]  # copias con reminders_sent + 1
+    alerts: tuple[Alert, ...]  # una copia con reminders_sent + 1
     text: str
 
 
@@ -92,7 +92,7 @@ class AlertsReminded:
 class AlertsEscalated:
     table_id: str
     ts: datetime
-    alerts: tuple[Alert, ...]  # copias con escalated_at
+    alerts: tuple[Alert, ...]  # una copia con escalated_at
     text: str
     waiter: str | None
 
@@ -159,26 +159,18 @@ class AlertCore:
                 )
             )
 
+        # Un mensaje por recordatorio y por escalado, como los avisos: la respuesta
+        # rápida del reloj cita el último mensaje y tiene que ir a un solo aviso.
         waiter = self._waiter(obs.table_id)
-        if result.reminded:
-            text = "\n".join(
-                messages.mention_waiter(r.message, obs.table_id, waiter)
-                for r in result.reminded
-            )
-            reminded = tuple(r.alert for r in result.reminded)
-            for alert in reminded:
-                self.open_alerts[alert.id] = alert
-            events.append(AlertsReminded(obs.table_id, obs.ts, reminded, text))
-
-        if result.escalated:
-            text = "\n".join(
-                messages.escalation_mention(r.message, waiter) for r in result.escalated
-            )
-            escalated = tuple(r.alert for r in result.escalated)
-            for alert in escalated:
-                self.open_alerts[alert.id] = alert
+        for r in result.reminded:
+            self.open_alerts[r.alert.id] = r.alert
+            text = messages.mention_waiter(r.message, obs.table_id, waiter)
+            events.append(AlertsReminded(obs.table_id, obs.ts, (r.alert,), text))
+        for r in result.escalated:
+            self.open_alerts[r.alert.id] = r.alert
+            text = messages.escalation_mention(r.message, waiter)
             events.append(
-                AlertsEscalated(obs.table_id, obs.ts, escalated, text, waiter)
+                AlertsEscalated(obs.table_id, obs.ts, (r.alert,), text, waiter)
             )
 
         if result.resolved:

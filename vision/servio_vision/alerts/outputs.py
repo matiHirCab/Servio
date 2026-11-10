@@ -135,11 +135,14 @@ class TelegramOutput:
             message_id = alert.telegram_message_id
             if message_id is None:
                 continue
-            if event.reasons.get(alert.id) == "retirados":
-                # solo si hay un mensaje que editar: `_edit` es quien la usa
+            reason = event.reasons.get(alert.id)
+            # solo si hay un mensaje que editar: `_edit` es quien las usa
+            if reason == "retirados":
                 self.close_notes[alert.id] = messages.picked_up_note(
                     event.waiter, event.ts - alert.created_at
                 )
+            elif reason == "no_hacia_falta":
+                self.close_notes[alert.id] = messages.NOT_NEEDED_NOTE
             self.resolved_ids.add(alert.id)
             if message_id not in message_ids:
                 message_ids.append(message_id)

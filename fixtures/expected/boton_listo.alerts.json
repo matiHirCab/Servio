@@ -1,0 +1,6 @@
+[
+  {"at_seconds": 180, "event": "alert_opened", "type": "mesa_terminada", "table_id": "T4"},
+  {"at_seconds": 840, "event": "alert_reminder", "type": "mesa_terminada", "table_id": "T4"},
+  {"at_seconds": 1020, "event": "alert_escalated", "type": "mesa_terminada", "table_id": "T4"},
+  {"at_seconds": 1080, "event": "alert_resolved", "type": "mesa_terminada", "table_id": "T4"}
+]

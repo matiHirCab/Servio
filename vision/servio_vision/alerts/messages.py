@@ -104,11 +104,28 @@ def escalation_message(
     )
 
 
+def done_escalation_message(
+    alert_type: AlertType, table_id: str, elapsed: timedelta, who: str | None
+) -> str:
+    """El escalado después de «Listo»: el mozo respondió, pero la cámara sigue viendo
+    lo mismo (`elapsed`: desde el «Listo»). Ya dice quién: el núcleo no lo cambia."""
+    said = f"{who} dijo" if who else "dijeron"
+    return (
+        f"{table_name(table_id)} ⚠️ sigue sin resolver · {said} «Listo» hace"
+        f" {minutes(elapsed)} min"
+    )
+
+
 def escalation_mention(message: str, waiter: str | None) -> str:
-    """`… · nadie respondió a 3 mensajes` → `… · Sofía no respondió a 3 mensajes`."""
+    """`… · nadie respondió a 3 mensajes` → `… · Sofía no respondió a 3 mensajes`.
+    Un escalado después de «Listo» ya nombra a quien respondió y queda igual."""
     if not waiter:
         return message
     return message.replace(ESCALATION_NOBODY, f"{waiter} no respondió", 1)
+
+
+# Lo que reemplaza al «ya resuelto» cuando el mozo cerró el aviso a mano.
+NOT_NEEDED_NOTE = "🚫 Cerrado como falso aviso: la cámara no lo va a volver a avisar."
 
 
 def mention_waiter(message: str, table_id: str, waiter: str | None) -> str:

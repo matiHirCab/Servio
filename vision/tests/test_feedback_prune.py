@@ -66,7 +66,9 @@ def test_the_write_what_happened_prompt_goes_with_its_question():
     desk, clock = make()
     message_id = ask(desk, "a1")
     assert message_id is not None
-    other = desk.notifier.sent[0][1][-1][0][1]  # el botón «Otra respuesta»
+    other = desk.notifier.sent[0][1][-2][0][
+        1
+    ]  # «Otra respuesta» (abajo, «No hacía falta»)
     desk.handle({"callback_query": {"id": "c1", "data": other, "from": {}}})
     assert held(desk)[2] == 1  # el pedido de «escribí qué pasó», sin contestar
     resolve(desk, message_id)

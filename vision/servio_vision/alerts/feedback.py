@@ -81,10 +81,6 @@ class Question:
     final: Callable[[str], str] | None = None
     resolved_at: float | None = None  # reloj del `FeedbackDesk`, cuando se cerró
 
-    @property
-    def answered(self) -> bool:
-        return self.has_motive
-
 
 def keyboard(question: Question) -> Buttons | None:
     """Los botones que quedan según lo que ya respondieron; None si el aviso cerró."""
@@ -92,7 +88,7 @@ def keyboard(question: Question) -> Buttons | None:
         return None
     rows: Buttons = []
     top = []
-    if question.taken_by is None:
+    if question.taken_by is None and not question.done:  # «Listo» ya lo tomó
         top.append((messages.BUTTON_VOY, f"fb:{question.token}:voy"))
     if not question.done:
         top.append((messages.BUTTON_LISTO, f"fb:{question.token}:listo"))
@@ -161,7 +157,9 @@ class FeedbackDesk:
             return
         with self._lock:
             question = self._by_alert.get(alert_id)
-            if question is not None:
+            # un id que ya es de otro aviso no se pisa (Telegram no repite ids; un
+            # canal que sí, como la consola tras un reinicio, no cambia de aviso)
+            if question is not None and message_id not in self._by_message:
                 question.extra_messages.append(message_id)
                 self._by_message[message_id] = question
 
@@ -209,11 +207,6 @@ class FeedbackDesk:
                 question.final = build
                 question.resolved_at = self._clock()
             self._forget_resolved()
-            if question.final is not None:
-                return self._refresh(question)
-            # cierre parcial de un mensaje con varios avisos (fotos viejas): el texto
-            # nuevo pasa a ser el del aviso, con sus botones
-            question.text = build("")
             return self._refresh(question)
 
     def _refresh(self, question: Question) -> str:
@@ -298,14 +291,29 @@ class FeedbackDesk:
 
     def _action(self, question: Question, action: str, who: str) -> str:
         """«Voy», «Listo» o «No hacía falta»: lo aplica el núcleo y queda en el
-        mensaje y el log. Devuelve el texto para el toque del botón."""
-        if action == "voy" and question.taken_by is not None:
-            return messages.BUTTON_TAKEN.format(who=question.taken_by)
-        if action == "listo" and question.done:
-            return messages.BUTTON_ALREADY_DONE
-        if question.final is not None:
-            return messages.BUTTON_EXPIRED
+        mensaje y el log. Devuelve el texto para el toque del botón.
+
+        Quién gana se decide acá, con el lock y antes del núcleo: de dos «Voy» casi
+        juntos, el mensaje, el log y el núcleo nombran al mismo."""
+        with self._lock:
+            if question.final is not None:
+                return messages.BUTTON_EXPIRED
+            if action == "voy":
+                if question.taken_by is not None:
+                    return messages.BUTTON_TAKEN.format(who=question.taken_by)
+                if question.done:  # un «voy» escrito después de «Listo»
+                    return messages.BUTTON_ALREADY_DONE
+                question.taken_by = who
+            elif action == "listo":
+                if question.done:
+                    return messages.BUTTON_ALREADY_DONE
+                question.done = True
         if not self._act(question, action, who):
+            with self._lock:  # el aviso ya se había cerrado: no queda tomado
+                if action == "voy" and question.taken_by == who:
+                    question.taken_by = None
+                elif action == "listo":
+                    question.done = False
             return messages.BUTTON_EXPIRED
         self._record(question, messages.ACTION_LABELS[action], who, False, action)
         return messages.BUTTON_THANKS
@@ -335,17 +343,8 @@ class FeedbackDesk:
                     return  # dos toques casi juntos: cuenta el primero
                 question.has_motive = True
                 line = messages.feedback_line(answer)
-            elif action == "voy":
-                if question.taken_by is not None:
-                    return
-                question.taken_by = who
-                line = messages.action_line(action, who)
-            elif action == "listo":
-                if question.done:
-                    return
-                question.done = True
-                line = messages.action_line(action, who)
             else:
+                # «Voy» y «Listo» ya quedaron anotados en `_action`
                 line = messages.action_line(action, who)
             question.feedback.append(line)
             self._refresh(question)

@@ -9,11 +9,21 @@ import pytest
 from servio_vision import alerts
 from servio_vision.alerts.config import AlertConfig, load_config
 from servio_vision.alerts.core import AlertsOpened, AlertsResolved
+from servio_vision.alerts.feedback import BUTTON_DATA
 from servio_vision.alerts.messages import resolved_text
 from servio_vision.alerts.models import Alert, TableObservation
 from servio_vision.alerts.outputs import TelegramOutput
 from servio_vision.alerts.processor import AlertProcessor
-from tests.test_alert_engine import FIXTURES, PROD, SCENARIOS, load, obs
+from tests.test_alert_engine import (
+    FIXTURES,
+    PROD,
+    SCENARIOS,
+    due_replies,
+    load,
+    obs,
+    open_alert_id,
+    replies,
+)
 
 DEMO = load_config(interval=30, demo=True, env={})  # T1 = T2 = R = 60 s
 
@@ -24,15 +34,50 @@ class RecordingNotifier:
     def __init__(self, fail: bool = False) -> None:
         self.fail = fail
         self.sent: list[str] = []
+        self.buttons: list = []  # el teclado de cada mensaje mandado
         self.edits: list[tuple[int, str]] = []
 
-    def send(self, text: str) -> int | None:
+    def send(self, text: str, buttons=None) -> int | None:
         self.sent.append(text)
+        self.buttons.append(buttons)
         return None if self.fail else len(self.sent)
 
-    def edit(self, message_id: int, text: str) -> bool:
+    def edit(self, message_id: int, text: str, buttons=None) -> bool:
         self.edits.append((message_id, text))
         return not self.fail
+
+    def answer_callback(self, callback_id: str, text: str) -> None:
+        pass
+
+
+def press(p: AlertProcessor, reply: dict) -> None:
+    """Una respuesta del fixture (`fixtures/replies/`), como un toque del botón en
+    Telegram: pasa por el `FeedbackDesk` y el núcleo, como en vivo."""
+    alert_id = open_alert_id(p.open_alerts, reply)
+    token = p.feedback._by_alert[alert_id].token
+    data = f"fb:{token}:{BUTTON_DATA[reply['action']]}"
+    p.feedback.handle(
+        {
+            "callback_query": {
+                "id": "c",
+                "data": data,
+                "from": {"first_name": reply["who"]},
+            }
+        }
+    )
+
+
+def run_fixture(p: AlertProcessor, name: str) -> list[TableObservation]:
+    """Reproduce un escenario con sus respuestas (cada una después de su lectura)."""
+    observations = load(name)
+    answers = replies(name)
+    start = observations[0].ts
+    for o in observations:
+        p.process(o)
+        p.feedback.wall = lambda ts=o.ts: ts  # reloj de pared = el del video
+        for reply in due_replies(answers, int((o.ts - start).total_seconds())):
+            press(p, reply)
+    return observations
 
 
 _created: list[AlertProcessor] = []
@@ -80,9 +125,7 @@ LLENO = ("T1-p2", "lleno", "abajo-derecha")
 @pytest.mark.parametrize("name", SCENARIOS)
 def test_fixture_log_matches_expected(tmp_path, name):
     p = processor(tmp_path)
-    observations = load(name)
-    for o in observations:
-        p.process(o)
+    observations = run_fixture(p, name)
     start = observations[0].ts
     alert_events = [
         {
@@ -94,10 +137,14 @@ def test_fixture_log_matches_expected(tmp_path, name):
             "table_id": e["table_id"],
         }
         for e in log_lines(p)
-        if e["event"] != "observation"
+        if e["event"] not in ("observation", "alert_feedback")
     ]
     expected = json.loads((FIXTURES / "expected" / f"{name}.alerts.json").read_text())
     assert alert_events == expected
+    feedback = [e for e in log_lines(p) if e["event"] == "alert_feedback"]
+    assert [(e["action"], e["answered_by"]) for e in feedback] == [
+        (r["action"], r["who"]) for r in replies(name)
+    ]
     assert sum(e["event"] == "observation" for e in log_lines(p)) == len(observations)
 
 
@@ -105,7 +152,8 @@ def test_unattended_table_reminds_twice_with_growing_time_and_closes_with_a_note
     tmp_path,
 ):
     """`mesa_terminada_recordatorios`: más allá del tipo y el segundo (lo que compara
-    `fixtures/expected`), los textos, el conteo de recordatorios (máximo 2) y el cierre."""
+    `fixtures/expected`), los textos, el conteo de recordatorios (máximo 2), el
+    escalado y el cierre."""
     p = processor(tmp_path)
     for o in load("mesa_terminada_recordatorios"):
         p.process(o)
@@ -114,15 +162,20 @@ def test_unattended_table_reminds_twice_with_growing_time_and_closes_with_a_note
         ("alert_opened", 0),
         ("alert_reminder", 1),
         ("alert_reminder", 2),
-        ("alert_resolved", 2),  # un tercer recordatorio a los 720 s no sale
+        ("alert_escalated", 2),  # a los 720 s, cuando habría salido el tercero (C-5)
+        ("alert_resolved", 2),
     ]
     texts = [e["text"] for e in alert_events]
-    assert texts[0] == "🍽️ Mesa 4: terminó."
-    assert texts[1] == "🍽️ Mesa 4: terminó hace 3 min."
-    assert texts[2] == "🍽️ Mesa 4: terminó hace 6 min."
+    assert texts[0] == "Mesa 4 🍽️ terminó"
+    assert texts[1] == "Mesa 4 🍽️ terminó hace 3 min"
+    assert texts[2] == "Mesa 4 🍽️ terminó hace 6 min"
+    assert texts[3] == "Mesa 4 ⚠️ sin atender hace 9 min · nadie respondió a 3 mensajes"
+    assert alert_events[3]["escalated_at"] == "2026-10-17T20:12:00Z"
     # al cerrar: quién retiró y cuánto después de que terminó la mesa (750 − 180 s)
-    assert "Retiraron los platos 9 min 30 s después de que terminó la mesa." in texts[3]
-    assert alert_events[3]["close_reason"] == "retirados"
+    assert "Retiraron los platos 9 min 30 s después de que terminó la mesa." in texts[4]
+    assert alert_events[4]["close_reason"] == "retirados"
+    # el escalado va al grupo (hasta que C-7 traiga el chat del encargado), sin botones
+    assert p.notifier.sent[3] == texts[3] and p.notifier.buttons[3] is None
 
 
 def test_no_close_note_is_kept_for_an_alert_without_a_telegram_message(tmp_path):
@@ -160,36 +213,37 @@ def test_observation_line_round_trips(tmp_path):
     assert TableObservation.model_validate_json(json.dumps(line)) == o
 
 
-def test_alerts_of_one_table_go_in_one_message(tmp_path):
+def test_each_alert_goes_in_its_own_message_with_its_buttons(tmp_path):
+    """Dos avisos de la misma mesa en la misma lectura: un mensaje cada uno (C-5),
+    para que «Voy», «Listo» y «No hacía falta» sean de un solo aviso."""
     p = processor(tmp_path, DEMO)
     for s in (0, 30, 60):
         p.process(obs(s, VACIO, LLENO))
-    notifier = p.notifier
-    # "por terminar" ya no avisa: a los 60 s se abren los dos, en un solo mensaje.
-    grouped = (
-        "🧹 Mesa 1: hay platos vacíos para retirar.\n"
-        "❓ Mesa 1: un plato sigue lleno hace 1 min. ¿Está todo bien?"
-    )
-    assert notifier.sent == [grouped]
+    assert p.notifier.sent == [
+        "Mesa 1 🧹 hay platos vacíos para retirar",
+        "Mesa 1 ❓ un plato sigue lleno hace 1 min. ¿Está todo bien?",
+    ]
+    assert all(b is not None for b in p.notifier.buttons)
     ids = {a.type: a.telegram_message_id for a in p.open_alerts.values()}
-    assert ids == {"plato_vacio": 1, "plato_lleno_mucho": 1}
+    assert ids == {"plato_vacio": 1, "plato_lleno_mucho": 2}
 
 
-def test_closing_part_of_a_group_marks_only_that_line(tmp_path):
+def test_closing_one_alert_edits_only_its_message(tmp_path):
     p = processor(tmp_path, DEMO)
     for s in (0, 30, 60):
         p.process(obs(s, VACIO, LLENO))
-    # Retiran el plato vacío: se cierra plato_vacio, solo esa línea.
+    # Retiran el plato vacío: se cierra plato_vacio, solo su mensaje.
     p.process(obs(90, LLENO))
-    edits = dict(p.notifier.edits)
-    assert edits[1] == (
-        "🧹 Mesa 1: hay platos vacíos para retirar. ✅\n"
-        "❓ Mesa 1: un plato sigue lleno hace 1 min. ¿Está todo bien?"
-    )
-    # Se van sin comer: dos lecturas sin gente cierran el otro y el mensaje entero.
+    assert p.notifier.edits == [
+        (1, resolved_text("Mesa 1 🧹 hay platos vacíos para retirar"))
+    ]
+    # Se van sin comer: dos lecturas sin gente cierran el otro.
     p.process(obs(120, LLENO, people=False))
     p.process(obs(150, LLENO, people=False))
-    assert p.notifier.edits[-1] == (1, resolved_text(edits[1].replace(" ✅", "")))
+    assert p.notifier.edits[-1] == (
+        2,
+        resolved_text("Mesa 1 ❓ un plato sigue lleno hace 1 min. ¿Está todo bien?"),
+    )
     assert p.open_alerts == {}
 
 
@@ -198,8 +252,8 @@ def test_reminder_sends_new_message_and_keeps_original_id(tmp_path):
     for s in range(0, 241, 30):
         p.process(obs(s, VACIO, COMIENDO))
     assert p.notifier.sent == [
-        "🧹 Mesa 1: hay platos vacíos para retirar.",
-        "🧹 Mesa 1: los platos vacíos siguen sin retirar hace 4 min.",
+        "Mesa 1 🧹 hay platos vacíos para retirar",
+        "Mesa 1 🧹 los platos vacíos siguen sin retirar hace 4 min",
     ]
     (alert,) = p.open_alerts.values()
     assert (alert.reminders_sent, alert.telegram_message_id) == (1, 1)
@@ -214,8 +268,8 @@ def test_an_alert_whose_send_raises_stays_open_and_is_not_repeated(tmp_path):
     de mandar, los mozos recibirían el mismo aviso una y otra vez)."""
 
     class SendsThenRaises(RecordingNotifier):
-        def send(self, text):
-            super().send(text)
+        def send(self, text, buttons=None):
+            super().send(text, buttons)
             raise RuntimeError("canal roto después de mandar")
 
     p = AlertProcessor(DEMO, SendsThenRaises(), tmp_path / "eventos.jsonl")
@@ -224,7 +278,7 @@ def test_an_alert_whose_send_raises_stays_open_and_is_not_repeated(tmp_path):
         p.process(obs(s, VACIO, COMIENDO))
     (alert,) = p.open_alerts.values()
     assert alert.telegram_message_id is None
-    assert p.notifier.sent == ["🧹 Mesa 1: hay platos vacíos para retirar."]
+    assert p.notifier.sent == ["Mesa 1 🧹 hay platos vacíos para retirar"]
     assert [e["event"] for e in log_lines(p)].count("alert_opened") == 1
 
 
@@ -247,7 +301,7 @@ def test_a_failing_output_does_not_stop_the_others(tmp_path, caplog):
     igual llega al log (y a la base) en vez de perderse."""
 
     class BrokenEdit(RecordingNotifier):
-        def edit(self, message_id, text):
+        def edit(self, message_id, text, buttons=None):
             raise RuntimeError("edit roto")
 
     p = AlertProcessor(PROD, BrokenEdit(), tmp_path / "eventos.jsonl")
@@ -282,12 +336,16 @@ def test_alert_log_line(tmp_path):
         "id": line["id"],
         "table_id": "T1",
         "type": "plato_vacio",
-        "message": "🧹 Mesa 1: hay platos vacíos para retirar.",
+        "message": "Mesa 1 🧹 hay platos vacíos para retirar",
         "created_at": "2026-10-17T20:01:00Z",
         "status": "abierta",
         "reminders_sent": 0,
         "telegram_message_id": 1,
-        "text": "🧹 Mesa 1: hay platos vacíos para retirar.",
+        "answered_by": None,
+        "done_at": None,
+        "nudged_at": None,
+        "escalated_at": None,
+        "text": "Mesa 1 🧹 hay platos vacíos para retirar",
     }
 
 
@@ -305,10 +363,10 @@ def test_a_failing_edit_does_not_skip_the_other_messages():
     segundo igual queda "ya resuelto"."""
 
     class FirstEditFails(RecordingNotifier):
-        def edit(self, message_id, text):
+        def edit(self, message_id, text, buttons=None):
             if message_id == 1:
                 raise RuntimeError("edit roto")
-            return super().edit(message_id, text)
+            return super().edit(message_id, text, buttons)
 
     out = TelegramOutput(FirstEditFails())
     ts = datetime(2026, 10, 17, 20, 0, tzinfo=UTC)

@@ -76,8 +76,8 @@ def test_summary_per_table():
 def test_rows_have_totals():
     table = resumen.rows(resumen.summarize(EVENTS))
     assert table[0] == resumen.HEADERS
-    assert table[1] == ["T1", "1", "10.0 min", "0", "1", "1", "1", "2.0 min"]
-    assert table[2] == ["T2", "0 (+1 en curso)", "-", "1", "0", "0", "0", "-"]
+    assert table[1] == ["T1", "1", "10.0 min", "0", "1", "1", "1", "0", "2.0 min"]
+    assert table[2] == ["T2", "0 (+1 en curso)", "-", "1", "0", "0", "0", "0", "-"]
     assert table[-1] == [
         "Total",
         "1 (+1 en curso)",
@@ -86,6 +86,7 @@ def test_rows_have_totals():
         "1",
         "1",
         "1",
+        "0",  # escalados
         "2.0 min",
     ]
 
@@ -177,3 +178,10 @@ def test_unknown_alert_type_gets_its_own_column():
     table = resumen.rows(resumen.summarize(events))
     assert "Otros" in table[0]
     assert table[-1][table[0].index("Otros")] == "1"
+
+
+def test_escalations_are_counted():
+    events = [
+        {"event": "alert_escalated", "table_id": "T4", "ts": "2026-10-17T20:12:00Z"}
+    ]
+    assert resumen.summarize(events)["T4"].escalations == 1

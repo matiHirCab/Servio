@@ -72,3 +72,29 @@ def test_wait_returns_as_soon_as_a_new_reading_arrives():
     assert (
         feed.wait_published(1, timeout=0.01).version == 1
     )  # sin lectura nueva, la misma versión
+
+
+def test_open_alerts_say_who_took_them(tmp_path):
+    """F-1b: cada aviso abierto dice quién dijo «Voy» (C-5); null si nadie."""
+    from servio_vision.alerts.processor import AlertProcessor
+    from servio_vision.salon import build_snapshot
+    from tests.test_alert_engine import PROD, obs
+    from tests.test_feedback import FakeTelegram, button, tap
+
+    p = AlertProcessor(PROD, FakeTelegram(), tmp_path / "eventos.jsonl")
+    try:
+        vacios = (("T1-p1", "vacio", "centro"), ("T1-p2", "vacio", "izquierda"))
+        p.process(obs(0, *vacios))
+        pipeline = Pipeline(FakeClassifier(), ZONES, lambda o: None)
+        snap = build_snapshot(pipeline, {}, T0, "casa", p)
+        [alert] = snap["alerts"]
+        assert (alert["answered_by"], alert["done_at"]) == (None, None)
+        tap(p.feedback, button(p.notifier.sent[0][1], "Voy"), who="Juan")
+        tap(p.feedback, button(p.notifier.sent[0][1], "Listo"), who="Juan", cid="c2")
+        [alert] = build_snapshot(pipeline, {}, T0, "casa", p)["alerts"]
+        assert alert["answered_by"] == "Juan"
+        assert alert["done_at"] == alert["created_at"]  # «Listo» en la misma lectura
+        json.dumps(alert)
+        pipeline.close()
+    finally:
+        p.close()

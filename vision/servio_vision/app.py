@@ -478,6 +478,8 @@ SESSION_RULES = (
     "alert_t1",
     "alert_t2",
     "alert_reminder",
+    "alert_max_reminders",
+    "alert_done_wait",
     "finished_after",
     "smooth_readings",
     "smooth_hard_readings",

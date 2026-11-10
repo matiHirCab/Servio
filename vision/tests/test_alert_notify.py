@@ -47,13 +47,25 @@ def ok(result) -> httpx.Response:
 
 def test_send_posts_message_and_returns_message_id():
     tg, requests = notifier(lambda r: ok({"message_id": 42}))
-    assert tg.send("🍽️ Mesa 1 está terminando.") == 42
+    assert tg.send("Mesa 1 🍽️ terminó · Juan") == 42
     (request,) = requests
     assert str(request.url) == f"https://api.telegram.org/bot{TOKEN}/sendMessage"
+    # la mesa en negrita al principio (C-5): HTML
     assert json.loads(request.content) == {
         "chat_id": CHAT_ID,
-        "text": "🍽️ Mesa 1 está terminando.",
+        "text": "<b>Mesa 1</b> 🍽️ terminó · Juan",
+        "parse_mode": "HTML",
     }
+
+
+def test_send_escapes_the_text_for_html():
+    tg, requests = notifier(lambda r: ok({"message_id": 42}))
+    tg.send("Mesa 2 ❓ Fideos <al> pesto & queso sigue lleno\n\n📝 <b>raro</b>")
+    sent = json.loads(requests[0].content)["text"]
+    assert sent == (
+        "<b>Mesa 2</b> ❓ Fideos &lt;al&gt; pesto &amp; queso sigue lleno"
+        "\n\n📝 &lt;b&gt;raro&lt;/b&gt;"
+    )
 
 
 def test_edit_posts_edit_message_text():
@@ -61,10 +73,22 @@ def test_edit_posts_edit_message_text():
     assert tg.edit(42, resolved_text("hola"))
     (request,) = requests
     assert request.url.path.endswith("/editMessageText")
+    # sin botones: Telegram saca el teclado del mensaje (el aviso se cerró)
     assert json.loads(request.content) == {
         "chat_id": CHAT_ID,
         "message_id": 42,
         "text": "hola\n\n✅ ya resuelto",
+        "parse_mode": "HTML",
+    }
+
+
+def test_edit_with_buttons_keeps_the_keyboard():
+    tg, requests = notifier(lambda r: ok({"message_id": 42}))
+    assert tg.edit(42, "Mesa 1 🍽️ terminó", [[("Listo", "fb:t:listo")]])
+    payload = json.loads(requests[0].content)
+    assert payload["text"] == "<b>Mesa 1</b> 🍽️ terminó"
+    assert payload["reply_markup"] == {
+        "inline_keyboard": [[{"text": "Listo", "callback_data": "fb:t:listo"}]]
     }
 
 

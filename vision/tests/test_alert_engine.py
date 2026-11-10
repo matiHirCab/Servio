@@ -19,6 +19,10 @@ SCENARIOS = [
     "id_cambiado",
     "plato_vacio",
     "mesa_terminada_recordatorios",
+    "escalado",
+    "boton_voy",
+    "boton_listo",
+    "boton_no_hacia_falta",
 ]
 START = datetime(2026, 10, 17, 20, 0, 0, tzinfo=UTC)
 FILL = {"lleno": 0.9, "comiendo": 0.55, "por_terminar": 0.2, "vacio": 0.02}
@@ -35,6 +39,35 @@ def load(name: str) -> list[TableObservation]:
     return [
         TableObservation.model_validate_json(line) for line in lines if line.strip()
     ]
+
+
+def replies(name: str) -> list[dict]:
+    """Las respuestas del mozo de un escenario (`fixtures/replies/`, C-5), o []."""
+    path = FIXTURES / "replies" / f"{name}.jsonl"
+    if not path.exists():
+        return []
+    lines = path.read_text(encoding="utf-8").splitlines()
+    return [json.loads(line) for line in lines if line.strip()]
+
+
+# Los que tienen respuestas los reproduce el núcleo (`core.respond`), no el motor solo.
+REPLY_SCENARIOS = [name for name in SCENARIOS if replies(name)]
+PLAIN_SCENARIOS = [name for name in SCENARIOS if not replies(name)]
+
+
+def due_replies(replies_: list[dict], second: int) -> list[dict]:
+    """Las respuestas que se aplican después de la lectura de ese segundo."""
+    return [r for r in replies_ if r["at_seconds"] == second]
+
+
+def open_alert_id(open_alerts, reply: dict) -> str:
+    """El aviso abierto al que va una respuesta del fixture (mesa y tipo)."""
+    (alert,) = [
+        a
+        for a in open_alerts.values()
+        if a.table_id == reply["table_id"] and a.type == reply["type"]
+    ]
+    return alert.id
 
 
 def replay(observations, config=PROD) -> list[dict]:
@@ -54,6 +87,9 @@ def replay(observations, config=PROD) -> list[dict]:
         for reminder in result.reminded:
             open_alerts[reminder.alert.id] = reminder.alert
             events.append(event(second, "alert_reminder", reminder.alert))
+        for escalation in result.escalated:
+            open_alerts[escalation.alert.id] = escalation.alert
+            events.append(event(second, "alert_escalated", escalation.alert))
         for alert in result.resolved:
             del open_alerts[alert.id]
             events.append(event(second, "alert_resolved", alert))
@@ -100,7 +136,7 @@ def every(seconds_from: int, seconds_to: int, *plates, people: bool = True):
 # --- fixtures ---
 
 
-@pytest.mark.parametrize("name", SCENARIOS)
+@pytest.mark.parametrize("name", PLAIN_SCENARIOS)
 def test_replay_matches_expected(name: str):
     expected = json.loads(
         (FIXTURES / "expected" / f"{name}.alerts.json").read_text("utf-8")
@@ -126,8 +162,9 @@ def test_one_alert_per_table_and_type():
     assert opened == [(60, "plato_vacio")]
 
 
-def test_reminders_at_r_and_2r_and_no_more():
-    # plato vacío desde 0 s: abre a los 60 s, recuerda a 240 s y 420 s, y no más.
+def test_reminders_at_r_and_2r_then_one_escalation():
+    # plato vacío desde 0 s: abre a los 60 s, recuerda a 240 s y 420 s, escala a los
+    # 600 s (cuando habría salido el tercero, C-5) y no hay nada más.
     events = replay(every(0, 1200, VACIO, COMIENDO))
     vacio = [
         (e["at_seconds"], e["event"]) for e in events if e["type"] == "plato_vacio"
@@ -136,6 +173,7 @@ def test_reminders_at_r_and_2r_and_no_more():
         (60, "alert_opened"),
         (240, "alert_reminder"),
         (420, "alert_reminder"),
+        (600, "alert_escalated"),
     ]
 
 
@@ -175,7 +213,7 @@ def test_provisional_plate_does_not_count():
         state, obs(30, ("T1-p1", "comiendo", "centro"), ("T1-p9", "vacio", "centro"))
     )
     result = evaluate(state, at(30), PROD, [])
-    assert result == EngineResult([], [], [])
+    assert result == EngineResult([], [], [], [])
 
 
 def test_demo_thresholds_open_earlier():
@@ -217,7 +255,7 @@ def test_messages():
         state = update_table(state, o)
     (alert,) = evaluate(state, at(600), PROD, []).opened
     assert (
-        alert.message == "❓ Mesa 1: un plato sigue lleno hace 10 min. ¿Está todo bien?"
+        alert.message == "Mesa 1 ❓ un plato sigue lleno hace 10 min. ¿Está todo bien?"
     )
     assert table_name("T12") == "Mesa 12"
     assert table_name("barra") == "barra"

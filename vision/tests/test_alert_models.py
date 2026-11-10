@@ -22,7 +22,12 @@ SCENARIOS = [
     "id_cambiado",
     "plato_vacio",
     "mesa_terminada_recordatorios",
+    "escalado",
+    "boton_voy",
+    "boton_listo",
+    "boton_no_hacia_falta",
 ]
+REPLIES = FIXTURES / "replies"
 
 
 class ExpectedEvent(BaseModel):
@@ -31,9 +36,23 @@ class ExpectedEvent(BaseModel):
     model_config = ConfigDict(strict=True, extra="forbid")
 
     at_seconds: int = Field(ge=0)
-    event: Literal["alert_opened", "alert_reminder", "alert_resolved"]
+    event: Literal[
+        "alert_opened", "alert_reminder", "alert_escalated", "alert_resolved"
+    ]
     type: AlertType
     table_id: str
+
+
+class Reply(BaseModel):
+    """Formato de fixtures/replies/*.jsonl: lo que contesta el mozo (C-5)."""
+
+    model_config = ConfigDict(strict=True, extra="forbid")
+
+    at_seconds: int = Field(ge=0)
+    table_id: str
+    type: AlertType
+    action: Literal["voy", "listo", "no_hacia_falta", "motivo"]
+    who: str = Field(min_length=1)
 
 
 def load(name: str) -> list[TableObservation]:
@@ -119,6 +138,35 @@ def test_expected_matches_its_observations(path: Path):
             f"{e.at_seconds} s no es una lectura del escenario"
         )
         assert e.table_id in tables, f"{e.table_id} no está en el escenario"
+
+
+@pytest.mark.parametrize("path", sorted(REPLIES.glob("*.jsonl")), ids=lambda p: p.name)
+def test_replies_are_readings_of_their_scenario(path: Path):
+    lines = [line for line in path.read_text("utf-8").splitlines() if line.strip()]
+    replies = [Reply.model_validate_json(line) for line in lines]
+    assert replies, "un archivo de respuestas vacío no hace falta"
+    name = path.name.removesuffix(".jsonl")
+    assert name in SCENARIOS
+    observations = load(name)
+    start = observations[0].ts
+    ticks = {int((obs.ts - start).total_seconds()) for obs in observations}
+    expected = json.loads((EXPECTED / f"{name}.alerts.json").read_text("utf-8"))
+    for reply in replies:
+        assert reply.at_seconds in ticks
+        # cada respuesta va a un aviso que está abierto en ese momento (uno que
+        # cierra en ese mismo segundo es el que cerró «No hacía falta»)
+        before = [
+            e
+            for e in expected
+            if (e["table_id"], e["type"]) == (reply.table_id, reply.type)
+            and (
+                e["at_seconds"] < reply.at_seconds
+                or (
+                    e["at_seconds"] == reply.at_seconds and e["event"] == "alert_opened"
+                )
+            )
+        ]
+        assert before and before[-1]["event"] != "alert_resolved"
 
 
 def test_mesa_completa_goes_from_full_to_empty_in_order():
@@ -210,19 +258,32 @@ def test_alert_defaults():
     alert = Alert.model_validate(ALERT)
     assert alert.reminders_sent == 0
     assert alert.telegram_message_id is None
+    # nadie respondió (C-5)
+    assert (alert.answered_by, alert.done_at) == (None, None)
+    assert (alert.nudged_at, alert.escalated_at) == (None, None)
 
 
-def test_alert_rejects_more_than_two_reminders():
-    Alert.model_validate(ALERT | {"reminders_sent": 2})
+def test_alert_reminders_have_no_fixed_cap():
+    # el máximo es `max_reminders` de la config (C-5), no del contrato
+    Alert.model_validate(ALERT | {"reminders_sent": 3})
     with pytest.raises(ValidationError):
-        Alert.model_validate(ALERT | {"reminders_sent": 3})
+        Alert.model_validate(ALERT | {"reminders_sent": -1})
+
+
+def test_alert_answer_times_are_utc_timestamps():
+    alert = Alert.model_validate(
+        ALERT | {"answered_by": "Ana", "done_at": "2026-10-17T17:04:00-03:00"}
+    )
+    assert alert.done_at is not None and alert.done_at.utcoffset() == timedelta(0)
+    with pytest.raises(ValidationError):
+        Alert.model_validate(ALERT | {"done_at": "2026-10-17T20:04:00"})
 
 
 def test_alert_validates_assignment():
     alert = Alert.model_validate(ALERT)
     alert.reminders_sent = 2
     with pytest.raises(ValidationError):
-        alert.reminders_sent = 3
+        alert.reminders_sent = -1
     with pytest.raises(ValidationError):
         alert.status = "cerrada"
     # Un error no deja el valor malo puesto.

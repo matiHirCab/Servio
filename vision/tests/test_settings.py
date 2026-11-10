@@ -304,3 +304,26 @@ def test_current_reuses_the_fallback_until_the_environment_changes(monkeypatch):
     monkeypatch.setenv("CLAUDE_MODEL", "sonnet")
     second = settings.current()
     assert second is not first and second.claude_model == "sonnet"
+
+
+def test_escalation_settings_come_from_the_house_toml(tmp_path, monkeypatch):
+    """C-5: cuántos recordatorios antes de escalar y los segundos de «Listo», en el
+    mismo lugar que T1, T2 y R (`[avisos]`); el toml le gana al entorno."""
+    monkeypatch.setenv("ALERT_MAX_REMINDERS", "3")
+    monkeypatch.delenv("ALERT_DONE_WAIT", raising=False)
+    assert Settings.load().alert_max_reminders == 3
+    assert Settings.load().alert_done_wait is None  # sin valor: el default de config.py
+    toml = tmp_path / "casa.toml"
+    toml.write_text(
+        "[avisos]\nalert_max_reminders = 1\nalert_done_wait = 300\n", encoding="utf-8"
+    )
+    cfg = Settings.load(toml)
+    assert (cfg.alert_max_reminders, cfg.alert_done_wait) == (1, 300)
+
+
+def test_escalation_settings_reject_bad_values(monkeypatch):
+    import pydantic
+
+    monkeypatch.setenv("ALERT_MAX_REMINDERS", "-1")
+    with pytest.raises(pydantic.ValidationError):
+        Settings.load()

@@ -153,6 +153,8 @@ respuestas = Table(
     Column("escrita", Integer, nullable=False),
     Column("segundos", Float),
     Column("respondido_at", String, nullable=False),
+    # voy | listo | no_hacia_falta | motivo (C-5); `texto` es la etiqueta o el motivo
+    Column("accion", String),
     ForeignKeyConstraint(["local_id", "aviso_id"], ["avisos.local_id", "avisos.id"]),
 )
 estado_servicio = Table(
@@ -482,7 +484,8 @@ class Database:
     def alert_resolved(
         self, alert_id: str, at: datetime, reason: str | None = None
     ) -> None:
-        """`reason`, para mesa terminada: "retirados" o "servido" (llegó algo nuevo)."""
+        """`reason`: "retirados" o "servido" (llegó algo nuevo) en mesa terminada,
+        "no_hacia_falta" en cualquier aviso (lo cerró el mozo, C-5)."""
         self._write(
             avisos.update()
             .where(avisos.c.local_id == self.local_id, avisos.c.id == alert_id)
@@ -500,6 +503,8 @@ class Database:
                 escrita=int(bool(event.get("free_text"))),
                 segundos=event.get("seconds_to_answer"),
                 respondido_at=event["ts"],
+                # un `alert_feedback` de antes de C-5 era siempre un motivo
+                accion=event.get("action") or "motivo",
             )
         )
 
@@ -628,6 +633,7 @@ def _history_rows(
                     "respondido_at": iso(
                         at + timedelta(seconds=r["segundos_respuesta"])
                     ),
+                    "accion": "motivo",
                 }
             )
         elif r["tipo"] == "mesa_terminada":

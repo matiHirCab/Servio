@@ -6,17 +6,28 @@ import pytest
 
 from servio_vision.alerts.core import (
     AlertCore,
+    AlertsEscalated,
     AlertsOpened,
     AlertsReminded,
     AlertsResolved,
     TableUpdated,
 )
 from servio_vision.restaurant import Restaurant
-from tests.test_alert_engine import FIXTURES, PROD, SCENARIOS, load, obs
+from tests.test_alert_engine import (
+    FIXTURES,
+    PROD,
+    SCENARIOS,
+    due_replies,
+    load,
+    obs,
+    open_alert_id,
+    replies,
+)
 
 NAMES = {
     AlertsOpened: "alert_opened",
     AlertsReminded: "alert_reminder",
+    AlertsEscalated: "alert_escalated",
     AlertsResolved: "alert_resolved",
 }
 
@@ -26,16 +37,25 @@ def test_core_alone_gives_the_expected_alerts(tmp_path, monkeypatch, name):
     monkeypatch.chdir(tmp_path)  # si el núcleo escribiera algo, quedaría acá
     core = AlertCore(PROD)
     observations = load(name)
+    answers = replies(name)
     start = observations[0].ts
     got = []
     for o in observations:
+        second = int((o.ts - start).total_seconds())
         events = core.apply(o)
         assert isinstance(events[0], TableUpdated)
-        for event in events[1:]:
+        events = events[1:]
+        # las respuestas del mozo (C-5) llegan después de la lectura de su segundo
+        for reply in due_replies(answers, second):
+            alert_id = open_alert_id(core.open_alerts, reply)
+            answered = core.respond(alert_id, reply["action"], reply["who"])
+            assert answered is not None
+            events += answered
+        for event in events:
             for alert in event.alerts:
                 got.append(
                     {
-                        "at_seconds": int((o.ts - start).total_seconds()),
+                        "at_seconds": second,
                         "event": NAMES[type(event)],
                         "type": alert.type,
                         "table_id": alert.table_id,
@@ -55,7 +75,7 @@ def test_alerts_of_one_table_open_in_one_event():
             e for e in core.apply(obs(s, vacio, lleno)) if type(e) is AlertsOpened
         ]
     assert [len(e.alerts) for e in opened] == [1, 1]  # plato_vacio y, más tarde, lleno
-    assert opened[0].text == "🧹 Mesa 1: hay platos vacíos para retirar."
+    assert opened[0].text == "Mesa 1 🧹 hay platos vacíos para retirar"
 
 
 def test_with_restaurant_the_full_plate_alert_asks_alone():
@@ -64,7 +84,9 @@ def test_with_restaurant_the_full_plate_alert_asks_alone():
     events = [e for s in range(0, 1200, 30) for e in core.apply(obs(s, lleno))]
     (opened,) = [e for e in events if type(e) is AlertsOpened]
     assert opened.ask is not None and opened.ask.plate == "T1-p1"
-    assert opened.text.startswith("❓ Juan · Mesa 1: Cookies con chips de chocolate")
+    assert opened.text.startswith(
+        "Mesa 1 ❓ Cookies con chips de chocolate sigue lleno hace 10 min · Juan."
+    )
 
 
 def test_closing_a_finished_table_says_why():

@@ -50,6 +50,7 @@ HEADERS = [
     "Duración media",
     *ALERT_TYPES.values(),
     "Recordatorios",
+    "Escalados",
     "Resolución media",
 ]
 
@@ -60,6 +61,7 @@ class TableSummary:
     meals_in_progress: int = 0
     alerts: Counter = field(default_factory=Counter)  # tipo → avisos abiertos
     reminders: int = 0
+    escalations: int = 0  # C-5: nadie respondió (o «Listo» y siguió igual)
     resolve_times: list[float] = field(default_factory=list)  # segundos
 
     def add(self, other: "TableSummary") -> None:
@@ -67,6 +69,7 @@ class TableSummary:
         self.meals_in_progress += other.meals_in_progress
         self.alerts.update(other.alerts)
         self.reminders += other.reminders
+        self.escalations += other.escalations
         self.resolve_times += other.resolve_times
 
 
@@ -139,6 +142,8 @@ def summarize(events: list[dict]) -> dict[str, TableSummary]:
             opened_at[event["id"]] = ts
         elif kind == "alert_reminder":
             summary.reminders += 1
+        elif kind == "alert_escalated":
+            summary.escalations += 1
         elif kind == "alert_resolved" and event["id"] in opened_at:
             summary.resolve_times.append(
                 (ts - opened_at.pop(event["id"])).total_seconds()
@@ -176,6 +181,7 @@ def _row(name: str, s: TableSummary, other: bool) -> list[str]:
         *(str(s.alerts[t]) for t in ALERT_TYPES),
         *([str(others)] if other else []),
         str(s.reminders),
+        str(s.escalations),
         _minutes(s.resolve_times),
     ]
 

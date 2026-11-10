@@ -121,7 +121,7 @@ def test_a_database_from_the_m1_branch_keeps_its_columns(tmp_path):
     db = _db(tmp_path)
     try:
         [version] = db.query("SELECT version_num FROM alembic_version")
-        assert version[0] == "0006"
+        assert version[0] == "0007"
         [row] = db.query("SELECT precio FROM platos WHERE id = 'lomo'")
         assert row["precio"] == 890
         [served] = db.query("SELECT ultimo_fill_ratio FROM platos_servidos")
@@ -243,3 +243,101 @@ def test_a_reading_without_fill_ratio_does_not_keep_the_old_one(tmp_path):
     [row] = db.query("SELECT ultimo_fill_ratio FROM platos_servidos")
     assert row["ultimo_fill_ratio"] is None
     db.close()
+
+
+# --- C-5: tiempo de respuesta por mozo y «No hacía falta» ---
+
+
+def _press(db, alert_id, action, label, seconds, table="T2"):
+    db.feedback(
+        {
+            "alert_id": alert_id,
+            "table_id": table,
+            "answer": label,
+            "action": action,
+            "free_text": False,
+            "answered_by": "Sofía",
+            "seconds_to_answer": seconds,
+            "ts": "2026-10-18T21:10:00Z",
+        }
+    )
+
+
+def test_answer_time_is_the_first_answer_and_no_hacia_falta_is_counted(
+    tmp_path, capsys
+):
+    db = _db(tmp_path)
+    lomo = db.served("T2", "lomo", "T2-p1", T0)
+    # mesa terminada: «Voy» a los 20 s y «Listo» a los 200 s → cuenta el «Voy»
+    db.alert_opened("a1", "mesa_terminada", "T2", None, T0)
+    _press(db, "a1", "voy", "Voy", 20)
+    _press(db, "a1", "listo", "Listo", 200)
+    db.alert_resolved("a1", T0 + timedelta(minutes=5), "retirados")
+    # plato lleno: el motivo a los 40 s
+    db.alert_opened("a2", "plato_lleno_mucho", "T2", lomo, T0)
+    _press(db, "a2", "motivo", "Estaba frío", 40)
+    db.alert_resolved("a2", T0 + timedelta(minutes=12))
+    # plato vacío falso: «No hacía falta» a los 5 s no entra en los tiempos
+    db.alert_opened("a3", "plato_vacio", "T2", None, T0)
+    _press(db, "a3", "no_hacia_falta", "No hacía falta", 5)
+    db.alert_resolved("a3", T0 + timedelta(seconds=5), "no_hacia_falta")
+
+    m = metricas.compute(db)
+    assert m["answer"] == [("Sofía", 30.0)]  # (20 + 40) / 2
+    assert m["alerts"] == 3  # avisos respondidos, no filas
+    ops = m["ops"]
+    assert ops["adoption"] == {"avisos": 3, "respondidos": 3, "no_hacia_falta": 1}
+    # «Voy», «Listo» y «No hacía falta» no son problemas del plato
+    assert [p for p, _ in m["problems"]["Lomo con papas"]] == ["Estaba frío"]
+    assert [reason for dish, _, reason in m["dishes"] if dish == "Lomo con papas"] == [
+        "Estaba frío"
+    ]
+
+    metricas.print_report(m)
+    out = capsys.readouterr().out
+    assert "Segundos en responder el aviso" in out
+    assert "Sofía" in out and "30 s" in out
+    assert "1 marcados «No hacía falta»" in out
+
+
+def test_an_answer_from_before_c5_counts_as_a_reason(tmp_path):
+    db = _db(tmp_path)
+    db.alert_opened("a1", "plato_lleno_mucho", "T2", None, T0)
+    _answer(db, "a1", "Estaba frío", 30)  # sin `action`, como un log de A-4
+    [row] = db.query("SELECT accion FROM respuestas")
+    assert row["accion"] == "motivo"
+
+
+def test_a_false_alarm_is_not_a_forgotten_table(tmp_path):
+    db = _db(tmp_path)
+    lomo = db.served("T2", "lomo", "T2-p1", T0)
+    db.alert_opened("a1", "plato_lleno_mucho", "T2", lomo, T0)
+    _press(db, "a1", "no_hacia_falta", "No hacía falta", 20)
+    db.alert_resolved("a1", T0 + timedelta(seconds=20), "no_hacia_falta")
+    db.alert_opened("a2", "plato_lleno_mucho", "T2", lomo, T0)
+    db.alert_resolved("a2", T0 + timedelta(minutes=12))  # nadie contestó
+    assert operation_metrics(db)["forgotten"] == [("Sofía", 1, 1)]
+
+
+def test_adoption_ignores_alerts_without_buttons_from_before_c5(tmp_path):
+    db = _db(tmp_path)
+    # de antes de la primera respuesta de C-5: mesa terminada sin botones
+    db.alert_opened("viejo", "mesa_terminada", "T2", None, T0 - timedelta(days=1))
+    db.alert_resolved("viejo", T0 - timedelta(days=1), "retirados")
+    db.alert_opened("a1", "mesa_terminada", "T2", None, T0)
+    db.feedback(
+        {
+            "alert_id": "a1",
+            "table_id": "T2",
+            "answer": "Voy",
+            "action": "voy",
+            "free_text": False,
+            "seconds_to_answer": 10,
+            "ts": "2026-10-19T00:00:10Z",
+        }
+    )
+    db.alert_resolved("a1", T0 + timedelta(minutes=3), "retirados")
+    db.alert_opened("a2", "plato_vacio", "T2", None, T0 + timedelta(minutes=5))
+    db.alert_resolved("a2", T0 + timedelta(minutes=8))
+    adoption = operation_metrics(db)["adoption"]
+    assert (adoption["avisos"], adoption["respondidos"]) == (2, 1)

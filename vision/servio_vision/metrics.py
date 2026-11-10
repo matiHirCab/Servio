@@ -35,7 +35,7 @@ SELECT p.nombre AS plato,
           FROM respuestas r
           JOIN avisos a2 ON a2.id = r.aviso_id AND a2.local_id = r.local_id
           JOIN platos_servidos ps2 ON ps2.id = a2.plato_servido_id
-         WHERE ps2.plato_id = p.id
+         WHERE ps2.plato_id = p.id AND r.accion = 'motivo'
          GROUP BY r.texto ORDER BY COUNT(*) DESC LIMIT 1) AS motivo
   FROM platos p
   JOIN platos_servidos ps ON ps.plato_id = p.id
@@ -63,17 +63,25 @@ SELECT m.nombre AS mozo, me.nombre AS mesa,
  ORDER BY a.resuelto_at DESC
  LIMIT 1
 """
+# Tiempo de respuesta por mozo (C-5): de que sale el aviso a su primera respuesta
+# («Voy», «Listo» o el motivo del plato). «No hacía falta» no cuenta: es un falso
+# aviso, no una reacción del mozo a algo que había que hacer.
 SQL_ANSWER = """
 SELECT m.nombre AS mozo, AVG(r.segundos) AS segundos
-  FROM respuestas r JOIN mozos m ON m.id = r.mozo_id
+  FROM (SELECT local_id, aviso_id, mozo_id, MIN(segundos) AS segundos
+          FROM respuestas
+         WHERE accion IN ('voy', 'listo', 'motivo')
+         GROUP BY local_id, aviso_id, mozo_id) r
+  JOIN mozos m ON m.id = r.mozo_id
  GROUP BY m.id
  ORDER BY segundos DESC
 """
 SQL_TOTALS = """
 SELECT (SELECT COUNT(DISTINCT substr(abierto_at, 1, 10)) FROM avisos
          WHERE origen = 'historial') AS dias,
-       (SELECT COUNT(*) FROM respuestas) AS respuestas,
-       (SELECT COUNT(*) FROM respuestas r
+       (SELECT COUNT(DISTINCT local_id || ':' || aviso_id)
+          FROM respuestas) AS respuestas,
+       (SELECT COUNT(DISTINCT r.aviso_id) FROM respuestas r
          JOIN avisos a ON a.id = r.aviso_id AND a.local_id = r.local_id
          WHERE a.origen = 'camara' AND a.local_id = :local) AS en_vivo
 """
@@ -87,12 +95,13 @@ SELECT p.nombre AS plato, r.texto AS problema,
                            FROM respuestas r2
                            JOIN avisos a2 ON a2.id = r2.aviso_id AND a2.local_id = r2.local_id
                            JOIN platos_servidos ps2 ON ps2.id = a2.plato_servido_id
-                          WHERE ps2.plato_id = p.id) AS porcentaje
+                          WHERE ps2.plato_id = p.id
+                            AND r2.accion = 'motivo') AS porcentaje
   FROM respuestas r
   JOIN avisos a ON a.id = r.aviso_id AND a.local_id = r.local_id
   JOIN platos_servidos ps ON ps.id = a.plato_servido_id
   JOIN platos p ON p.id = ps.plato_id
- WHERE r.texto NOT LIKE 'Está todo bien%'
+ WHERE r.accion = 'motivo' AND r.texto NOT LIKE 'Está todo bien%'
  GROUP BY p.id, r.texto
  ORDER BY p.nombre, porcentaje DESC
 """
@@ -139,6 +148,8 @@ SELECT COALESCE(m.nombre, '(sin mozo)') AS mozo,
          ON r.aviso_id = a.id AND r.local_id = a.local_id
  WHERE a.tipo = 'plato_lleno_mucho'
    AND (a.resuelto_at IS NOT NULL OR r.segundos IS NOT NULL)
+   -- un falso aviso («No hacía falta», C-5) no es una mesa olvidada ni atendida
+   AND COALESCE(a.motivo_cierre, '') <> 'no_hacia_falta'
  GROUP BY m.id, m.nombre
 """
 # Desperdicio en $: platos que volvieron con comida por un problema (el mozo
@@ -154,6 +165,7 @@ SELECT p.nombre AS plato, COUNT(*) AS platos, SUM(p.precio) AS pesos
                  JOIN respuestas r ON r.aviso_id = a.id AND r.local_id = a.local_id
                 WHERE a.plato_servido_id = ps.id
                   AND a.tipo = 'plato_lleno_mucho'
+                  AND r.accion = 'motivo'
                   AND r.texto NOT LIKE 'Está todo bien%')
  GROUP BY p.id, p.nombre
  ORDER BY pesos DESC
@@ -182,19 +194,28 @@ SELECT p.nombre AS plato, COUNT(*) AS platos, AVG(ps.ultimo_fill_ratio) AS sobra
  GROUP BY p.id, p.nombre
  ORDER BY sobra DESC
 """
-# Adopción: de los avisos con botones (hoy solo plato lleno; con C-5, todos),
-# cuántos tuvieron respuesta y cuántos se marcaron "No hacía falta".
+# Adopción: de los avisos ya cerrados que tenían botones, cuántos tuvieron respuesta
+# y cuántos se cerraron con "No hacía falta" (falsos avisos). Antes de C-5 solo el de
+# plato lleno preguntaba; los demás cuentan desde el primer aviso de esa casa que
+# tuvo una respuesta de C-5 («Voy», «Listo» o «No hacía falta»): así una base de antes no
+# suma sus avisos sin botones como si nadie los hubiera contestado.
 SQL_ADOPTION = """
 SELECT COUNT(*) AS avisos,
        SUM(CASE WHEN EXISTS (SELECT 1 FROM respuestas r
                               WHERE r.aviso_id = a.id AND r.local_id = a.local_id)
                 THEN 1 ELSE 0 END) AS respondidos,
-       SUM(CASE WHEN EXISTS (SELECT 1 FROM respuestas r
-                              WHERE r.aviso_id = a.id AND r.local_id = a.local_id
-                                AND r.texto LIKE 'No hacía falta%')
+       SUM(CASE WHEN a.motivo_cierre = 'no_hacia_falta'
                 THEN 1 ELSE 0 END) AS no_hacia_falta
   FROM avisos a
- WHERE a.tipo = 'plato_lleno_mucho' AND a.resuelto_at IS NOT NULL
+ WHERE a.resuelto_at IS NOT NULL
+   AND (a.tipo = 'plato_lleno_mucho'
+        OR (a.origen = 'camara'
+            AND a.abierto_at >= (SELECT MIN(a2.abierto_at)
+                                   FROM respuestas r
+                                   JOIN avisos a2
+                                     ON a2.id = r.aviso_id AND a2.local_id = r.local_id
+                                  WHERE r.local_id = a.local_id
+                                    AND r.accion IN ('voy', 'listo', 'no_hacia_falta'))))
 """
 # Espera del siguiente plato: mesa terminada que se cerró porque llegó otro
 # plato (no por retiro): minutos que la mesa estuvo sin nada para comer.
@@ -421,7 +442,10 @@ IMAGE_METRICS = ("platos_que_vuelven", "tiempo_respuesta")
 def print_report(m: dict, metrics: set[str] | None = None) -> None:
     """Reporte en la terminal. `metrics`: ids de roles.py a mostrar (None = todas)."""
     show = set(REPORT_METRICS) if metrics is None else metrics
-    print(f"Servio · últimos {m['days']} días · {m['alerts']} respuestas de mozos")
+    print(
+        f"Servio · últimos {m['days']} días · {m['alerts']} avisos respondidos"
+        " por los mozos"
+    )
     if "platos_que_vuelven" in show:
         print("\nPlatos que vuelven llenos (% de las veces que se sirvieron)")
         for dish, rate, reason in m["dishes"]:
@@ -430,7 +454,7 @@ def print_report(m: dict, metrics: set[str] | None = None) -> None:
         print("\nMinutos hasta retirar los platos de una mesa que terminó")
         for waiter, v in m["attend"]:
             print(f"  {waiter:10} {v:5.1f} min")
-        print("\nSegundos en responder el aviso")
+        print("\nSegundos en responder el aviso (hasta el «Voy», «Listo» o el motivo)")
         for waiter, v in m["answer"]:
             print(f"  {waiter:10} {v:5.0f} s")
     if m["problems"] and "platos_que_vuelven" in show:

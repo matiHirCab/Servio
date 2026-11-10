@@ -25,6 +25,7 @@ from datetime import datetime, timedelta
 
 from servio_vision.alerts.config import AlertConfig
 from servio_vision.alerts.messages import (
+    done_escalation_message,
     escalation_message,
     nudge_message,
     open_message,
@@ -136,7 +137,12 @@ def _follow_up(
                 )
             return None
         if now >= alert.nudged_at + reminder:
-            return "escalate", _escalation(alert, now, since)
+            return "escalate", Reminder(
+                alert=alert.model_copy(update={"escalated_at": now}),
+                message=done_escalation_message(
+                    alert.type, alert.table_id, now - alert.done_at, alert.answered_by
+                ),
+            )
         return None
     if alert.answered_by is not None:
         return None  # «Voy» frena los recordatorios

@@ -240,11 +240,8 @@ def waiter_reports(
         name = names.get(table.get("mozo"), "(sin mozo)")
         text = (e.get("text") or e.get("message", "")).replace("\n\n", " ")
         by_waiter[name].append(f"{e['ts'][11:19]} {e['event'][6:]:9} {text}")
-        if (
-            e["event"] == "alert_opened"
-            and table
-            and not e["message"].split("·")[0].strip().endswith(name)
-        ):
+        # el mozo va al final de la primera oración: «Mesa 1 🍽️ terminó · Juan»
+        if e["event"] == "alert_opened" and table and f"· {name}" not in e["message"]:
             wrong.append(f"{e['table_id']}: {e['message']}")
     return by_waiter, wrong
 

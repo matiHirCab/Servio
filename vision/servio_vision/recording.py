@@ -40,7 +40,7 @@ EVENTS_FILE = "eventos.jsonl"
 REPLAY_EVENTS_FILE = "reproduccion.jsonl"  # los eventos de la última reproducción
 REPLAY_DB = "reproduccion.db"  # y su base (no la compartida)
 FRAME_FORMAT = "%Y%m%dT%H%M%S.%fZ"
-ALERT_EVENTS = ("alert_opened", "alert_reminder", "alert_resolved")
+ALERT_EVENTS = ("alert_opened", "alert_reminder", "alert_escalated", "alert_resolved")
 
 
 class FrameRecorder:
