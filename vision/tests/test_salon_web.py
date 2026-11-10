@@ -74,7 +74,7 @@ def test_page_has_both_modes_and_asks_for_the_frame(server):
     _, _, body = get(f"http://127.0.0.1:{server.port}/casa-1/salon")
     page = body.decode()
     assert 'id="floor"' in page and 'id="video"' in page
-    assert "frame.jpg" in page
+    assert "eventos" in page and "video=1" in page  # el frame llega con la foto
     assert 'id="mode-video"' in page
 
 
@@ -166,7 +166,8 @@ def test_frame_is_encoded_once_per_reading_and_follows_the_snapshot():
     pipeline.process_frame(FRAME, T0)
     first = feed.frame_jpeg()
     assert first is not None and first.version == 1 and first.jpeg is not None
-    assert feed.frame_jpeg().jpeg is first.jpeg  # cacheado
+    assert feed.frame_jpeg() is first  # cacheado, con su base64 (una vez por lectura)
+    assert first.base64 is not None and base64.b64decode(first.base64) == first.jpeg
     pipeline.process_frame(FRAME + 200, T0)  # otro cuadro (más claro)
     second = feed.frame_jpeg()
     assert second is not None and second.version == 2 and second.jpeg != first.jpeg

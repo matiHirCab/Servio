@@ -12,14 +12,17 @@ la lee, así no comparte nada con las reglas de avisos.
 Modo video (F-1b, decisión 2): con `video=True` el feed guarda además, **en
 memoria**, el frame (ya difuminado) que `on_reading` recibe con cada lectura, junto
 con la foto: el frame y las capas que se dibujan encima son siempre del mismo
-cuadro. Se codifica a JPEG recién cuando alguien pide `/<local>/salon/frame.jpg`
-(`frame_jpeg`), una vez por lectura. Apagado, no se guarda ni se sirve nada.
+cuadro. Se codifica a JPEG (y a base64) recién cuando alguien lo pide, una vez
+por lectura: la página en modo video lo recibe dentro de la misma foto por SSE
+(`/eventos?video=1`) y `frame.jpg` lo sirve suelto para mirar la cámara con un
+`curl`. Apagado, no se guarda ni se sirve nada.
 
 Coordenadas: todo normalizado 0–1 en la imagen de la cámara ([x, y, w, h]).
 """
 
 import logging
 import threading
+from base64 import b64encode
 from collections import Counter
 from collections.abc import Iterable
 from datetime import datetime
@@ -79,7 +82,8 @@ def build_snapshot(
 ) -> dict[str, Any]:
     """La foto del salón después de una lectura. `last`: la última observación de
     cada mesa (una mesa que esta vez no se pudo leer muestra la anterior). `video`:
-    si la página puede pedir `frame.jpg` (sin eso no muestra el modo video).
+    si el servidor ofrece el modo video (la página muestra el segmento y se
+    suscribe a la SSE con `?video=1`).
     `frame_size`: (ancho, alto) real del frame; sin él, el de las zonas."""
     zones = pipeline.zones
     tables: list[dict[str, Any]] = []
@@ -176,11 +180,13 @@ def display_size(frame: np.ndarray) -> np.ndarray:
     )
 
 
-class Frame(NamedTuple):
-    """Lo que `frame_jpeg` devuelve: el JPEG de la foto `version`, o `None` si
-    ese frame no se pudo codificar (ya quedó logueado)."""
+class EncodedFrame(NamedTuple):
+    """Lo que `frame_jpeg` devuelve: el frame de la foto `version` como JPEG y en
+    base64 (lo que va dentro de la foto por SSE), o `None` en los dos si no se pudo
+    codificar (ya quedó logueado). Distinto de `capture.Frame` (el cuadro crudo)."""
 
     jpeg: bytes | None
+    base64: str | None
     version: int
 
 
@@ -206,40 +212,40 @@ class SalonFeed:
         self._version = 0
         self._changed = threading.Condition()
         self._frame: np.ndarray | None = None  # el de la última foto publicada
-        # (versión, JPEG) del frame ya codificado, o (versión, None) si falló
-        self._encoded: tuple[int, bytes | None] | None = None
+        # el frame ya codificado para la foto `version`, o con None si falló
+        self._encoded: EncodedFrame | None = None
         self._encode_lock = threading.Lock()  # un solo navegador codifica por vez
 
-    def frame_jpeg(self) -> Frame | None:
-        """El frame de la última foto como JPEG, con la versión de esa foto. Se
-        codifica la primera vez que se pide, una vez por lectura aunque lo pidan
-        varios navegadores. `None`: modo video apagado o sin lecturas. Un frame que
-        no se pudo codificar vuelve con `jpeg=None` (queda logueado una vez; la vista
-        sigue sin imagen, el pipeline sigue)."""
+    def frame_jpeg(self) -> EncodedFrame | None:
+        """El frame de la última foto como JPEG y en base64, con la versión de esa
+        foto. Se codifica la primera vez que se pide, una vez por lectura aunque lo
+        pidan varios navegadores. `None`: modo video apagado o sin lecturas. Un frame
+        que no se pudo codificar vuelve con `jpeg=None` (queda logueado una vez; la
+        vista sigue sin imagen, el pipeline sigue)."""
         with self._changed:
             frame, version, encoded = self._frame, self._version, self._encoded
         if frame is None:
             return None
-        if encoded is not None and encoded[0] == version:
-            return Frame(encoded[1], version)  # ya resuelto: sale sin esperar a nadie
+        if encoded is not None and encoded.version == version:
+            return encoded  # ya resuelto: sale sin esperar a nadie
         # el pipeline nunca espera este candado: `on_reading` solo toma `_changed`
         with self._encode_lock:
             with self._changed:  # otro pudo codificarlo, o hay lectura nueva
                 frame, version, encoded = self._frame, self._version, self._encoded
             if frame is None:
                 return None
-            if encoded is not None and encoded[0] == version:
-                return Frame(encoded[1], version)
-            jpeg: bytes | None
+            if encoded is not None and encoded.version == version:
+                return encoded
             try:
                 jpeg = to_jpeg(display_size(frame))
+                result = EncodedFrame(jpeg, b64encode(jpeg).decode(), version)
             except (ValueError, cv2.error) as e:
                 logger.warning("No se pudo codificar el frame para la vista: %s", e)
-                jpeg = None
+                result = EncodedFrame(None, None, version)
             with self._changed:
                 if self._version == version:  # si no, ya hay otra lectura
-                    self._encoded = (version, jpeg)
-            return Frame(jpeg, version)
+                    self._encoded = result
+            return result
 
     def on_reading(
         self,

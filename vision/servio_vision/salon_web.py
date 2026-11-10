@@ -22,7 +22,6 @@ abre desde el celular o la tablet en la misma red. No tiene usuarios ni contrase
 no la expongas a internet.
 """
 
-import base64
 import ipaddress
 import json
 import logging
@@ -131,8 +130,10 @@ def _handler(server: SalonServer) -> type[BaseHTTPRequestHandler]:
                 found = feed.frame_jpeg()
                 if found is not None and found.version == snapshot["version"]:
                     snapshot = dict(snapshot)
-                    if found.jpeg is not None:
-                        snapshot["frame_jpeg"] = base64.b64encode(found.jpeg).decode()
+                    if found.base64 is not None:
+                        snapshot["frame_jpeg"] = (
+                            found.base64
+                        )  # ya codificado, una vez por lectura
                     else:
                         snapshot["frame_error"] = BROKEN_FRAME
             return json.dumps(snapshot, ensure_ascii=False).encode()

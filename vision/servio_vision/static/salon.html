@@ -450,7 +450,7 @@ function renderFloor() {
 }
 
 // ---------- video ----------
-// El último frame difuminado (frame.jpg) con las capas encima: el recuadro, la etiqueta
+// El último frame difuminado (viene con la foto) con las capas encima: el recuadro, la etiqueta
 // y el aviso abierto de cada mesa y, por plato con caja, el anillo del estado y el
 // nombre. Un plato sin caja no se marca: solo se dibuja lo que la cámara ve de verdad.
 let videoWidth = 0;  // el ancho con que se dibujó el overlay (una unidad = un píxel)
@@ -479,7 +479,7 @@ function renderVideo() {
     out += `<g class="tbl" data-id="${esc(t.id)}" tabindex="0" role="button" aria-label="${esc(t.name)}, ${esc(status)}">`;
     out += `<rect class="tbl-top" x="${x0.toFixed(1)}" y="${y0.toFixed(1)}" width="${w.toFixed(1)}" height="${h.toFixed(1)}" rx="10" fill="#3E8BFF" fill-opacity="${sel ? .08 : .02}" stroke="#ffffff" stroke-opacity="${sel ? .9 : .35}" stroke-width="2" stroke-dasharray="${sel ? "0" : "6 6"}"/>`;
     out += tag(x0 + 8, y0 + 16, `${t.name}${t.waiter ? " · " + t.waiter : ""} · ${status.toUpperCase()}`, "#e9edf2", .92);
-    const al = s.alerts.filter(a => a.table_id === t.id).sort(byAge)[0];
+    const al = alertsOf(t.id)[0];
     if (al) out += tag(x0 + 8, y0 + h - 16, alertTagText(al, t.name), alertColor(al.type), 1, "start", al.created_at, y0 + h + 14);
     for (const p of t.plates) {
       if (!p.bbox) continue;
@@ -498,14 +498,13 @@ function renderVideo() {
   fitTags(svg);
   pending.video.clear();
 }
-// La imagen de la cámara que vino con la foto (solo con `/eventos?video=1`); sin ella, la
-// caja dice por qué. Un `data:` URL: nada que liberar ni emparejar.
+// La imagen de la cámara que vino con la foto (solo con `/eventos?video=1`). Un `data:`
+// URL: nada que liberar ni emparejar. Una foto sin imagen y sin error (la suscripción no la
+// pedía, o justo cambió la lectura) deja la que había; solo un error la saca y dice por qué.
 function showFrame(s) {
   const cam = $("cam"), wait = $("cam-wait");
-  if (s.frame_jpeg) { cam.src = "data:image/jpeg;base64," + s.frame_jpeg; cam.hidden = false; wait.hidden = true; return; }
-  cam.hidden = true; cam.removeAttribute("src");
-  wait.textContent = s.frame_error || "Esperando la imagen de la cámara";
-  wait.hidden = false;
+  if (s.frame_jpeg) { cam.src = "data:image/jpeg;base64," + s.frame_jpeg; cam.hidden = false; wait.hidden = true; }
+  else if (s.frame_error || !cam.src) { cam.hidden = true; cam.removeAttribute("src"); wait.textContent = s.frame_error || "Esperando la imagen de la cámara"; wait.hidden = false; }
 }
 
 // ---------- panel ----------
@@ -654,10 +653,12 @@ for (const id of ["floor", "overlay"]) {
 
 // la SSE: la primera foto llega al conectar, después una por lectura. En modo video pide el
 // frame con cada foto (`?video=1`); una pestaña de fondo no lo pide (vuelve a pedirlo al volver).
-let events = null;
+let events = null, eventsVideo = null;  // la suscripción y si pide el frame
 function connect() {
-  if (events) events.close();
   const withVideo = (snap ? mode === "video" : wanted === "video") && document.visibilityState !== "hidden";
+  if (events && eventsVideo === withVideo) return;  // ya está la que hace falta
+  if (events) events.close();
+  eventsVideo = withVideo;
   events = new EventSource(base + "/eventos" + (withVideo ? "?video=1" : ""));
   events.onopen = () => { connected = everConnected = true; renderStatus(); };
   events.onmessage = e => { connected = everConnected = true; apply(JSON.parse(e.data)); };
