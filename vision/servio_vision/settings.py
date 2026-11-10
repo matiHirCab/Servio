@@ -194,6 +194,10 @@ class Settings(BaseSettings):
     alert_t1: int | None = Field(None, ge=1)
     alert_t2: int | None = Field(None, ge=1)
     alert_reminder: int | None = Field(None, ge=1)
+    # recordatorios antes de escalar (el escalado sale a R × (max + 1)) y los segundos
+    # de «Listo» sin que la cámara lo vea resuelto (C-5)
+    alert_max_reminders: int | None = Field(None, ge=0)
+    alert_done_wait: int | None = Field(None, ge=1)
 
     @field_validator(*REPO_RELATIVE, mode="after")
     @classmethod

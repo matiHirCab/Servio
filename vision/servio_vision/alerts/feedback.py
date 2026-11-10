@@ -1,12 +1,25 @@
-"""Respuestas de los mozos al aviso de plato lleno, desde Telegram.
+"""Respuestas de los mozos a los avisos, desde Telegram (A-4, C-5).
 
-El aviso de `plato_lleno_mucho` sale con botones: las respuestas típicas de ese plato
-(`fixtures/restaurante/carta.json`) y "✏️ Otra respuesta". Si tocan un botón, la
-respuesta queda registrada; con "Otra respuesta", el bot pide que escriban y toma el
-texto que respondan a ese pedido. Cada respuesta:
-- se guarda en el log (`alert_feedback`: plato, mozo, respuesta, quién y en cuánto),
-  que alimenta las métricas de platos con problemas y de mozos;
-- se agrega al mensaje del aviso ("📝 Juan: No le gustaron") y se sacan los botones.
+Cada aviso sale con botones: «Voy», «Listo» y «No hacía falta» en todos, y en el de
+`plato_lleno_mucho` además las respuestas típicas de ese plato
+(`fixtures/restaurante/carta.json`) y "✏️ Otra respuesta" (el bot pide que escriban y
+toma el texto que respondan a ese pedido). Lo mismo vale escrito, citando el aviso
+o un recordatorio (la respuesta rápida del reloj y del celular): «voy», «listo»,
+«no hacía falta» (`messages.KEYWORDS`, comparadas enteras), o un motivo si el aviso
+es de plato lleno. Un mensaje suelto, sin cita, se ignora: en el grupo no se sabe de
+quién ni para qué mesa es (decisión 5; el chat por mozo es C-7).
+
+Qué hace cada respuesta lo decide el núcleo (`core.respond`, vía `on_action`): «Voy»
+toma el aviso y frena los recordatorios, «Listo» anota `done_at`, un motivo también
+lo toma, y «No hacía falta» lo cierra. Acá cada respuesta:
+- se guarda en el log (`alert_feedback`: plato, mozo, respuesta, acción, quién y en
+  cuánto), que alimenta las métricas de platos con problemas y de mozos;
+- se agrega al mensaje del aviso ("👟 Voy · Ana", "📝 No le gustaron") y el teclado
+  queda con lo que todavía se puede tocar.
+
+Todas las ediciones de un mensaje con pregunta pasan por `_refresh`, con el lock:
+una respuesta que llega junto con el cierre no pisa el "ya resuelto" ni deja botones
+vivos en un aviso cerrado.
 
 Quien escucha el canal (long polling, comandos como `/metricas`) es el bot
 (`bot.py`): le pasa a `handle` los toques de botón y los mensajes que no son comandos.
@@ -23,35 +36,75 @@ from datetime import UTC, datetime
 from typing import Any
 
 from servio_vision.alerts import messages
+from servio_vision.alerts.notify import Buttons
 from servio_vision.restaurant import OTHER_ANSWER
 from servio_vision.timestamps import iso
 
 logger = logging.getLogger(__name__)
 
 OTHER = "otro"
+# datos de los botones: fb:{token}:{voy|listo|no|otro|índice del motivo}
+BUTTON_ACTIONS = {"voy": "voy", "listo": "listo", "no": "no_hacia_falta"}
+BUTTON_DATA = {action: data for data, action in BUTTON_ACTIONS.items()}
 # Un aviso cerrado se sigue pudiendo contestar un rato: el mozo que tocó «Otra respuesta»
 # justo antes del cierre escribe su texto después. Pasado esto se olvida la pregunta:
-# sin eso, cada aviso de plato lleno de semanas quedaba en memoria (con el texto, los
-# platos y el cierre). Un aviso abierto no se olvida nunca, dure lo que dure.
+# sin eso, cada aviso de semanas quedaba en memoria (con el texto, los platos y el
+# cierre). Un aviso abierto no se olvida nunca, dure lo que dure.
 RESOLVED_GRACE_S = 1800.0
+
+# `on_action(alert_id, acción, quién)`: lo que el núcleo hace con la respuesta
+# (`AlertProcessor.respond`). False si el aviso ya no está abierto.
+OnAction = Callable[[str, str, str], bool]
 
 
 @dataclass
 class Question:
+    """El mensaje de un aviso, con sus botones y lo que ya respondieron."""
+
     alert_id: str
     table_id: str
     alert_type: str
     dish: str | None
     waiter: str | None
     text: str  # texto del aviso
-    answers: tuple[str, ...]
-    asked_at: datetime
+    answers: tuple[str, ...]  # motivos del plato (vacío si no es plato lleno)
+    asked_at: datetime  # reloj de pared: de acá sale `seconds_to_answer`
     message_id: int | None = None
-    feedback: list[str] = field(default_factory=list)  # líneas "📝 ..."
-    answered: bool = False  # ya respondió alguien (un segundo toque no cuenta)
+    token: str = ""
+    feedback: list[str] = field(default_factory=list)  # líneas "👟 …" / "📝 ..."
+    taken_by: str | None = None  # quién dijo «Voy»
+    done: bool = False  # ya dijeron «Listo»
+    has_motive: bool = False  # ya contestaron el motivo (un segundo toque no cuenta)
+    # recordatorios y escalados de este aviso: citarlos también responde al aviso
+    extra_messages: list[int] = field(default_factory=list)
     # el aviso se cerró: arma el texto "ya resuelto" con las respuestas
     final: Callable[[str], str] | None = None
     resolved_at: float | None = None  # reloj del `FeedbackDesk`, cuando se cerró
+
+    @property
+    def answered(self) -> bool:
+        return self.has_motive
+
+
+def keyboard(question: Question) -> Buttons | None:
+    """Los botones que quedan según lo que ya respondieron; None si el aviso cerró."""
+    if question.final is not None:
+        return None
+    rows: Buttons = []
+    top = []
+    if question.taken_by is None:
+        top.append((messages.BUTTON_VOY, f"fb:{question.token}:voy"))
+    if not question.done:
+        top.append((messages.BUTTON_LISTO, f"fb:{question.token}:listo"))
+    if top:
+        rows.append(top)
+    if question.answers and not question.has_motive:
+        rows += [
+            [(a, f"fb:{question.token}:{i}")] for i, a in enumerate(question.answers)
+        ]
+        rows.append([(OTHER_ANSWER, f"fb:{question.token}:{OTHER}")])
+    rows.append([(messages.BUTTON_NO, f"fb:{question.token}:no")])
+    return rows
 
 
 class FeedbackDesk:
@@ -61,13 +114,18 @@ class FeedbackDesk:
         self,
         notifier: Any,
         log_event: Callable[[dict], None],
+        on_action: OnAction | None = None,
         clock: Callable[[], float] = time.monotonic,
+        wall: Callable[[], datetime] | None = None,
     ) -> None:
         self.notifier = notifier
         self.log_event = log_event
+        self.on_action = on_action  # sin él (tests sueltos) toda respuesta vale
         self._clock = clock  # los tests lo adelantan
+        self.wall = wall or (lambda: datetime.now(UTC))  # reloj de pared inyectable
         self._questions: dict[str, Question] = {}  # token → pregunta
-        self._by_message: dict[int, Question] = {}
+        self._by_message: dict[int, Question] = {}  # aviso, recordatorios, escalados
+        self._by_alert: dict[str, Question] = {}
         self._prompts: dict[int, str] = {}  # message_id del "escribí qué pasó" → token
         self._lock = threading.Lock()
 
@@ -75,17 +133,13 @@ class FeedbackDesk:
 
     def ask(self, question: Question) -> int | None:
         """Manda el aviso con los botones; devuelve el message_id."""
-        token = secrets.token_hex(4)
-        rows = [[(a, f"fb:{token}:{i}")] for i, a in enumerate(question.answers)]
-        rows.append([(OTHER_ANSWER, f"fb:{token}:{OTHER}")])
-        message_id = self.notifier.send(question.text, rows)
+        question.token = secrets.token_hex(4)
+        message_id = self.notifier.send(question.text, keyboard(question))
         question.message_id = message_id
         with self._lock:
             self._forget_resolved()
-            self._questions[token] = question
-            if message_id is not None:
-                self._by_message[message_id] = question
-            else:
+            self._register(question)
+            if message_id is None:
                 # Telegram no lo recibió ahora, pero `notify.py` lo reintenta: si sale
                 # tarde, trae los botones de este token y tienen que encontrar la
                 # pregunta. Sin `message_id` nadie la cierra con `rewrite`, así que
@@ -93,8 +147,26 @@ class FeedbackDesk:
                 question.resolved_at = self._clock()
         return message_id
 
+    def _register(self, question: Question) -> None:
+        self._questions[question.token] = question
+        self._by_alert[question.alert_id] = question
+        if question.message_id is not None:
+            self._by_message[question.message_id] = question
+        for message_id in question.extra_messages:
+            self._by_message[message_id] = question
+
+    def attach_message(self, message_id: int | None, alert_id: str) -> None:
+        """Un recordatorio o escalado de ese aviso: citarlo también lo responde."""
+        if message_id is None:
+            return
+        with self._lock:
+            question = self._by_alert.get(alert_id)
+            if question is not None:
+                question.extra_messages.append(message_id)
+                self._by_message[message_id] = question
+
     def _forget_resolved(self) -> None:
-        """Saca las preguntas cerradas hace más de `RESOLVED_GRACE_S`, con su mensaje
+        """Saca las preguntas cerradas hace más de `RESOLVED_GRACE_S`, con sus mensajes
         y sus pedidos de «escribí qué pasó». Con el lock tomado."""
         now = self._clock()
         expired = [
@@ -104,8 +176,11 @@ class FeedbackDesk:
         ]
         for token in expired:
             question = self._questions.pop(token)
-            if question.message_id is not None:
-                self._by_message.pop(question.message_id, None)
+            if self._by_alert.get(question.alert_id) is question:
+                del self._by_alert[question.alert_id]
+            for message_id in [question.message_id, *question.extra_messages]:
+                if message_id is not None:
+                    self._by_message.pop(message_id, None)
             for prompt_id in [p for p, t in self._prompts.items() if t == token]:
                 del self._prompts[prompt_id]
 
@@ -126,12 +201,31 @@ class FeedbackDesk:
         justo cuando se cierra el aviso no pisa el "ya resuelto" (ni al revés)."""
         with self._lock:
             question = self._by_message.get(message_id)
-            text = build(self._suffix(question))
-            if question is not None and resolved:
+            if question is None:
+                text = build("")
+                self.notifier.edit(message_id, text)
+                return text
+            if resolved:
                 question.final = build
                 question.resolved_at = self._clock()
             self._forget_resolved()
-            self.notifier.edit(message_id, text)
+            if question.final is not None:
+                return self._refresh(question)
+            # cierre parcial de un mensaje con varios avisos (fotos viejas): el texto
+            # nuevo pasa a ser el del aviso, con sus botones
+            question.text = build("")
+            return self._refresh(question)
+
+    def _refresh(self, question: Question) -> str:
+        """Reescribe el mensaje del aviso con sus respuestas y el teclado que queda.
+        Con el lock tomado."""
+        answers = self._suffix(question)
+        if question.final is not None:
+            text = question.final(answers)  # si el aviso ya se cerró, se mantiene
+        else:
+            text = question.text + answers
+        if question.message_id is not None:
+            self.notifier.edit(question.message_id, text, keyboard(question))
         return text
 
     # --- respuestas (las trae el bot) ---
@@ -153,7 +247,11 @@ class FeedbackDesk:
         if question is None:
             self.notifier.answer_callback(callback["id"], messages.BUTTON_EXPIRED)
             return
-        if question.answered:
+        if choice in BUTTON_ACTIONS:
+            toast = self._action(question, BUTTON_ACTIONS[choice], who)
+            self.notifier.answer_callback(callback["id"], toast)
+            return
+        if question.has_motive:
             self.notifier.answer_callback(
                 callback["id"], messages.BUTTON_ALREADY_ANSWERED
             )
@@ -168,40 +266,89 @@ class FeedbackDesk:
             return
         answer = question.answers[int(choice)]
         self.notifier.answer_callback(callback["id"], messages.BUTTON_THANKS)
-        self._record(question, answer, who, free_text=False)
+        self._motive(question, answer, who, free_text=False)
 
     def _on_message(self, message: dict) -> None:
         if not self.notifier.is_group(message.get("chat", {}).get("id")):
             return
         reply_to = (message.get("reply_to_message") or {}).get("message_id")
         text = (message.get("text") or "").strip()
+        if not reply_to or not text:
+            return  # un mensaje suelto no se adivina (decisión 5)
+        who = _name(message.get("from", {}))
         with self._lock:
-            token = self._prompts.pop(reply_to, None) if reply_to else None
+            token = self._prompts.pop(reply_to, None)
             question = self._questions.get(token) if token else None
-        if question is None or not text or question.answered:
+            quoted = self._by_message.get(reply_to)
+        if question is not None:
+            # respuesta al «escribí qué pasó»
+            if question.has_motive:
+                return
+            self.notifier.delete(reply_to)  # el pedido ya no hace falta
+            self._motive(question, text, who, free_text=True)
             return
-        self.notifier.delete(
-            reply_to
-        )  # el pedido de "escribí qué pasó" ya no hace falta
-        self._record(question, text, _name(message.get("from", {})), free_text=True)
+        if quoted is None:
+            return  # cita a un mensaje que no es un aviso
+        action = messages.keyword_action(text)
+        if action is not None:
+            self._action(quoted, action, who)
+        elif quoted.answers and not quoted.has_motive and quoted.final is None:
+            self._motive(quoted, text, who, free_text=True)
+        # otro texto citando un aviso sin motivos (o ya cerrado): se ignora
+
+    def _action(self, question: Question, action: str, who: str) -> str:
+        """«Voy», «Listo» o «No hacía falta»: lo aplica el núcleo y queda en el
+        mensaje y el log. Devuelve el texto para el toque del botón."""
+        if action == "voy" and question.taken_by is not None:
+            return messages.BUTTON_TAKEN.format(who=question.taken_by)
+        if action == "listo" and question.done:
+            return messages.BUTTON_ALREADY_DONE
+        if question.final is not None:
+            return messages.BUTTON_EXPIRED
+        if not self._act(question, action, who):
+            return messages.BUTTON_EXPIRED
+        self._record(question, messages.ACTION_LABELS[action], who, False, action)
+        return messages.BUTTON_THANKS
+
+    def _motive(
+        self, question: Question, answer: str, who: str, *, free_text: bool
+    ) -> None:
+        """Un motivo del plato lleno: toma el aviso (si estaba sin tomar) y queda
+        registrado aunque el aviso ya se haya cerrado."""
+        self._act(question, "motivo", who)
+        self._record(question, answer, who, free_text, "motivo")
+
+    def _act(self, question: Question, action: str, who: str) -> bool:
+        """Lo que hace el núcleo con la respuesta. Sin el lock: el núcleo edita el
+        mensaje (cierre) por `rewrite`, que lo toma."""
+        if self.on_action is None:
+            return True
+        return self.on_action(question.alert_id, action, who)
 
     def _record(
-        self, question: Question, answer: str, who: str, free_text: bool
+        self, question: Question, answer: str, who: str, free_text: bool, action: str
     ) -> None:
-        now = datetime.now(UTC)
+        now = self.wall()
         with self._lock:
-            if question.answered:
-                return  # dos toques casi juntos: cuenta el primero
-            question.answered = True
-            question.feedback.append(messages.feedback_line(answer))
-            answers = self._suffix(question)
-            # si el aviso ya se cerró, se mantiene el "ya resuelto"
-            if question.final is not None:
-                text = question.final(answers)
+            if action == "motivo":
+                if question.has_motive:
+                    return  # dos toques casi juntos: cuenta el primero
+                question.has_motive = True
+                line = messages.feedback_line(answer)
+            elif action == "voy":
+                if question.taken_by is not None:
+                    return
+                question.taken_by = who
+                line = messages.action_line(action, who)
+            elif action == "listo":
+                if question.done:
+                    return
+                question.done = True
+                line = messages.action_line(action, who)
             else:
-                text = question.text + answers
-            if question.message_id is not None:
-                self.notifier.edit(question.message_id, text)  # saca los botones
+                line = messages.action_line(action, who)
+            question.feedback.append(line)
+            self._refresh(question)
         self.log_event(
             {
                 "event": "alert_feedback",
@@ -212,12 +359,63 @@ class FeedbackDesk:
                 "dish": question.dish,
                 "waiter": question.waiter,
                 "answer": answer,
+                "action": action,
                 "free_text": free_text,
                 "answered_by": who,
                 "seconds_to_answer": round((now - question.asked_at).total_seconds()),
             }
         )
-        logger.info("Respuesta de %s sobre %s: %s", who, question.dish, answer)
+        logger.info("Respuesta de %s sobre %s: %s", who, question.table_id, answer)
+
+    # --- para seguir después de un reinicio (persist.py) ---
+
+    def snapshot(self) -> list[dict[str, Any]]:
+        """Las preguntas de los avisos todavía abiertos, para la foto del estado."""
+        with self._lock:
+            return [
+                {
+                    "token": q.token,
+                    "alert_id": q.alert_id,
+                    "table_id": q.table_id,
+                    "alert_type": q.alert_type,
+                    "dish": q.dish,
+                    "waiter": q.waiter,
+                    "text": q.text,
+                    "answers": list(q.answers),
+                    "asked_at": iso(q.asked_at),
+                    "message_id": q.message_id,
+                    "feedback": list(q.feedback),
+                    "taken_by": q.taken_by,
+                    "done": q.done,
+                    "has_motive": q.has_motive,
+                    "extra_messages": list(q.extra_messages),
+                }
+                for q in self._questions.values()
+                if q.final is None and q.message_id is not None
+            ]
+
+    def restore(self, questions: list[dict[str, Any]]) -> None:
+        """Vuelve a escuchar los botones de los avisos de la corrida anterior."""
+        with self._lock:
+            for data in questions:
+                question = Question(
+                    alert_id=data["alert_id"],
+                    table_id=data["table_id"],
+                    alert_type=data["alert_type"],
+                    dish=data.get("dish"),
+                    waiter=data.get("waiter"),
+                    text=data["text"],
+                    answers=tuple(data.get("answers", ())),
+                    asked_at=datetime.fromisoformat(data["asked_at"]),
+                    message_id=data.get("message_id"),
+                    token=data["token"],
+                    feedback=list(data.get("feedback", [])),
+                    taken_by=data.get("taken_by"),
+                    done=bool(data.get("done", False)),
+                    has_motive=bool(data.get("has_motive", False)),
+                    extra_messages=[int(m) for m in data.get("extra_messages", [])],
+                )
+                self._register(question)
 
 
 def _name(user: dict) -> str:

@@ -31,6 +31,8 @@ demo = false
 # alert_t1 = 60
 # alert_t2 = 600
 # alert_reminder = 180
+# alert_max_reminders = 2                  # recordatorios antes de escalar: escala a alert_reminder × (2 + 1)
+# alert_done_wait = 600                    # «Listo» sin que la cámara lo vea resuelto: insiste y escala
 # finished_after = 360
 
 [salon]

@@ -143,6 +143,9 @@ def build_snapshot(
                     "type": alert.type,
                     "message": alert.message,
                     "created_at": _iso(alert.created_at),
+                    # quién dijo «Voy» (C-5); null si nadie respondió todavía
+                    "answered_by": alert.answered_by,
+                    "done_at": _iso(alert.done_at),
                 }
             )
     return {

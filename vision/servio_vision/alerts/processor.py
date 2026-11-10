@@ -4,8 +4,9 @@
 reglas, avisos abiertos, sin E/S) y reparte cada evento que devuelve a los
 suscriptores (`outputs.py`), en este orden: el canal (`TelegramOutput`, que le pone
 el `message_id` a los avisos), el log `out/eventos.jsonl` y la base. Una salida que
-falla no frena a las demás. Las respuestas
-de los mozos y los comandos los escucha el bot (`bot.py`).
+falla no frena a las demás. Las respuestas de los mozos y los comandos los escucha
+el bot (`bot.py`) en otro hilo: `respond` las aplica al núcleo con el mismo lock que
+`process`, y reparte lo que producen (el cierre por «No hacía falta») igual.
 
 El log empieza con una línea `run_started` con los umbrales de la corrida.
 
@@ -17,6 +18,7 @@ recupera al arrancar si es reciente.
 import dataclasses
 import functools
 import logging
+import threading
 import time
 from collections.abc import Callable
 from datetime import UTC, datetime
@@ -26,7 +28,13 @@ from typing import Any
 from servio_vision.alerts import persist
 from servio_vision.alerts.bot import Bot, BotChannel, send_metrics
 from servio_vision.alerts.config import AlertConfig
-from servio_vision.alerts.core import AlertCore, AlertsOpened, TableUpdated
+from servio_vision.alerts.core import (
+    ACTIONS,
+    Action,
+    AlertCore,
+    AlertsOpened,
+    TableUpdated,
+)
 from servio_vision.alerts.feedback import FeedbackDesk
 from servio_vision.alerts.models import Alert, TableObservation
 from servio_vision.alerts.notify import Notifier
@@ -89,20 +97,21 @@ class AlertProcessor:
         self.db_output = DatabaseOutput(db, restaurant) if db is not None else None
         if db is not None and restaurant is not None:
             db.load_restaurant(restaurant)
-        # Con los datos del restaurante, el aviso de plato lleno pregunta qué pasó
-        # (botones en Telegram, ver feedback.py) y el bot escucha las respuestas.
-        self.feedback: FeedbackDesk | None = None
+        # El bot y las lecturas tocan el núcleo desde hilos distintos.
+        self._lock = threading.RLock()
+        # Cada aviso sale con botones (feedback.py) y el bot escucha las respuestas.
+        self.feedback: FeedbackDesk = FeedbackDesk(
+            notifier, self._on_feedback, self.respond
+        )
         self.bot: Bot | None = None
-        if restaurant is not None:
-            self.feedback = FeedbackDesk(notifier, self._on_feedback)
-            # la consola no se escucha: sin canal que escuchar no hay bot
-            if isinstance(notifier, BotChannel):
-                commands: dict[str, Callable[[], None]] = {}
-                if db is not None:
-                    commands["metricas"] = functools.partial(
-                        send_metrics, db, restaurant, notifier
-                    )
-                self.bot = Bot(notifier, self.feedback, commands)
+        # la consola no se escucha: sin canal que escuchar no hay bot
+        if isinstance(notifier, BotChannel):
+            commands: dict[str, Callable[[], None]] = {}
+            if db is not None and restaurant is not None:
+                commands["metricas"] = functools.partial(
+                    send_metrics, db, restaurant, notifier
+                )
+            self.bot = Bot(notifier, self.feedback, commands)
         self.telegram = TelegramOutput(notifier, self.feedback)
         # Marca dónde empieza la corrida (el log se agrega) y con qué umbrales: replay.py
         # corta el archivo acá y reproduce con la misma config.
@@ -138,30 +147,51 @@ class AlertProcessor:
         La observación va al log antes de aplicarla (queda aunque el núcleo la
         rechace) y cada aviso apenas se manda o edita.
         """
-        written = self._dispatch(ObservationReceived(obs))
-        events = self.core.apply(obs)  # ValueError si el ts va hacia atrás
-        for event in events:
-            written += self._dispatch(event)
-        if self.db_output is not None:
-            self._state_dirty = True
-            update = events[0]
-            assert isinstance(update, TableUpdated)
-            self._rules_dirty = self._rules_dirty or update.rules_changed
-            since = self._clock() - self._saved_at
-            if (
-                len(events) > 1  # se abrió, recordó o cerró un aviso
-                or self.db_output.save_now
-                # con la base fallando, un cambio de reglas espera al de cada 5 s:
-                # no una espera de conexión por segundo hasta que vuelva
-                or (
-                    self._rules_dirty
-                    and not self._save_failed
-                    and since >= SAVE_RULES_EVERY_S
-                )
-                or since >= SAVE_STATE_EVERY_S
-            ):
-                self._flush_state()
+        with self._lock:
+            written = self._dispatch(ObservationReceived(obs))
+            events = self.core.apply(obs)  # ValueError si el ts va hacia atrás
+            for event in events:
+                written += self._dispatch(event)
+            if self.db_output is not None:
+                self._state_dirty = True
+                update = events[0]
+                assert isinstance(update, TableUpdated)
+                self._rules_dirty = self._rules_dirty or update.rules_changed
+                since = self._clock() - self._saved_at
+                if (
+                    len(events) > 1  # se abrió, recordó, escaló o cerró un aviso
+                    or self.db_output.save_now
+                    # con la base fallando, un cambio de reglas espera al de cada
+                    # 5 s: no una espera de conexión por segundo hasta que vuelva
+                    or (
+                        self._rules_dirty
+                        and not self._save_failed
+                        and since >= SAVE_RULES_EVERY_S
+                    )
+                    or since >= SAVE_STATE_EVERY_S
+                ):
+                    self._flush_state()
         return written
+
+    def respond(self, alert_id: str, action: str, who: str) -> bool:
+        """Lo que un mozo contestó sobre un aviso (desde el bot, en su hilo): «Voy»,
+        «Listo», un motivo o «No hacía falta». Lo aplica el núcleo; lo que produce
+        (el cierre) va a las salidas como cualquier evento. False si el aviso ya no
+        está abierto. Nunca toma el lock del `FeedbackDesk`: él edita el mensaje del
+        cierre vía `rewrite`, que lo toma."""
+        if action not in ACTIONS:
+            raise ValueError(f"acción desconocida: {action!r}")
+        act: Action = action  # type: ignore[assignment]
+        with self._lock:
+            events = self.core.respond(alert_id, act, who)
+            if events is None:
+                return False
+            for event in events:
+                self._dispatch(event)
+            if self.db_output is not None:
+                self._state_dirty = True
+                self._flush_state()
+        return True
 
     def _dispatch(self, event: Any) -> list[dict[str, Any]]:
         """Un evento a las salidas, en orden: el canal, que le pone el `message_id`
@@ -197,11 +227,12 @@ class AlertProcessor:
             return event
 
     def close(self) -> None:
-        if self.db_output is not None and self._state_dirty:
-            self._flush_state()
         if self.bot is not None:
             # antes de cerrar lo que usa: una respuesta o un /metricas en curso
             self.bot.stop(wait_s=BOT_STOP_WAIT_S)
+        with self._lock:
+            if self.db_output is not None and self._state_dirty:
+                self._flush_state()
         # el de Telegram tiene un hilo con la cola de lo que no llegó (notify.py)
         close_notifier = getattr(self.notifier, "close", None)
         if close_notifier is not None:
@@ -243,6 +274,8 @@ class AlertProcessor:
             return
         self.core.tables = snapshot.tables
         self.core.open_alerts = snapshot.open_alerts
+        self.core.muted = snapshot.muted
+        self.feedback.restore(snapshot.questions)
         self.telegram.by_message = snapshot.messages
         self.telegram.resolved_ids = snapshot.resolved_ids
         self.telegram.close_notes = snapshot.close_notes
@@ -268,6 +301,8 @@ class AlertProcessor:
             served_rows=self.db_output.served_rows,
             plate_states=self.db_output.plate_states,
             on_table=self.db_output.on_table,
+            muted=self.core.muted,
+            questions=self.feedback.snapshot(),
         )
         self.db.save_state(persist.dumps(snapshot), datetime.now(UTC))
         self._state_dirty = False

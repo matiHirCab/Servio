@@ -37,6 +37,7 @@ from typing import Any, Protocol
 import httpx
 
 from servio_vision import settings
+from servio_vision.alerts import messages
 
 logger = logging.getLogger(__name__)
 # httpx loguea cada request en INFO con la URL completa, y la URL trae el token.
@@ -77,8 +78,9 @@ class Notifier(Protocol):
         """Manda un mensaje al grupo; devuelve su `message_id` o None si falló."""
         ...
 
-    def edit(self, message_id: int, text: str) -> bool:
-        """Reescribe un mensaje ya mandado (y le saca los botones); False si falló."""
+    def edit(self, message_id: int, text: str, buttons: Buttons | None = None) -> bool:
+        """Reescribe un mensaje ya mandado; sin `buttons` le saca los que tenía
+        (Telegram borra el teclado de una edición que no lo trae). False si falló."""
         ...
 
     def send_photo(self, path: Path, caption: str = "") -> int | None:
@@ -141,13 +143,26 @@ class TelegramNotifier:
         return cls(token, chat_id)
 
     def send(self, text: str, buttons: Buttons | None = None) -> int | None:
-        payload: dict[str, Any] = {"chat_id": self._chat_id, "text": text}
+        # Los avisos van con la mesa en negrita (messages.to_html): HTML, con el
+        # texto escapado, así un plato o una respuesta con `<` no rompe el mensaje.
+        payload: dict[str, Any] = {
+            "chat_id": self._chat_id,
+            "text": messages.to_html(text),
+            "parse_mode": "HTML",
+        }
         if buttons:
             payload["reply_markup"] = _keyboard(buttons)
         return _message_id(self._deliver("sendMessage", payload))
 
-    def edit(self, message_id: int, text: str) -> bool:
-        payload = {"chat_id": self._chat_id, "message_id": message_id, "text": text}
+    def edit(self, message_id: int, text: str, buttons: Buttons | None = None) -> bool:
+        payload: dict[str, Any] = {
+            "chat_id": self._chat_id,
+            "message_id": message_id,
+            "text": messages.to_html(text),
+            "parse_mode": "HTML",
+        }
+        if buttons:
+            payload["reply_markup"] = _keyboard(buttons)
         return self._deliver("editMessageText", payload) is not None
 
     # --- respuestas de los mozos (feedback.py) ---
@@ -406,8 +421,11 @@ class ConsoleNotifier:
         _print(f"[telegram #{self._last_id}] {text}{options}")
         return self._last_id
 
-    def edit(self, message_id: int, text: str) -> bool:
-        _print(f"[telegram editado #{message_id}] {text}")
+    def edit(self, message_id: int, text: str, buttons: Buttons | None = None) -> bool:
+        options = ""
+        if buttons:
+            options = " | botones: " + " / ".join(b[0] for row in buttons for b in row)
+        _print(f"[telegram editado #{message_id}] {text}{options}")
         return True
 
     def send_photo(self, path: Path, caption: str = "") -> int:

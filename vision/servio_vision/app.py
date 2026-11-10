@@ -162,6 +162,8 @@ def build_pipeline(settings: Settings) -> Pipeline | None:
             t1=settings.alert_t1,
             t2=settings.alert_t2,
             reminder=settings.alert_reminder,
+            max_reminders=settings.alert_max_reminders,
+            done_wait=settings.alert_done_wait,
             env={},
         )
     except ValueError as e:

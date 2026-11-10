@@ -6,10 +6,11 @@ devuelve el evento completado: el `message_id` en los avisos abiertos y el texto
 final en los cerrados), el log (`write(event)`, que devuelve las líneas escritas) y
 la base (`handle(event)`); así log y base ya ven lo que puso el canal.
 
-- `TelegramOutput`: agrupa en un mensaje, manda, recuerda y edita al cerrar (vía
-  `Notifier`, cualquier canal). Al cerrar edita el mensaje en el que se abrió el
-  aviso: si todos sus avisos están cerrados, con "✅ ya resuelto" al final; si no,
-  solo las líneas cerradas llevan "✅".
+- `TelegramOutput`: manda cada aviso con sus botones (`FeedbackDesk`), recuerda,
+  escala y edita al cerrar (vía `Notifier`, cualquier canal). Al cerrar edita el
+  mensaje en el que se abrió el aviso con "✅ ya resuelto" al final (o quién retiró
+  los platos y cuánto tardó). Los recordatorios y el escalado son mensajes nuevos,
+  sin botones, pero citarlos también responde al aviso.
 - `EventLogOutput`: una línea por evento en `out/eventos.jsonl` (03-contratos.md, «Log»).
 - `DatabaseOutput`: platos servidos, lecturas, avisos y respuestas en `servio.db`.
 """
@@ -21,12 +22,13 @@ import threading
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, replace
-from datetime import UTC, datetime
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Protocol
 
 from servio_vision.alerts import messages
 from servio_vision.alerts.core import (
+    AlertsEscalated,
     AlertsOpened,
     AlertsReminded,
     AlertsResolved,
@@ -78,7 +80,7 @@ class TelegramOutput:
 
     def __init__(self, notifier: Notifier, desk: FeedbackDesk | None = None) -> None:
         self.notifier = notifier
-        self.desk = desk  # con él, el de plato lleno lleva botones
+        self.desk = desk  # con él, cada aviso lleva botones (C-5)
         # message_id → avisos de ese mensaje (en orden) y cuáles ya se cerraron.
         self.by_message: dict[int, list[Alert]] = {}
         self.resolved_ids: set[str] = set()
@@ -89,26 +91,31 @@ class TelegramOutput:
     def handle(self, event: AnyEvent) -> AnyEvent:
         if isinstance(event, AlertsOpened):
             return self._opened(event)
-        if isinstance(event, AlertsReminded):
-            self.notifier.send(event.text)  # si falla, ya se logueó; el aviso sigue
+        if isinstance(event, AlertsReminded | AlertsEscalated):
+            # si falla, ya se logueó; el aviso sigue. Citar el mensaje nuevo también
+            # responde al aviso (la respuesta rápida del reloj cita lo último).
+            message_id = self.notifier.send(event.text)
+            if self.desk is not None:
+                for alert in event.alerts:
+                    self.desk.attach_message(message_id, alert.id)
         elif isinstance(event, AlertsResolved):
             return self._resolved(event)
         return event
 
     def _opened(self, event: AlertsOpened) -> AlertsOpened:
-        if event.ask is not None and self.desk is not None:
-            (alert,) = event.alerts
-            # plato lleno: mensaje propio, con los botones de "¿qué pasó?"
+        if self.desk is not None:
+            (alert,) = event.alerts  # un mensaje por aviso, con sus botones
+            ask = event.ask
             message_id = self.desk.ask(
                 Question(
                     alert_id=alert.id,
                     table_id=alert.table_id,
                     alert_type=alert.type,
-                    dish=event.ask.dish,
-                    waiter=event.ask.waiter,
+                    dish=ask.dish if ask else None,
+                    waiter=ask.waiter if ask else event.waiter,
                     text=event.text,
-                    answers=event.ask.answers,
-                    asked_at=datetime.now(UTC),
+                    answers=ask.answers if ask else (),
+                    asked_at=self.desk.wall(),
                 )
             )
         else:
@@ -285,6 +292,11 @@ def log_lines(event: AnyEvent) -> list[dict[str, Any]]:
     if isinstance(event, AlertsReminded):
         return [
             alert_event("alert_reminder", event.ts, a, event.text) for a in event.alerts
+        ]
+    if isinstance(event, AlertsEscalated):
+        return [
+            alert_event("alert_escalated", event.ts, a, event.text)
+            for a in event.alerts
         ]
     if isinstance(event, AlertsResolved):
         lines = []

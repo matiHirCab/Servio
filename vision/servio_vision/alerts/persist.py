@@ -10,8 +10,9 @@ que lo conecta con la base, qué fila de `platos_servidos` es cada plato
 Una foto vieja puede traer `alert_plate` (el plato de cada aviso, antes de A-4): se
 ignora, porque ahora ese plato viaja en el evento del aviso y no queda en memoria.
 
-No se guardan las preguntas de «¿qué pasó?» de `feedback.py`: tras un reinicio los
-botones de un mensaje viejo ya no responden, pero el aviso se edita y se cierra igual.
+También van los silencios de «No hacía falta» (`AlertCore.muted`) y las preguntas
+abiertas de `feedback.py` (`questions`): así los botones de un aviso de antes del
+reinicio siguen respondiendo. Una foto anterior a C-5 no los trae y se leen vacíos.
 """
 
 import json
@@ -19,6 +20,7 @@ from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from typing import Any
 
+from servio_vision.alerts.engine import Muted
 from servio_vision.alerts.models import Alert
 from servio_vision.alerts.state import PlateTrack, TableState
 
@@ -36,6 +38,8 @@ class Snapshot:
     served_rows: dict[str, int] = field(default_factory=dict)
     plate_states: dict[str, str] = field(default_factory=dict)
     on_table: dict[str, set[str]] = field(default_factory=dict)
+    muted: dict[str, Muted] = field(default_factory=dict)  # mesa → silencios (C-5)
+    questions: list[dict[str, Any]] = field(default_factory=list)  # FeedbackDesk
 
 
 def dumps(snapshot: Snapshot) -> str:
@@ -55,6 +59,11 @@ def dumps(snapshot: Snapshot) -> str:
             "served_rows": snapshot.served_rows,
             "plate_states": snapshot.plate_states,
             "on_table": {k: sorted(v) for k, v in snapshot.on_table.items()},
+            "muted": {
+                k: {"plates": sorted(m.plates), "table": m.table}
+                for k, m in snapshot.muted.items()
+            },
+            "questions": snapshot.questions,
         },
         ensure_ascii=False,
     )
@@ -78,6 +87,11 @@ def loads(text: str) -> Snapshot:
             served_rows={k: int(v) for k, v in data["served_rows"].items()},
             plate_states=dict(data["plate_states"]),
             on_table={k: set(v) for k, v in data["on_table"].items()},
+            muted={
+                k: Muted(frozenset((t, p) for t, p in m["plates"]), bool(m["table"]))
+                for k, m in data.get("muted", {}).items()
+            },
+            questions=list(data.get("questions", [])),
         )
     except (KeyError, TypeError, AttributeError) as error:
         raise ValueError(f"foto ilegible: {error!r}") from error

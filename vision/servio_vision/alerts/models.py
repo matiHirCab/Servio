@@ -141,8 +141,9 @@ class TableObservation(_Input):
 class Alert(_Model):
     """Un aviso al grupo de mozos."""
 
-    # El motor modifica el aviso abierto (reminders_sent += 1) y el tope se tiene que
-    # seguir cumpliendo. Sin validadores de modelo, así un error no deja el valor puesto.
+    # El motor modifica el aviso abierto (reminders_sent += 1) y las validaciones se
+    # tienen que seguir cumpliendo. Sin validadores de modelo, así un error no deja el
+    # valor puesto.
     model_config = ConfigDict(validate_assignment=True)
 
     id: str = Field(min_length=1)
@@ -151,6 +152,12 @@ class Alert(_Model):
     message: str  # texto que se manda
     created_at: Timestamp
     status: AlertStatus
-    # Máximo 2 recordatorios (05-reglas-alertas.md).
-    reminders_sent: int = Field(default=0, ge=0, le=2)
+    # Recordatorios mandados (el máximo es `AlertConfig.max_reminders`, 05-reglas-alertas.md).
+    reminders_sent: int = Field(default=0, ge=0)
     telegram_message_id: int | None = None
+    # Respuestas del mozo (C-5). Los tiempos van en el reloj del motor: el `ts` de la
+    # última lectura de la mesa, no la hora de la máquina.
+    answered_by: str | None = None  # quién lo tomó («Voy», o «Listo»/un motivo antes)
+    done_at: Timestamp | None = None  # «Listo»: el mozo dice que ya está
+    nudged_at: Timestamp | None = None  # la única insistencia después de «Listo»
+    escalated_at: Timestamp | None = None  # cuándo escaló (nadie respondió)
