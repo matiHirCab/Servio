@@ -160,14 +160,14 @@ def build_snapshot(
 DISPLAY_MAX_SIDE = 1280
 
 
-def display_copy(frame: np.ndarray) -> np.ndarray:
-    """Copia del frame (el loop puede reusar el buffer de la cámara), achicada a
-    `DISPLAY_MAX_SIDE` de lado mayor si es más grande; las cajas van normalizadas,
-    así que a la página le da igual."""
+def display_size(frame: np.ndarray) -> np.ndarray:
+    """El frame achicado a `DISPLAY_MAX_SIDE` de lado mayor si es más grande (las
+    cajas van normalizadas, así que a la página le da igual); si no, el mismo.
+    Se hace al codificar, no en cada lectura: sin navegadores no cuesta nada."""
     h, w = frame.shape[:2]
     side = max(h, w)
     if side <= DISPLAY_MAX_SIDE or min(h, w) == 0:
-        return frame.copy()
+        return frame
     k = DISPLAY_MAX_SIDE / side
     return cv2.resize(
         frame,
@@ -227,7 +227,7 @@ class SalonFeed:
             if self._encode_failed == version:
                 return None
             try:
-                jpeg = to_jpeg(frame)
+                jpeg = to_jpeg(display_size(frame))
             except (ValueError, cv2.error) as e:
                 logger.warning("No se pudo codificar el frame para la vista: %s", e)
                 self._encode_failed = version
@@ -263,7 +263,7 @@ class SalonFeed:
             self.video,
             (int(frame.shape[1]), int(frame.shape[0])),
         )
-        kept = display_copy(frame) if self.video else None  # fuera del candado
+        kept = frame.copy() if self.video else None  # fuera del candado: es grande
         with self._changed:
             self._version += 1
             snapshot["version"] = self._version

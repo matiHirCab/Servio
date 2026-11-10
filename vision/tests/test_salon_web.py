@@ -182,22 +182,26 @@ def test_snapshot_carries_the_real_frame_size():
     assert feed.snapshot()["frame"] == [200, 100]  # un frame vacío: las zonas
 
 
-def test_video_frame_is_kept_at_display_size():
+def test_video_frame_is_served_at_display_size():
     """Una cámara 4K no se manda entera a cada navegador en cada lectura: el frame
-    del modo video se achica a 1280 de lado mayor (las cajas van normalizadas)."""
+    del modo video se sirve a 1280 de lado mayor (las cajas van normalizadas)."""
     import numpy as np
 
-    from servio_vision.salon import display_copy
+    from servio_vision.salon import display_size
 
-    assert display_copy(np.zeros((2160, 3840, 3), np.uint8)).shape == (720, 1280, 3)
-    assert display_copy(np.zeros((1920, 1080, 3), np.uint8)).shape == (1280, 720, 3)
+    assert display_size(np.zeros((2160, 3840, 3), np.uint8)).shape == (720, 1280, 3)
+    assert display_size(np.zeros((1920, 1080, 3), np.uint8)).shape == (1280, 720, 3)
     small = np.zeros((480, 640, 3), np.uint8)
-    copy = display_copy(small)
-    assert copy.shape == small.shape and copy is not small  # copia, no el buffer
+    assert display_size(small) is small  # chico: tal cual, sin copiar
     feed = SalonFeed("casa-1", video=True)
     pipeline = Pipeline(
         FakeClassifier(), ZONES, lambda o: None, on_reading=feed.on_reading
     )
     pipeline.process_frame(np.zeros((2160, 3840, 3), np.uint8), T0)
     assert feed.snapshot()["frame"] == [3840, 2160]  # la foto dice el tamaño real
-    assert feed.frame_jpeg() is not None
+    jpeg = feed.frame_jpeg()
+    assert jpeg is not None
+    import cv2
+
+    served = cv2.imdecode(np.frombuffer(jpeg[0], np.uint8), cv2.IMREAD_COLOR)
+    assert served.shape[:2] == (720, 1280)  # misma proporción, menos píxeles

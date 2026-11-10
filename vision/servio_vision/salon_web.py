@@ -60,9 +60,7 @@ class SalonServer:
     @property
     def url(self) -> str:
         # con `0.0.0.0` (todas las interfaces) la dirección que sirve es la de esta máquina
-        host = (
-            "localhost" if self.exposed and self.host in ("0.0.0.0", "") else self.host
-        )
+        host = "localhost" if self.host in ("0.0.0.0", "") else self.host
         return f"http://{host}:{self.port}/{quote(self.feed.local_id)}/salon"
 
     def start(self) -> "SalonServer":

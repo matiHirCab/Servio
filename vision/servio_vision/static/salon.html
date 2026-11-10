@@ -300,28 +300,38 @@ function tag(x, y, text, col, opacity = 1, anchor = "start", age = null, alt = n
   return `<g class="tag" data-x="${x.toFixed(1)}" data-y="${y.toFixed(1)}" data-anchor="${anchor}"${alt !== null ? ` data-alt="${alt.toFixed(1)}"` : ""}${age ? ` data-age="${esc(age)}" data-base="${esc(text.slice(0, text.lastIndexOf(" · ")))}"` : ""} transform="translate(${x.toFixed(1)} ${y.toFixed(1)})"><rect x="${x0.toFixed(0)}" y="-11" width="${w.toFixed(0)}" height="22" rx="11" fill="${col}" fill-opacity="${opacity}"/><text x="${(x0 + w / 2).toFixed(0)}" y="4" text-anchor="middle" class="svg-tag">${esc(text)}</text></g>`;
 }
 const isHidden = el => el.closest("[hidden]") !== null;  // o un ancestro
-function fitTags(svg) {
+// Mide cada etiqueta con la fuente real y la corre para que no se salga del svg (a los
+// lados y arriba o abajo); después, dos que se pisan: la segunda baja a su `alt`, si lo
+// tiene. Con `only` (un conjunto de etiquetas) solo las mide y corre a ellas: es lo que
+// hace falta cuando cambió el texto de la edad, sin repasar todo el dibujo cada segundo.
+function fitTags(svg, only = null) {
   if (isHidden(svg)) return;  // oculto: no se puede medir
-  const vw = svg.viewBox && svg.viewBox.baseVal ? svg.viewBox.baseVal.width : Infinity;
-  for (const g of svg.querySelectorAll("g.tag")) {
+  const vb = svg.viewBox && svg.viewBox.baseVal, vw = vb ? vb.width : Infinity, vh = vb ? vb.height : Infinity;
+  const tags = only ? [...only] : [...svg.querySelectorAll("g.tag")];
+  for (const g of tags) {
     const t = g.querySelector("text"), r = g.querySelector("rect");
     if (!t.getComputedTextLength) continue;
     const w = t.getComputedTextLength() + 22, x0 = g.dataset.anchor === "end" ? -w : 0;
     r.setAttribute("width", w.toFixed(0)); r.setAttribute("x", x0.toFixed(0)); t.setAttribute("x", (x0 + w / 2).toFixed(0));
-    g.setAttribute("transform", `translate(${g.dataset.x} ${g.dataset.y})`);
-    const m = g.getCTM && svg.getCTM ? svg.getCTM().inverse().multiply(g.getCTM()) : null, absX = (m ? m.e : +g.dataset.x) + x0;
-    let shift = Math.min(0, vw - w - 4 - absX);  // que no se corte contra el borde derecho
-    if (absX + shift < 4) shift = 4 - absX;      // ni contra el izquierdo
-    if (shift) g.setAttribute("transform", `translate(${(+g.dataset.x + shift).toFixed(1)} ${g.dataset.y})`);
+    const y = only ? g.getAttribute("transform").match(/ ([-\d.]+)\)/)[1] : g.dataset.y;  // la `y` ya decidida (alt) se respeta
+    g.setAttribute("transform", `translate(${g.dataset.x} ${y})`);
+    const m = g.getCTM && svg.getCTM ? svg.getCTM().inverse().multiply(g.getCTM()) : null;
+    const absX = (m ? m.e : +g.dataset.x) + x0, absY = (m ? m.f : +y) - 11;
+    let dx = Math.min(0, vw - w - 4 - absX);  // que no se corte contra el borde derecho
+    if (absX + dx < 4) dx = 4 - absX;         // ni contra el izquierdo
+    let dy = Math.min(0, vh - 22 - 4 - absY);  // ni abajo
+    if (absY + dy < 4) dy = 4 - absY;          // ni arriba
+    if (dx || dy) g.setAttribute("transform", `translate(${(+g.dataset.x + dx).toFixed(1)} ${(+y + dy).toFixed(1)})`);
   }
-  // dos etiquetas que se pisan (ya medidas y corridas): la segunda baja a su `alt`, si lo tiene
+  if (only) return;
   const placed = [];
-  for (const g of svg.querySelectorAll("g.tag")) {
+  for (const g of tags) {
     let box = tagBox(svg, g);
     if (!box) continue;
     if (g.dataset.alt !== undefined && placed.some(b => b.x < box.x + box.w && b.x + b.w > box.x && b.y < box.y + box.h && b.y + b.h > box.y)) {
       const x = g.getAttribute("transform").match(/translate\(([-\d.]+)/)[1];
       g.setAttribute("transform", `translate(${x} ${g.dataset.alt})`);
+      fitTags(svg, [g]);  // bajada: que tampoco se salga
       box = tagBox(svg, g) || box;
     }
     placed.push(box);
@@ -337,14 +347,14 @@ const alertTagText = (al, name) => alertTitle(al.type, name).toUpperCase();
 // las edades de las etiquetas de aviso, cada segundo (el dibujo solo se rehace con una lectura)
 function refreshAges(svg) {
   if (isHidden(svg)) return;
-  let changed = false;
+  const changed = [];
   for (const g of svg.querySelectorAll("g.tag[data-age]")) {
     const t = g.querySelector("text"), text = `${g.dataset.base} · ${ago(g.dataset.age).toUpperCase()}`;
     if (t.textContent === text) continue;  // cambia una vez por segundo el primer minuto, después una por minuto
     t.textContent = text;
-    changed = true;
+    changed.push(g);
   }
-  if (changed) fitTags(svg);  // el ancho nuevo puede pedir correrla del borde o bajarla
+  if (changed.length) fitTags(svg, changed);  // solo esas: el ancho nuevo puede pedir correrlas del borde
 }
 
 // ---------- reconstrucción ----------
@@ -485,18 +495,19 @@ function renderVideo() {
 // imagen de otra, y una conexión lenta no se queda sin imagen. Sin `<img src>` directo: un
 // error ahí deja el cuadro roto en vez de la imagen que había.
 let shownUrl = null, loadingUrl = null;  // el blob que se ve y el que está cargando (se liberan: la pantalla queda prendida todo el turno)
-let fetching = false;
+let fetching = false, frameWanted = null, retried = null;  // bajada en vuelo; la que quedó esperando; la foto que ya se volvió a pedir
 function loadFrame(drawn) {
-  if (fetching) return;  // una sola bajada a la vez; la foto siguiente vuelve a pedir
+  if (fetching) { frameWanted = drawn; return; }  // una sola bajada a la vez; al terminar se pide la última
   fetching = true;
+  const done = () => { fetching = false; if (frameWanted) { const d = frameWanted; frameWanted = null; loadFrame(d); } };
   fetch(`${base}/frame.jpg`).then(r => r.ok ? r.blob().then(blob => [blob, +r.headers.get("X-Salon-Version")]) : null).then(got => {
-    fetching = false;
-    if (!got || !snap) return;
+    if (!got || !snap) return done();
     const [blob, version] = got;
-    if (version === snap.version) showFrame(blob, drawn);
+    if (!version || version === snap.version) showFrame(blob, drawn);  // sin versión (un proxy la sacó): se muestra igual
     else if (version > snap.version) framePending = {version, blob};  // su foto está por llegar
-    else loadFrame(drawn);  // llegó viejo: el servidor ya tiene el de la foto dibujada
-  }).catch(() => { fetching = false; });
+    else if (retried !== snap.version) { retried = snap.version; frameWanted = drawn; }  // llegó viejo: una vez más, no en bucle
+    done();
+  }).catch(done);
 }
 function showFrame(blob, drawn) {
   framePending = null;
@@ -508,7 +519,7 @@ function showFrame(blob, drawn) {
     if (shownUrl) URL.revokeObjectURL(shownUrl);
     shownUrl = url; loadingUrl = null; cam.hidden = false; $("cam-wait").hidden = true;
     // la cámara no tiene la proporción con que se dibujó: las capas, sobre la imagen real
-    if ((cam.naturalWidth !== drawn[0] || cam.naturalHeight !== drawn[1]) && mode === "video") renderVideo();
+    if (Math.abs(cam.naturalWidth / cam.naturalHeight - drawn[0] / drawn[1]) > .01 && mode === "video") renderVideo();  // el frame viene achicado: solo importa la proporción
   };
   cam.onerror = () => { URL.revokeObjectURL(url); if (loadingUrl === url) loadingUrl = null; };  // no se pudo decodificar: queda la imagen anterior
   cam.src = url;
@@ -581,9 +592,8 @@ function render() {
   // antes de redibujar: después el nodo ya no está en el documento
   const focused = document.activeElement && document.activeElement.closest ? document.activeElement.closest(".tbl") : null;
   const focusedSvg = focused ? focused.closest("svg") : null, focusedId = focused ? focused.dataset.id : null;
-  // el modo oculto se dibuja al mostrarlo, sin latidos viejos: lo que cambió mientras no se veía no es noticia
-  if ($("floor").hasAttribute("hidden")) { dirty.floor = true; pending.floor.clear(); } else { renderFloor(); dirty.floor = false; }
-  if ($("video").hasAttribute("hidden")) { dirty.video = true; pending.video.clear(); } else { renderVideo(); dirty.video = false; }
+  if ($("floor").hasAttribute("hidden")) dirty.floor = true; else { renderFloor(); dirty.floor = false; }
+  if ($("video").hasAttribute("hidden")) dirty.video = true; else { renderVideo(); dirty.video = false; }
   renderSide();
   if (focusedSvg && focusedId !== null) { const g = focusedSvg.querySelector(`.tbl[data-id="${CSS.escape(focusedId)}"]`); if (g && g.focus) g.focus(); }
 }
@@ -592,17 +602,18 @@ function apply(data) {
   if (!data) return;
   const first = snap === null;
   snap = data; receivedAt = Date.now();
-  // lo que cambió de estado o es nuevo late una vez, en el modo que se esté mirando
-  // (y en el otro cuando se muestre, si todavía no se redibujó); la primera foto no
-  if (!first) for (const t of snap.tables) for (const p of t.plates) {
-    if (prevStates[p.id] !== p.state) { pending.floor.add(p.id); pending.video.add(p.id); }
-  }
-  prevStates = {};
-  for (const t of snap.tables) for (const p of t.plates) prevStates[p.id] = p.state;
   // el segmento de modo solo si el servidor ofrece el frame (--web-video); el modo que
   // se muestra es el que eligió la persona (`wanted`) si el servidor lo ofrece
   $("modes").hidden = !snap.video;
   showMode(wanted === "video" && snap.video ? "video" : "recon");
+  // lo que cambió de estado o es nuevo late una vez, en el modo que se ve (el oculto se
+  // dibuja al mostrarlo sin latidos: lo que cambió mientras no se veía no es noticia);
+  // la primera foto no late
+  if (!first) for (const t of snap.tables) for (const p of t.plates) {
+    if (prevStates[p.id] !== p.state) pending[mode === "video" ? "video" : "floor"].add(p.id);
+  }
+  prevStates = {};
+  for (const t of snap.tables) for (const p of t.plates) prevStates[p.id] = p.state;
   render();  // dibuja el modo visible (y marca el otro para cuando se muestre)
 }
 
