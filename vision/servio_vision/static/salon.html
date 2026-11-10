@@ -600,6 +600,13 @@ function render() {
 
 function apply(data) {
   if (!data) return;
+  if (snap && data.version === snap.version && data.ts === snap.ts) {
+    // la misma foto otra vez (la suscripción se reabrió): no es una lectura nueva, el reloj
+    // y «sin lecturas» siguen igual; solo la imagen, si ahora viene
+    snap = data;
+    if (mode === "video") showFrame(snap);
+    return;
+  }
   const first = snap === null;
   snap = data; receivedAt = Date.now();
   // el segmento de modo solo si el servidor ofrece el frame (--web-video); el modo que
@@ -663,10 +670,11 @@ for (const id of ["floor", "overlay"]) {
 }
 
 // la SSE: la primera foto llega al conectar, después una por lectura. En modo video pide el
-// frame con cada foto (`?video=1`); una pestaña de fondo no lo pide (vuelve a pedirlo al volver).
+// frame con cada foto (`?video=1`); en reconstrucción (el modo por defecto de la pantalla
+// fija) no, así no baja imágenes que no muestra. Se reconecta solo al cambiar de modo.
 let events = null, eventsVideo = null;  // la suscripción y si pide el frame
 function connect() {
-  const withVideo = (snap ? mode === "video" : wanted === "video") && document.visibilityState !== "hidden";
+  const withVideo = snap ? mode === "video" : wanted === "video";
   if (events && eventsVideo === withVideo) return;  // ya está la que hace falta
   if (events) events.close();
   eventsVideo = withVideo;
@@ -675,7 +683,6 @@ function connect() {
   events.onmessage = e => { connected = everConnected = true; apply(JSON.parse(e.data)); };
   events.onerror = () => { connected = false; renderStatus(); };
 }
-document.addEventListener("visibilitychange", () => { if (snap && snap.video && mode === "video") connect(); });
 connect();
 render();
 setInterval(() => { renderStatus(); refreshAges($("floor")); refreshAges($("overlay")); }, 1000);

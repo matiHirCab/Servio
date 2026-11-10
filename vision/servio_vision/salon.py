@@ -261,8 +261,15 @@ class SalonFeed:
             return result
 
     def frame_jpeg(self) -> EncodedFrame | None:
-        """El frame de la última lectura, codificado (`frame.jpg`)."""
-        return self.encode(self.published())
+        """El frame de la última lectura, codificado (`frame.jpg`). Si justo llega
+        otra lectura mientras se codifica, va por la nueva; `None` solo si no hay
+        frame."""
+        for _ in range(3):
+            published = self.published()
+            found = self.encode(published)
+            if found is not None or published.frame is None:
+                return found
+        return None  # tres lecturas seguidas en el medio: no pasa con cadencias reales
 
     def on_reading(
         self,

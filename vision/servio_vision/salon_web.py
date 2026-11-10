@@ -117,7 +117,9 @@ def _handler(server: SalonServer) -> type[BaseHTTPRequestHandler]:
                 return self._send(
                     HTTPStatus.OK, PAGE.read_bytes(), "text/html; charset=utf-8"
                 )
-            with_video = parse_qs(url.query).get("video", [""])[0] == "1"
+            # el frame con la foto: solo si el modo video está prendido (si no, la foto
+            # de siempre, y una sola en la caché)
+            with_video = feed.video and parse_qs(url.query).get("video", [""])[0] == "1"
             if rest == ["estado"]:
                 body = self._payload(feed.published(), with_video)
                 return self._send(HTTPStatus.OK, body, "application/json")
@@ -137,7 +139,7 @@ def _handler(server: SalonServer) -> type[BaseHTTPRequestHandler]:
             if cached is not None and cached[0] == published.version:
                 return cached[1]
             snapshot = published.snapshot
-            if with_video and feed.video and snapshot is not None:
+            if with_video and snapshot is not None:
                 found = feed.encode(published)
                 if found is not None:
                     snapshot = dict(snapshot)
