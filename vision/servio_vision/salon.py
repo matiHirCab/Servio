@@ -180,6 +180,16 @@ def display_size(frame: np.ndarray) -> np.ndarray:
     )
 
 
+class Published(NamedTuple):
+    """Lo que el feed publica con cada lectura, de una vez: la versión, la foto y
+    (con `video`) el frame de esa misma lectura. Quien lo toma junto no se
+    desfasa aunque llegue otra lectura mientras codifica."""
+
+    version: int
+    snapshot: dict[str, Any] | None
+    frame: np.ndarray | None
+
+
 class EncodedFrame(NamedTuple):
     """Lo que `frame_jpeg` devuelve: el frame de la foto `version` como JPEG y en
     base64 (lo que va dentro de la foto por SSE), o `None` en los dos si no se pudo
@@ -216,36 +226,39 @@ class SalonFeed:
         self._encoded: EncodedFrame | None = None
         self._encode_lock = threading.Lock()  # un solo navegador codifica por vez
 
-    def frame_jpeg(self) -> EncodedFrame | None:
-        """El frame de la última foto como JPEG y en base64, con la versión de esa
-        foto. Se codifica la primera vez que se pide, una vez por lectura aunque lo
-        pidan varios navegadores. `None`: modo video apagado o sin lecturas. Un frame
-        que no se pudo codificar vuelve con `jpeg=None` (queda logueado una vez; la
-        vista sigue sin imagen, el pipeline sigue)."""
-        with self._changed:
-            frame, version, encoded = self._frame, self._version, self._encoded
-        if frame is None:
+    def encode(self, published: Published) -> EncodedFrame | None:
+        """El frame de esa publicación como JPEG y en base64. Se codifica la primera
+        vez que se pide, una vez por lectura aunque lo pidan varios navegadores (el
+        de la última lectura queda cacheado). `None`: sin frame (modo video apagado
+        o sin lecturas). Un frame que no se pudo codificar vuelve con `jpeg=None`
+        (queda logueado una vez; la vista sigue sin imagen, el pipeline sigue)."""
+        if published.frame is None:
             return None
+        version = published.version
+        with self._changed:
+            encoded = self._encoded
         if encoded is not None and encoded.version == version:
             return encoded  # ya resuelto: sale sin esperar a nadie
         # el pipeline nunca espera este candado: `on_reading` solo toma `_changed`
         with self._encode_lock:
-            with self._changed:  # otro pudo codificarlo, o hay lectura nueva
-                frame, version, encoded = self._frame, self._version, self._encoded
-            if frame is None:
-                return None
+            with self._changed:  # otro pudo codificarlo mientras esperaba
+                encoded = self._encoded
             if encoded is not None and encoded.version == version:
                 return encoded
             try:
-                jpeg = to_jpeg(display_size(frame))
+                jpeg = to_jpeg(display_size(published.frame))
                 result = EncodedFrame(jpeg, b64encode(jpeg).decode(), version)
             except (ValueError, cv2.error) as e:
                 logger.warning("No se pudo codificar el frame para la vista: %s", e)
                 result = EncodedFrame(None, None, version)
             with self._changed:
-                if self._version == version:  # si no, ya hay otra lectura
+                if self._version == version:  # el de una lectura vieja no se guarda
                     self._encoded = result
             return result
+
+    def frame_jpeg(self) -> EncodedFrame | None:
+        """El frame de la última lectura, codificado (`frame.jpg`)."""
+        return self.encode(self.published())
 
     def on_reading(
         self,
@@ -286,9 +299,19 @@ class SalonFeed:
         with self._changed:
             return self._snapshot
 
-    def wait(self, after: int, timeout: float) -> tuple[int, dict[str, Any] | None]:
-        """Espera una foto más nueva que la versión `after` (hasta `timeout` s) y
-        devuelve (versión, foto); si no llegó, la misma versión."""
+    def published(self) -> Published:
+        """Lo último publicado: versión, foto y frame, tomados juntos."""
+        with self._changed:
+            return Published(self._version, self._snapshot, self._frame)
+
+    def wait_published(self, after: int, timeout: float) -> Published:
+        """Espera una publicación más nueva que la versión `after` (hasta `timeout`
+        s) y la devuelve entera; si no llegó, la actual (misma versión)."""
         with self._changed:
             self._changed.wait_for(lambda: self._version > after, timeout)
-            return self._version, self._snapshot
+            return Published(self._version, self._snapshot, self._frame)
+
+    def wait(self, after: int, timeout: float) -> tuple[int, dict[str, Any] | None]:
+        """Como `wait_published`, solo (versión, foto)."""
+        published = self.wait_published(after, timeout)
+        return published.version, published.snapshot

@@ -151,6 +151,24 @@ def test_events_carry_the_frame_of_their_own_reading_when_asked(video_server):
         )
 
 
+def test_payload_encodes_the_frame_of_its_own_publication():
+    """Foto y frame se toman juntos: si llega otra lectura mientras se codifica, el
+    JSON lleva el frame de SU foto, no el último (y el de una lectura vieja no
+    pisa la caché)."""
+    feed = SalonFeed("casa-1", video=True)
+    pipeline = Pipeline(
+        FakeClassifier(), ZONES, lambda o: None, on_reading=feed.on_reading
+    )
+    pipeline.process_frame(FRAME, T0)
+    first = feed.published()
+    pipeline.process_frame(FRAME + 200, T0)  # otra lectura antes de codificar
+    old = feed.encode(first)
+    assert old is not None and old.version == 1
+    new = feed.frame_jpeg()
+    assert new is not None and new.version == 2 and new.jpeg != old.jpeg
+    assert feed.frame_jpeg() is new  # la caché quedó con la lectura actual
+
+
 def test_events_without_web_video_ignore_the_video_flag(server):
     read(pipeline_for(server), 1)
     assert "frame_jpeg" not in json.loads(

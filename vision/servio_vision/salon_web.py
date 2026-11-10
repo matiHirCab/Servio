@@ -31,7 +31,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, quote, unquote, urlsplit
 
-from servio_vision.salon import SalonFeed
+from servio_vision.salon import Published, SalonFeed
 
 logger = logging.getLogger("servio")
 
@@ -93,6 +93,10 @@ def _is_loopback(host: str) -> bool:
 
 def _handler(server: SalonServer) -> type[BaseHTTPRequestHandler]:
     feed = server.feed
+    # el JSON de la última publicación, por (versión, con video): se arma una vez
+    # por lectura y lo mandan todos los navegadores suscriptos
+    payloads: dict[tuple[int, bool], bytes] = {}
+    payloads_lock = threading.Lock()
 
     class Handler(BaseHTTPRequestHandler):
         protocol_version = "HTTP/1.1"
@@ -114,7 +118,7 @@ def _handler(server: SalonServer) -> type[BaseHTTPRequestHandler]:
                 )
             with_video = parse_qs(url.query).get("video", [""])[0] == "1"
             if rest == ["estado"]:
-                body = self._payload(feed.snapshot(), with_video)
+                body = self._payload(feed.published(), with_video)
                 return self._send(HTTPStatus.OK, body, "application/json")
             if rest == ["eventos"]:
                 return self._events(with_video)
@@ -122,21 +126,31 @@ def _handler(server: SalonServer) -> type[BaseHTTPRequestHandler]:
                 return self._frame()
             return self._send(HTTPStatus.NOT_FOUND, b"No existe", "text/plain")
 
-        def _payload(self, snapshot: dict | None, with_video: bool) -> bytes:
+        def _payload(self, published: Published, with_video: bool) -> bytes:
             """La foto como JSON. Con `with_video` (y el modo video prendido), con el
-            frame de esa misma lectura en base64 (`frame_jpeg`), o `frame_error` si no
-            se pudo codificar: imagen y datos viajan juntos, nunca se desfasan."""
+            frame de esa misma publicación en base64 (`frame_jpeg`), o `frame_error`
+            si no se pudo codificar: imagen y datos viajan juntos, nunca se desfasan.
+            Se serializa una vez por lectura, para todos los suscriptos."""
+            key = (published.version, with_video)
+            with payloads_lock:
+                cached = payloads.get(key)
+            if cached is not None:
+                return cached
+            snapshot = published.snapshot
             if with_video and feed.video and snapshot is not None:
-                found = feed.frame_jpeg()
-                if found is not None and found.version == snapshot["version"]:
+                found = feed.encode(published)
+                if found is not None:
                     snapshot = dict(snapshot)
                     if found.base64 is not None:
-                        snapshot["frame_jpeg"] = (
-                            found.base64
-                        )  # ya codificado, una vez por lectura
+                        snapshot["frame_jpeg"] = found.base64
                     else:
                         snapshot["frame_error"] = BROKEN_FRAME
-            return json.dumps(snapshot, ensure_ascii=False).encode()
+            data = json.dumps(snapshot, ensure_ascii=False).encode()
+            with payloads_lock:
+                for k in [k for k in payloads if k[0] < published.version]:
+                    del payloads[k]  # lo de lecturas viejas ya no lo pide nadie
+                payloads[key] = data
+            return data
 
         def _frame(self) -> None:
             if not feed.video:
@@ -200,13 +214,13 @@ def _handler(server: SalonServer) -> type[BaseHTTPRequestHandler]:
             version = -1  # la primera vez manda lo que haya
             try:
                 while not server.closing.is_set():
-                    new, snapshot = feed.wait(version, KEEPALIVE_S)
-                    if new != version and snapshot is not None:
-                        data = self._payload(snapshot, with_video)
+                    published = feed.wait_published(version, KEEPALIVE_S)
+                    if published.version != version and published.snapshot is not None:
+                        data = self._payload(published, with_video)
                         self.wfile.write(b"data: " + data + b"\n\n")
                     else:
                         self.wfile.write(b": sigo\n\n")
-                    version = new
+                    version = published.version
                     self.wfile.flush()
             except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
                 pass  # el navegador cerró la pestaña

@@ -581,15 +581,20 @@ function pickTable() {
   selected = oldest ? oldest.table_id : (snap.tables.find(occupied) || snap.tables[0] || {}).id || null;
 }
 
-function render() {
-  pickTable();
-  // antes de redibujar: después el nodo ya no está en el documento
+// redibuja con `draw` y devuelve el foco a la mesa que lo tenía (el nodo se rehace)
+function keepFocus(draw) {
   const focused = document.activeElement && document.activeElement.closest ? document.activeElement.closest(".tbl") : null;
   const focusedSvg = focused ? focused.closest("svg") : null, focusedId = focused ? focused.dataset.id : null;
-  if ($("floor").hasAttribute("hidden")) dirty.floor = true; else { renderFloor(); dirty.floor = false; }
-  if ($("video").hasAttribute("hidden")) dirty.video = true; else { renderVideo(); dirty.video = false; }
-  renderSide();
+  draw();
   if (focusedSvg && focusedId !== null) { const g = focusedSvg.querySelector(`.tbl[data-id="${CSS.escape(focusedId)}"]`); if (g && g.focus) g.focus(); }
+}
+function render() {
+  pickTable();
+  keepFocus(() => {
+    if ($("floor").hasAttribute("hidden")) dirty.floor = true; else { renderFloor(); dirty.floor = false; }
+    if ($("video").hasAttribute("hidden")) dirty.video = true; else { renderVideo(); dirty.video = false; }
+  });
+  renderSide();
 }
 
 function apply(data) {
@@ -616,7 +621,12 @@ function apply(data) {
 function showMode(m) {
   const changed = m !== mode;
   mode = m;
-  if (changed && snap && snap.video) connect();  // en video, la SSE trae el frame con cada foto; en reconstrucción, no
+  if (changed && snap && snap.video) {
+    connect();  // en video, la SSE trae el frame con cada foto; en reconstrucción, no
+    // al volver al video, la imagen que había es de la última vez que se miró: se saca
+    // hasta que llegue la de la foto actual (si la foto actual ya la trae, esa)
+    if (m === "video") { if (snap.frame_jpeg) showFrame(snap); else showFrame({frame_error: "Esperando la imagen de la cámara"}); }
+  }
   $("floor").toggleAttribute("hidden", m !== "recon");
   $("video").toggleAttribute("hidden", m !== "video");
   $("mode-recon").setAttribute("aria-pressed", String(m === "recon"));
@@ -640,7 +650,7 @@ let resizing = false;
 window.addEventListener("resize", () => {
   if (mode !== "video" || !snap || resizing) return;  // en reconstrucción, chooseMode lo redibuja al volver si cambió el ancho
   resizing = true;
-  requestAnimationFrame(() => { resizing = false; render(); });
+  requestAnimationFrame(() => { resizing = false; keepFocus(renderVideo); });  // solo el overlay depende del ancho
 });
 for (const id of ["floor", "overlay"]) {
   $(id).addEventListener("click", e => { const g = e.target.closest(".tbl"); if (!g) return; selected = g.dataset.id; render(); });
