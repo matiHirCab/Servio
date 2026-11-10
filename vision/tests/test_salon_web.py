@@ -1,6 +1,7 @@
 """El servidor de la vista del salón (`salon_web.py`): página, `/estado`, `/eventos`
 y `frame.jpg` (modo video, F-1b), con y sin `--web-video`."""
 
+import base64
 import json
 import threading
 import urllib.request
@@ -124,23 +125,37 @@ def test_frame_is_served_with_web_video_once_there_is_a_reading(video_server):
     # con la versión de su foto: la página lo muestra cuando dibuja esa foto
     assert headers["X-Salon-Version"] == "1"
     assert json.loads(get(f"{base}/estado")[2])["video"] is True
-    # el de la foto que la página dibujó (el plazo de espera se prueba aparte)
-    assert get_with_headers(f"{base}/frame.jpg?v=1")[1]["X-Salon-Version"] == "1"
 
 
-def test_frame_is_served_only_for_its_reading(video_server):
-    """`?v=N`: el frame de la foto que la página dibujó, o 404. La página conoce N
-    recién después de que se publicó, así que no hace falta esperar nada."""
+def test_events_carry_the_frame_of_their_own_reading_when_asked(video_server):
+    """Con `?video=1` cada foto viaja con el frame de esa misma lectura (base64): la
+    página del modo video pinta imagen y capas de una vez, sin desfasarse."""
     base = f"http://127.0.0.1:{video_server.port}/casa-1/salon"
     pipeline = pipeline_for(video_server)
-    read(pipeline, 2)  # fotos 1 y 2
-    status, headers, _ = get_with_headers(f"{base}/frame.jpg?v=2")
-    assert status == 200 and headers["X-Salon-Version"] == "2"
-    for stale in (1, 99):  # una que ya pasó, una que no existe
-        code, text = status_of(f"{base}/frame.jpg?v={stale}")
-        assert code == 404 and "no es la actual" in text
-    for odd in ("rara", "%C2%B2", "9" * 40):  # un `v` raro se ignora
-        assert get(f"{base}/frame.jpg?v={odd}")[0] == 200
+    read(pipeline, 1)
+    plain = json.loads(get(f"{base}/estado")[2])
+    assert "frame_jpeg" not in plain  # sin pedirlo, la foto va liviana
+    with_frame = json.loads(get(f"{base}/estado?video=1")[2])
+    assert with_frame["version"] == 1
+    assert base64.b64decode(with_frame["frame_jpeg"])[:2] == bytes([0xFF, 0xD8])
+    with urllib.request.urlopen(f"{base}/eventos?video=1", timeout=5) as r:
+        first = json.loads(r.readline().decode().removeprefix("data: "))
+        assert first["version"] == 1 and "frame_jpeg" in first
+        r.readline()
+        threading.Timer(0.05, read, args=(pipeline, 1)).start()
+        second = json.loads(r.readline().decode().removeprefix("data: "))
+        assert second["version"] == 2 and "frame_jpeg" in second
+    with urllib.request.urlopen(f"{base}/eventos", timeout=5) as r:
+        assert "frame_jpeg" not in json.loads(
+            r.readline().decode().removeprefix("data: ")
+        )
+
+
+def test_events_without_web_video_ignore_the_video_flag(server):
+    read(pipeline_for(server), 1)
+    assert "frame_jpeg" not in json.loads(
+        get(f"http://127.0.0.1:{server.port}/casa-1/salon/estado?video=1")[2]
+    )
 
 
 def test_frame_is_encoded_once_per_reading_and_follows_the_snapshot():
@@ -150,7 +165,7 @@ def test_frame_is_encoded_once_per_reading_and_follows_the_snapshot():
     )
     pipeline.process_frame(FRAME, T0)
     first = feed.frame_jpeg()
-    assert first is not None and first.version == 1 and not first.broken
+    assert first is not None and first.version == 1 and first.jpeg is not None
     assert feed.frame_jpeg().jpeg is first.jpeg  # cacheado
     pipeline.process_frame(FRAME + 200, T0)  # otro cuadro (más claro)
     second = feed.frame_jpeg()
@@ -168,23 +183,24 @@ def test_a_frame_that_cannot_be_encoded_is_logged_once_and_not_served(caplog):
     feed.on_reading(pipeline, [], T0, np.zeros((0, 0, 3), np.uint8))
     with caplog.at_level("WARNING", logger="servio"):
         broken = feed.frame_jpeg()
-        assert broken is not None and broken.jpeg is None and broken.broken
+        assert broken is not None and broken.jpeg is None
         assert feed.frame_jpeg() == broken  # se avisa una vez, no en cada pedido
     assert caplog.text.count("No se pudo codificar") == 1
     pipeline.process_frame(FRAME, T0)  # la lectura siguiente vuelve a servirse
     served = feed.frame_jpeg()
-    assert served is not None and served.jpeg is not None and not served.broken
+    assert served is not None and served.jpeg is not None
 
 
-def test_a_broken_frame_is_a_503_not_a_404(video_server):
+def test_a_broken_frame_is_a_503_and_an_error_in_the_event(video_server):
     import numpy as np
 
+    base = f"http://127.0.0.1:{video_server.port}/casa-1/salon"
     pipeline = pipeline_for(video_server)
     video_server.feed.on_reading(pipeline, [], T0, np.zeros((0, 0, 3), np.uint8))
-    code, text = status_of(
-        f"http://127.0.0.1:{video_server.port}/casa-1/salon/frame.jpg"
-    )
+    code, text = status_of(f"{base}/frame.jpg")
     assert code == 503 and "no se pudo codificar" in text
+    snap = json.loads(get(f"{base}/estado?video=1")[2])
+    assert "frame_jpeg" not in snap and "no se pudo codificar" in snap["frame_error"]
 
 
 def test_server_says_whether_it_is_exposed_to_the_network(server):

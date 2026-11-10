@@ -85,6 +85,7 @@ def test_load_settings_with_missing_config_file_logs_and_returns_none(tmp_path, 
 def test_web_video_flag_turns_the_video_mode_on_or_off_and_is_off_by_default(
     monkeypatch,
 ):
+    monkeypatch.delenv("SERVIO_WEB_VIDEO", raising=False)  # el del shell no cuenta
     assert cli.settings_from_args(parse("--source", "a.mp4")).web_video is False
     loaded = cli.settings_from_args(parse("--source", "a.mp4", "--web-video"))
     assert loaded.web_video is True

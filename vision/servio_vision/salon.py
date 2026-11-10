@@ -178,14 +178,10 @@ def display_size(frame: np.ndarray) -> np.ndarray:
 
 class Frame(NamedTuple):
     """Lo que `frame_jpeg` devuelve: el JPEG de la foto `version`, o `None` si
-    ese frame no se pudo codificar (`broken`; ya quedó logueado)."""
+    ese frame no se pudo codificar (ya quedó logueado)."""
 
     jpeg: bytes | None
     version: int
-
-    @property
-    def broken(self) -> bool:
-        return self.jpeg is None
 
 
 class SalonFeed:
@@ -210,22 +206,9 @@ class SalonFeed:
         self._version = 0
         self._changed = threading.Condition()
         self._frame: np.ndarray | None = None  # el de la última foto publicada
-        self._jpeg: bytes | None = None  # ese frame codificado, si alguien lo pidió
+        # (versión, JPEG) del frame ya codificado, o (versión, None) si falló
+        self._encoded: tuple[int, bytes | None] | None = None
         self._encode_lock = threading.Lock()  # un solo navegador codifica por vez
-        self._encode_failed = 0  # la versión cuyo frame no se pudo codificar
-
-    def _frame_state(self) -> tuple[np.ndarray | None, int, Frame | None]:
-        """Bajo el candado: el frame guardado, su versión y, si ya está resuelto
-        (codificado, o fallido), su `Frame`. Sin frame: `(None, versión, None)`."""
-        with self._changed:
-            if self._frame is None:
-                return None, self._version, None
-            done = self._jpeg is not None or self._encode_failed == self._version
-            return (
-                self._frame,
-                self._version,
-                Frame(self._jpeg, self._version) if done else None,
-            )
 
     def frame_jpeg(self) -> Frame | None:
         """El frame de la última foto como JPEG, con la versión de esa foto. Se
@@ -233,26 +216,29 @@ class SalonFeed:
         varios navegadores. `None`: modo video apagado o sin lecturas. Un frame que
         no se pudo codificar vuelve con `jpeg=None` (queda logueado una vez; la vista
         sigue sin imagen, el pipeline sigue)."""
-        frame, version, done = self._frame_state()
-        if frame is None or done is not None:
-            return done  # resuelto (o nada): sale sin esperar a nadie
+        with self._changed:
+            frame, version, encoded = self._frame, self._version, self._encoded
+        if frame is None:
+            return None
+        if encoded is not None and encoded[0] == version:
+            return Frame(encoded[1], version)  # ya resuelto: sale sin esperar a nadie
         # el pipeline nunca espera este candado: `on_reading` solo toma `_changed`
         with self._encode_lock:
-            frame, version, done = (
-                self._frame_state()
-            )  # otro pudo codificarlo, o hay lectura nueva
-            if frame is None or done is not None:
-                return done
+            with self._changed:  # otro pudo codificarlo, o hay lectura nueva
+                frame, version, encoded = self._frame, self._version, self._encoded
+            if frame is None:
+                return None
+            if encoded is not None and encoded[0] == version:
+                return Frame(encoded[1], version)
+            jpeg: bytes | None
             try:
                 jpeg = to_jpeg(display_size(frame))
             except (ValueError, cv2.error) as e:
                 logger.warning("No se pudo codificar el frame para la vista: %s", e)
-                with self._changed:
-                    self._encode_failed = version
-                return Frame(None, version)
+                jpeg = None
             with self._changed:
                 if self._version == version:  # si no, ya hay otra lectura
-                    self._jpeg = jpeg
+                    self._encoded = (version, jpeg)
             return Frame(jpeg, version)
 
     def on_reading(
@@ -287,7 +273,7 @@ class SalonFeed:
             snapshot["version"] = self._version
             self._snapshot = snapshot
             if self.video:
-                self._frame, self._jpeg = frame, None
+                self._frame = frame
             self._changed.notify_all()
 
     def snapshot(self) -> dict[str, Any] | None:

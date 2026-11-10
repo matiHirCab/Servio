@@ -6,12 +6,15 @@ navegador. Rutas (`<local>` es el `local_id` de la casa, `local` por defecto):
 - `/<local>/salon`          la página (static/salon.html)
 - `/<local>/salon/estado`   la última foto del salón en JSON (`salon.py`)
 - `/<local>/salon/eventos`  la misma foto por Server-Sent Events, cada vez que cambia
-- `/<local>/salon/frame.jpg` el último frame de la cámara, ya difuminado, para el
-                            modo video de la página, con la versión de su foto
-                            en `X-Salon-Version`. Con `?v=N`, solo si es el de la
-                            foto N (la que la página dibujó); si no, 404. Si el
-                            frame no se pudo codificar, 503. Solo con `--web-video`
-                            (`SalonFeed(video=True)`), si no, 404
+- `…?video=1`               (en las dos) la foto lleva además el frame de la cámara de
+                            esa misma lectura, ya difuminado, en base64 (`frame_jpeg`;
+                            o `frame_error` si no se pudo codificar): la página del
+                            modo video recibe imagen y datos juntos. Solo con
+                            `--web-video` (`SalonFeed(video=True)`); si no, se ignora
+- `/<local>/salon/frame.jpg` el último frame, con la versión de su foto en
+                            `X-Salon-Version`: para mirar la cámara con un `curl` o
+                            el navegador al armarla. Solo con `--web-video`, si no
+                            404; 503 si no se pudo codificar
 - `/`                       redirige a `/<local>/salon`
 
 Por defecto escucha solo en esta máquina (127.0.0.1). Con `--web-host 0.0.0.0` se
@@ -19,6 +22,7 @@ abre desde el celular o la tablet en la misma red. No tiene usuarios ni contrase
 no la expongas a internet.
 """
 
+import base64
 import ipaddress
 import json
 import logging
@@ -34,6 +38,7 @@ logger = logging.getLogger("servio")
 
 PAGE = Path(__file__).with_name("static") / "salon.html"
 KEEPALIVE_S = 15.0  # un comentario SSE cada tanto, para que no se corte la conexión
+BROKEN_FRAME = "El frame de esta lectura no se pudo codificar (ver el log)"
 
 
 class SalonServer:
@@ -108,21 +113,31 @@ def _handler(server: SalonServer) -> type[BaseHTTPRequestHandler]:
                 return self._send(
                     HTTPStatus.OK, PAGE.read_bytes(), "text/html; charset=utf-8"
                 )
+            with_video = parse_qs(url.query).get("video", [""])[0] == "1"
             if rest == ["estado"]:
-                body = json.dumps(feed.snapshot(), ensure_ascii=False).encode()
+                body = self._payload(feed.snapshot(), with_video)
                 return self._send(HTTPStatus.OK, body, "application/json")
             if rest == ["eventos"]:
-                return self._events()
+                return self._events(with_video)
             if rest == ["frame.jpg"]:
-                wanted = parse_qs(url.query).get("v", [""])[0]
-                # un `v` que no es un número normal se ignora (sin reventar el hilo)
-                ok = 0 < len(wanted) <= 12 and wanted.isascii() and wanted.isdigit()
-                return self._frame(int(wanted) if ok else None)
+                return self._frame()
             return self._send(HTTPStatus.NOT_FOUND, b"No existe", "text/plain")
 
-        def _frame(self, version: int | None) -> None:
-            """El frame de la foto `version` (la que la página dibujó); sin
-            `version`, el último."""
+        def _payload(self, snapshot: dict | None, with_video: bool) -> bytes:
+            """La foto como JSON. Con `with_video` (y el modo video prendido), con el
+            frame de esa misma lectura en base64 (`frame_jpeg`), o `frame_error` si no
+            se pudo codificar: imagen y datos viajan juntos, nunca se desfasan."""
+            if with_video and feed.video and snapshot is not None:
+                found = feed.frame_jpeg()
+                if found is not None and found.version == snapshot["version"]:
+                    snapshot = dict(snapshot)
+                    if found.jpeg is not None:
+                        snapshot["frame_jpeg"] = base64.b64encode(found.jpeg).decode()
+                    else:
+                        snapshot["frame_error"] = BROKEN_FRAME
+            return json.dumps(snapshot, ensure_ascii=False).encode()
+
+        def _frame(self) -> None:
             if not feed.video:
                 return self._send(
                     HTTPStatus.NOT_FOUND,
@@ -130,20 +145,16 @@ def _handler(server: SalonServer) -> type[BaseHTTPRequestHandler]:
                     "text/plain; charset=utf-8",
                 )
             found = feed.frame_jpeg()
-            if found is None or (version is not None and found.version != version):
+            if found is None:
                 return self._send(
                     HTTPStatus.NOT_FOUND,
-                    (
-                        "Todavía no hay frame"
-                        if found is None
-                        else "Esa lectura no es la actual; pedí el frame de la foto actual"
-                    ).encode(),
+                    "Todavía no hay frame".encode(),
                     "text/plain; charset=utf-8",
                 )
             if found.jpeg is None:
                 return self._send(
                     HTTPStatus.SERVICE_UNAVAILABLE,
-                    b"El frame de esta lectura no se pudo codificar (ver el log)",
+                    BROKEN_FRAME.encode(),
                     "text/plain; charset=utf-8",
                 )
             self._send(
@@ -178,7 +189,7 @@ def _handler(server: SalonServer) -> type[BaseHTTPRequestHandler]:
             except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
                 pass  # el navegador cortó (una bajada de frame.jpg que ya no quería)
 
-        def _events(self) -> None:
+        def _events(self, with_video: bool) -> None:
             self.send_response(HTTPStatus.OK)
             self.send_header("Content-Type", "text/event-stream")
             self.send_header("Cache-Control", "no-store")
@@ -190,8 +201,8 @@ def _handler(server: SalonServer) -> type[BaseHTTPRequestHandler]:
                 while not server.closing.is_set():
                     new, snapshot = feed.wait(version, KEEPALIVE_S)
                     if new != version and snapshot is not None:
-                        data = json.dumps(snapshot, ensure_ascii=False)
-                        self.wfile.write(f"data: {data}\n\n".encode())
+                        data = self._payload(snapshot, with_video)
+                        self.wfile.write(b"data: " + data + b"\n\n")
                     else:
                         self.wfile.write(b": sigo\n\n")
                     version = new
