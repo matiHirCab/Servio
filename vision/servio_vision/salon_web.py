@@ -7,10 +7,10 @@ navegador. Rutas (`<local>` es el `local_id` de la casa, `local` por defecto):
 - `/<local>/salon/estado`   la última foto del salón en JSON (`salon.py`)
 - `/<local>/salon/eventos`  la misma foto por Server-Sent Events, cada vez que cambia
 - `/<local>/salon/frame.jpg` el último frame de la cámara, ya difuminado, para el
-                            modo video de la página; solo con `--web-video`
-                            (`SalonFeed(video=True)`), si no, 404. Con `?v=N`,
-                            solo si es el frame de la foto N (si no, 404: la
-                            página se queda con la imagen que tenía)
+                            modo video de la página, con la versión de su foto
+                            en `X-Salon-Version` (la página lo muestra cuando
+                            dibuja esa foto); solo con `--web-video`
+                            (`SalonFeed(video=True)`), si no, 404
 - `/`                       redirige a `/<local>/salon`
 
 Por defecto escucha solo en esta máquina (127.0.0.1). Con `--web-host 0.0.0.0` se
@@ -24,7 +24,7 @@ import threading
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import parse_qs, quote, unquote, urlsplit
+from urllib.parse import quote, unquote, urlsplit
 
 from servio_vision.salon import SalonFeed
 
@@ -49,16 +49,20 @@ class SalonServer:
         return self.httpd.server_address[1]
 
     @property
+    def host(self) -> str:
+        return str(self.httpd.server_address[0])
+
+    @property
     def exposed(self) -> bool:
         """Si escucha para otros equipos de la red (no solo esta máquina)."""
-        host = str(self.httpd.server_address[0])
-        return not (host.startswith("127.") or host in ("::1", "localhost"))
+        return not _is_loopback(self.host)
 
     @property
     def url(self) -> str:
-        host = str(self.httpd.server_address[0])
-        if host in ("0.0.0.0", "", "::"):
-            host = "localhost"
+        # con `0.0.0.0` (todas las interfaces) la dirección que sirve es la de esta máquina
+        host = (
+            "localhost" if self.exposed and self.host in ("0.0.0.0", "") else self.host
+        )
         return f"http://{host}:{self.port}/{quote(self.feed.local_id)}/salon"
 
     def start(self) -> "SalonServer":
@@ -74,6 +78,11 @@ class SalonServer:
         self.httpd.server_close()
 
 
+def _is_loopback(host: str) -> bool:
+    """Una dirección que solo ve esta máquina (IPv4: el servidor es AF_INET)."""
+    return host.startswith("127.") or host == "localhost"
+
+
 def _handler(server: SalonServer) -> type[BaseHTTPRequestHandler]:
     feed = server.feed
 
@@ -84,8 +93,7 @@ def _handler(server: SalonServer) -> type[BaseHTTPRequestHandler]:
             logger.debug("web: " + format, *args)
 
         def do_GET(self) -> None:
-            url = urlsplit(self.path)
-            parts = [unquote(p) for p in url.path.split("/") if p]
+            parts = [unquote(p) for p in urlsplit(self.path).path.split("/") if p]
             if not parts:
                 return self._redirect(f"/{quote(feed.local_id)}/salon")
             if parts[0] != feed.local_id or len(parts) < 2 or parts[1] != "salon":
@@ -101,27 +109,27 @@ def _handler(server: SalonServer) -> type[BaseHTTPRequestHandler]:
             if rest == ["eventos"]:
                 return self._events()
             if rest == ["frame.jpg"]:
-                wanted = parse_qs(url.query).get("v", [""])[0]
-                # un `v` que no es un número normal se ignora (sin reventar el hilo)
-                ok = 0 < len(wanted) <= 12 and wanted.isascii() and wanted.isdigit()
-                return self._frame(int(wanted) if ok else None)
+                return self._frame()
             return self._send(HTTPStatus.NOT_FOUND, b"No existe", "text/plain")
 
-        def _frame(self, version: int | None) -> None:
+        def _frame(self) -> None:
             if not feed.video:
                 return self._send(
                     HTTPStatus.NOT_FOUND,
                     "El modo video está apagado (--web-video)".encode(),
                     "text/plain; charset=utf-8",
                 )
-            jpeg = feed.frame_jpeg(version)
-            if jpeg is None:
+            found = feed.frame_jpeg()
+            if found is None:
                 return self._send(
                     HTTPStatus.NOT_FOUND,
-                    "Todavía no hay frame (o no es el de esa lectura)".encode(),
+                    "Todavía no hay frame".encode(),
                     "text/plain; charset=utf-8",
                 )
-            self._send(HTTPStatus.OK, jpeg, "image/jpeg")
+            jpeg, version = found
+            self._send(
+                HTTPStatus.OK, jpeg, "image/jpeg", {"X-Salon-Version": str(version)}
+            )
 
         def _redirect(self, location: str) -> None:
             self.send_response(HTTPStatus.FOUND)
@@ -129,9 +137,17 @@ def _handler(server: SalonServer) -> type[BaseHTTPRequestHandler]:
             self.send_header("Content-Length", "0")
             self.end_headers()
 
-        def _send(self, status: HTTPStatus, body: bytes, content_type: str) -> None:
+        def _send(
+            self,
+            status: HTTPStatus,
+            body: bytes,
+            content_type: str,
+            headers: dict[str, str] | None = None,
+        ) -> None:
             self.send_response(status)
             self.send_header("Content-Type", content_type)
+            for name, value in (headers or {}).items():
+                self.send_header(name, value)
             self.send_header("Content-Length", str(len(body)))
             self.send_header("Cache-Control", "no-store")
             self.end_headers()

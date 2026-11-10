@@ -154,6 +154,28 @@ def build_snapshot(
     }
 
 
+# El frame del modo video no hace falta a resolución de cámara: la página lo muestra
+# en una caja de a lo sumo el 72 % del alto de la pantalla, y cada navegador lo
+# baja entero en cada lectura por el wifi del local.
+DISPLAY_MAX_SIDE = 1280
+
+
+def display_copy(frame: np.ndarray) -> np.ndarray:
+    """Copia del frame (el loop puede reusar el buffer de la cámara), achicada a
+    `DISPLAY_MAX_SIDE` de lado mayor si es más grande; las cajas van normalizadas,
+    así que a la página le da igual."""
+    h, w = frame.shape[:2]
+    side = max(h, w)
+    if side <= DISPLAY_MAX_SIDE or min(h, w) == 0:
+        return frame.copy()
+    k = DISPLAY_MAX_SIDE / side
+    return cv2.resize(
+        frame,
+        (max(1, round(w * k)), max(1, round(h * k))),
+        interpolation=cv2.INTER_AREA,
+    )
+
+
 class SalonFeed:
     """La última foto del salón y una forma de esperar la siguiente (para el
     navegador). `on_reading` va en `Pipeline(on_reading=...)`."""
@@ -178,28 +200,30 @@ class SalonFeed:
         self._frame: np.ndarray | None = None  # el de la última foto publicada
         self._jpeg: bytes | None = None  # ese frame codificado, si alguien lo pidió
         self._encode_lock = threading.Lock()  # un solo navegador codifica por vez
-        self._frame_version = 0  # la foto a la que pertenece `_frame`
         self._encode_failed = 0  # la versión cuyo frame no se pudo codificar
 
-    def frame_jpeg(self, version: int | None = None) -> bytes | None:
-        """El frame de la última foto como JPEG (se codifica la primera vez que se
-        pide, aunque lo pidan varios navegadores a la vez), o `None`: modo video
-        apagado, sin lecturas, o un frame que no se pudo codificar (queda logueado
-        una vez; la vista sigue sin imagen, el pipeline sigue). Con `version`, solo
-        si el frame guardado es el de esa foto: la página pide el de la foto que
-        dibujó y, si ya hay otra lectura, se queda con la imagen que tenía."""
+    def frame_jpeg(self) -> tuple[bytes, int] | None:
+        """El frame de la última foto como JPEG, con la versión de esa foto (la
+        página lo muestra recién cuando dibuja esa foto). Se codifica la primera vez
+        que se pide, una vez por lectura aunque lo pidan varios navegadores. `None`:
+        modo video apagado, sin lecturas, o un frame que no se pudo codificar (queda
+        logueado una vez; la vista sigue sin imagen, el pipeline sigue)."""
         with self._changed:
-            frame, jpeg, current = self._frame, self._jpeg, self._frame_version
-        if version is not None and version != current:
+            frame, jpeg, version = self._frame, self._jpeg, self._version
+        if frame is None:
             return None
-        if frame is None or jpeg is not None:
-            return jpeg  # lo ya codificado (o nada) sale sin esperar a nadie
-        version = current
+        if jpeg is not None:
+            return jpeg, version  # lo ya codificado sale sin esperar a nadie
         # el pipeline nunca espera este candado: `on_reading` solo toma `_changed`
         with self._encode_lock:
-            with self._changed:  # otro navegador pudo codificarlo mientras esperaba
-                if self._frame_version == version and self._jpeg is not None:
-                    return self._jpeg
+            with (
+                self._changed
+            ):  # lo de ahora: otro pudo codificarlo, o hay lectura nueva
+                frame, jpeg, version = self._frame, self._jpeg, self._version
+            if frame is None:
+                return None
+            if jpeg is not None:
+                return jpeg, version
             if self._encode_failed == version:
                 return None
             try:
@@ -209,9 +233,9 @@ class SalonFeed:
                 self._encode_failed = version
                 return None
             with self._changed:
-                if self._frame_version == version:  # si no, ya hay otra lectura
+                if self._version == version:  # si no, ya hay otra lectura
                     self._jpeg = jpeg
-            return jpeg
+            return jpeg, version
 
     def on_reading(
         self,
@@ -239,14 +263,13 @@ class SalonFeed:
             self.video,
             (int(frame.shape[1]), int(frame.shape[0])),
         )
-        kept = frame.copy() if self.video else None  # fuera del candado: es grande
+        kept = display_copy(frame) if self.video else None  # fuera del candado
         with self._changed:
             self._version += 1
             snapshot["version"] = self._version
             self._snapshot = snapshot
             if kept is not None:
                 self._frame, self._jpeg = kept, None
-                self._frame_version = self._version
             self._changed.notify_all()
 
     def snapshot(self) -> dict[str, Any] | None:

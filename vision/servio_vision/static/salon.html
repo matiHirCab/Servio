@@ -337,14 +337,14 @@ const alertTagText = (al, name) => alertTitle(al.type, name).toUpperCase();
 // las edades de las etiquetas de aviso, cada segundo (el dibujo solo se rehace con una lectura)
 function refreshAges(svg) {
   if (isHidden(svg)) return;
+  let changed = false;
   for (const g of svg.querySelectorAll("g.tag[data-age]")) {
     const t = g.querySelector("text"), text = `${g.dataset.base} · ${ago(g.dataset.age).toUpperCase()}`;
     if (t.textContent === text) continue;  // cambia una vez por segundo el primer minuto, después una por minuto
     t.textContent = text;
-    if (!t.getComputedTextLength) continue;
-    const r = g.querySelector("rect"), w = t.getComputedTextLength() + 22, x0 = g.dataset.anchor === "end" ? -w : 0;
-    r.setAttribute("width", w.toFixed(0)); r.setAttribute("x", x0.toFixed(0)); t.setAttribute("x", (x0 + w / 2).toFixed(0));
+    changed = true;
   }
+  if (changed) fitTags(svg);  // el ancho nuevo puede pedir correrla del borde o bajarla
 }
 
 // ---------- reconstrucción ----------
@@ -433,6 +433,7 @@ function renderFloor() {
 // y el aviso abierto de cada mesa y, por plato con caja, el anillo del estado y el
 // nombre. Un plato sin caja no se marca: solo se dibuja lo que la cámara ve de verdad.
 let camKey = null;  // la lectura (hora + versión) cuyo frame.jpg se pidió; tras un reinicio la versión vuelve a 1
+let framePending = null;  // {version, blob} que llegó antes que su foto: se muestra cuando se dibuje
 function renderVideo() {
   const svg = $("overlay");
   if (!snap) { svg.innerHTML = ""; return; }
@@ -449,7 +450,8 @@ function renderVideo() {
   svg.setAttribute("viewBox", `0 0 ${VW} ${VH.toFixed(1)}`);
   $("cam-cap").textContent = `Cámara ${snap.camera} · caras difuminadas en la computadora`;
   const key = `${snap.ts}|${snap.version}`;
-  if (key !== camKey) { camKey = key; loadFrame(snap.version, [fw, fh]); }
+  if (key !== camKey) { camKey = key; loadFrame([fw, fh]); }
+  else if (framePending && framePending.version === snap.version) showFrame(framePending.blob, [fw, fh]);
   let out = `<defs>${halos("v")}</defs>`;
   for (const t of snap.tables) {
     const sel = t.id === selected, x0 = t.box[0] * VW, y0 = t.box[1] * VH, w = t.box[2] * VW, h = t.box[3] * VH;
@@ -476,27 +478,40 @@ function renderVideo() {
   fitTags(svg);
   pending.video.clear();
 }
-// El frame de la foto `version`. El servidor lo da solo si todavía es el suyo (`?v=`); si ya
-// pasó a otra lectura (404) la imagen anterior se queda hasta que llegue la foto siguiente,
-// así nunca hay capas de una lectura sobre la imagen de otra. Sin `<img src>`: un 404 ahí
-// deja el cuadro roto en vez de la imagen que había.
+// El último frame del servidor, con la versión de su foto (X-Salon-Version). Se muestra
+// solo bajo las capas de esa misma foto: si es el de la foto dibujada, ya; si es de una más
+// nueva (la SSE viene en camino), queda esperando y se muestra cuando se dibuje; si es de
+// una más vieja (una conexión lenta), se pide de nuevo. Nunca capas de una lectura sobre la
+// imagen de otra, y una conexión lenta no se queda sin imagen. Sin `<img src>` directo: un
+// error ahí deja el cuadro roto en vez de la imagen que había.
 let shownUrl = null, loadingUrl = null;  // el blob que se ve y el que está cargando (se liberan: la pantalla queda prendida todo el turno)
-function loadFrame(version, drawn) {
-  fetch(`${base}/frame.jpg?v=${version}`).then(r => r.ok ? r.blob() : null).then(blob => {
-    if (!blob || !snap || snap.version !== version) return;  // llegó tarde: ya se dibujó otra foto
-    const cam = $("cam"), url = URL.createObjectURL(blob);
-    if (loadingUrl) URL.revokeObjectURL(loadingUrl);  // uno que no terminó de cargar y ya quedó viejo
-    loadingUrl = url;
-    cam.onload = () => {
-      if (cam.src !== url) return;  // ya lo pisó otro
-      if (shownUrl) URL.revokeObjectURL(shownUrl);
-      shownUrl = url; loadingUrl = null; cam.hidden = false; $("cam-wait").hidden = true;
-      // la cámara no tiene la proporción con que se dibujó: las capas, sobre la imagen real
-      if ((cam.naturalWidth !== drawn[0] || cam.naturalHeight !== drawn[1]) && mode === "video") renderVideo();
-    };
-    cam.onerror = () => { URL.revokeObjectURL(url); if (loadingUrl === url) loadingUrl = null; };  // no se pudo decodificar: queda la imagen anterior
-    cam.src = url;
-  }).catch(() => {});
+let fetching = false;
+function loadFrame(drawn) {
+  if (fetching) return;  // una sola bajada a la vez; la foto siguiente vuelve a pedir
+  fetching = true;
+  fetch(`${base}/frame.jpg`).then(r => r.ok ? r.blob().then(blob => [blob, +r.headers.get("X-Salon-Version")]) : null).then(got => {
+    fetching = false;
+    if (!got || !snap) return;
+    const [blob, version] = got;
+    if (version === snap.version) showFrame(blob, drawn);
+    else if (version > snap.version) framePending = {version, blob};  // su foto está por llegar
+    else loadFrame(drawn);  // llegó viejo: el servidor ya tiene el de la foto dibujada
+  }).catch(() => { fetching = false; });
+}
+function showFrame(blob, drawn) {
+  framePending = null;
+  const cam = $("cam"), url = URL.createObjectURL(blob);
+  if (loadingUrl) URL.revokeObjectURL(loadingUrl);  // uno que no terminó de cargar y ya quedó viejo
+  loadingUrl = url;
+  cam.onload = () => {
+    if (cam.src !== url) return;  // ya lo pisó otro
+    if (shownUrl) URL.revokeObjectURL(shownUrl);
+    shownUrl = url; loadingUrl = null; cam.hidden = false; $("cam-wait").hidden = true;
+    // la cámara no tiene la proporción con que se dibujó: las capas, sobre la imagen real
+    if ((cam.naturalWidth !== drawn[0] || cam.naturalHeight !== drawn[1]) && mode === "video") renderVideo();
+  };
+  cam.onerror = () => { URL.revokeObjectURL(url); if (loadingUrl === url) loadingUrl = null; };  // no se pudo decodificar: queda la imagen anterior
+  cam.src = url;
 }
 
 // ---------- panel ----------

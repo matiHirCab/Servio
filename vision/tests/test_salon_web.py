@@ -35,6 +35,11 @@ def get(url: str):
         return r.status, r.headers.get("Content-Type"), r.read()
 
 
+def get_with_headers(url: str):
+    with urllib.request.urlopen(url, timeout=5) as r:
+        return r.status, dict(r.headers), r.read()
+
+
 def status_of(url: str) -> tuple[int, str]:
     try:
         return get(url)[0], ""
@@ -113,17 +118,12 @@ def test_frame_is_served_with_web_video_once_there_is_a_reading(video_server):
     code, text = status_of(f"{base}/frame.jpg")
     assert code == 404 and "Todavía" in text  # prendido, pero sin lecturas
     read(pipeline_for(video_server), 1)
-    status, kind, body = get(f"{base}/frame.jpg")
-    assert status == 200 and kind == "image/jpeg"
+    status, headers, body = get_with_headers(f"{base}/frame.jpg")
+    assert status == 200 and headers["Content-Type"] == "image/jpeg"
     assert body[:2] == bytes([0xFF, 0xD8])  # un JPEG
+    # con la versión de su foto: la página lo muestra cuando dibuja esa foto
+    assert headers["X-Salon-Version"] == "1"
     assert json.loads(get(f"{base}/estado")[2])["video"] is True
-    # la página pide el frame de la foto que dibujó: el de otra lectura no sirve
-    assert get(f"{base}/frame.jpg?v=1")[0] == 200
-    code, text = status_of(f"{base}/frame.jpg?v=2")
-    assert code == 404 and "esa lectura" in text
-    # un `v` que no es un número normal se ignora (%C2%B2 es ²: isdigit() pero int() no)
-    for odd in ("rara", "%C2%B2", "9" * 40):
-        assert get(f"{base}/frame.jpg?v={odd}")[0] == 200
 
 
 def test_frame_is_encoded_once_per_reading_and_follows_the_snapshot():
@@ -133,10 +133,11 @@ def test_frame_is_encoded_once_per_reading_and_follows_the_snapshot():
     )
     pipeline.process_frame(FRAME, T0)
     first = feed.frame_jpeg()
-    assert first is not None and feed.frame_jpeg() is first  # cacheado
+    assert first is not None and first[1] == 1
+    assert feed.frame_jpeg()[0] is first[0]  # cacheado
     pipeline.process_frame(FRAME + 200, T0)  # otro cuadro (más claro)
     second = feed.frame_jpeg()
-    assert second is not None and second != first
+    assert second is not None and second[1] == 2 and second[0] != first[0]
 
 
 def test_a_frame_that_cannot_be_encoded_is_logged_once_and_not_served(caplog):
@@ -179,3 +180,24 @@ def test_snapshot_carries_the_real_frame_size():
     assert feed.snapshot()["frame"] == [400, 300]
     feed.on_reading(pipeline, [], T0, np.zeros((0, 0, 3), np.uint8))
     assert feed.snapshot()["frame"] == [200, 100]  # un frame vacío: las zonas
+
+
+def test_video_frame_is_kept_at_display_size():
+    """Una cámara 4K no se manda entera a cada navegador en cada lectura: el frame
+    del modo video se achica a 1280 de lado mayor (las cajas van normalizadas)."""
+    import numpy as np
+
+    from servio_vision.salon import display_copy
+
+    assert display_copy(np.zeros((2160, 3840, 3), np.uint8)).shape == (720, 1280, 3)
+    assert display_copy(np.zeros((1920, 1080, 3), np.uint8)).shape == (1280, 720, 3)
+    small = np.zeros((480, 640, 3), np.uint8)
+    copy = display_copy(small)
+    assert copy.shape == small.shape and copy is not small  # copia, no el buffer
+    feed = SalonFeed("casa-1", video=True)
+    pipeline = Pipeline(
+        FakeClassifier(), ZONES, lambda o: None, on_reading=feed.on_reading
+    )
+    pipeline.process_frame(np.zeros((2160, 3840, 3), np.uint8), T0)
+    assert feed.snapshot()["frame"] == [3840, 2160]  # la foto dice el tamaño real
+    assert feed.frame_jpeg() is not None
