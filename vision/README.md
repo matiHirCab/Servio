@@ -190,13 +190,25 @@ Imprime los ids de cada frame y `conservan`: qué fracción de los platos de un 
 
 _(Tomás: mAP de YOLO, acierto del `hybrid`, latencia, costo y tamaño mínimo de plato; cita del dataset de Roboflow.)_
 
-## Evaluación de estado (TOM-6)
+## Evaluación de estado (TOM-6) y tablero de números (B-3)
 
 ```
-python tools/eval.py --set data/eval
+python tools/eval.py --set data/eval          # acierto sobre un set etiquetado
+python tools/eval.py --all                    # el tablero: acierto, escenarios, latencia, costo; se guarda con fecha
+python tools/eval.py --all --sin-modelo       # solo lo que no llama al modelo (los escenarios)
+python tools/eval.py --comparar out/eval/tablero-A.json out/eval/tablero-B.json
 ```
 
-`data/eval/` tiene `labels.csv` (`archivo,estado,nota`) y las imágenes de cada plato; no va al repo. El set actual está en la carpeta compartida del proyecto (`servio-eval/`): 119 platos, 110 `lleno` (recortes del video de IA y platos de más de 300 g de Nutrition5k), 8 `por_terminar` y 1 `vacio` (Nutrition5k, etiquetados a ojo). Falta sumar platos a medio comer y vacíos (dataset de Roboflow).
+**Etiquetar recortes propios** (en el ángulo y la luz de nuestras cámaras): `tools/etiquetar.py` recorta los platos de una sesión grabada (B-1; con YOLO instalado un recorte por plato, si no la mesa entera) y abre una página local para marcar el estado real y el tipo (plato de comida, pan o guarnición, otro) con el teclado. Cada respuesta va enseguida a `labels.csv`, así que se puede cortar y seguir:
+
+```
+python tools/etiquetar.py recortar out/sesiones/cena-jueves --set data/eval/cena --cada 3
+python tools/etiquetar.py data/eval/cena --web 8766      # http://127.0.0.1:8766/
+```
+
+**El tablero** (`--all`) junta las métricas «nuestras» de `docs/context/13-metricas.md`: acierto por estado sobre el set (`--set`, o `data/eval` si existe), escenarios de `fixtures/observations/` que pasan por el pipeline entero (los mismos que `tests/test_e2e_pipeline.py`), avisos falsos por hora (vacío hasta que C-5 traiga «No hacía falta»), latencia media del modelo y costo por mesa por hora (llamadas × costo por llamada, a la cadencia de `--interval`; el costo en dólares lo informa solo el CLI de Claude, con la API quedan los tokens). Se guarda en `out/eval/tablero-<fecha>.json` y se compara con el anterior: el modelo sigue siendo Haiku (decisión 16), el tablero es para saber si un prompt empeora.
+
+`data/eval/` tiene `labels.csv` (`archivo,estado,nota`, o `archivo,estado,tipo,nota` si lo escribió `etiquetar.py`) y las imágenes de cada plato; no va al repo. El set actual está en la carpeta compartida del proyecto (`servio-eval/`): 119 platos, 110 `lleno` (recortes del video de IA y platos de más de 300 g de Nutrition5k), 8 `por_terminar` y 1 `vacio` (Nutrition5k, etiquetados a ojo). Falta sumar platos a medio comer y vacíos (dataset de Roboflow).
 
 Manda los platos de a 8 por llamada, como una mesa. Resultado con `claude -p` y Haiku (2026-10-17):
 
