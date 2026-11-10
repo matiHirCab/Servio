@@ -201,6 +201,7 @@ def _handler(server: SalonServer) -> type[BaseHTTPRequestHandler]:
                     else:
                         self.wfile.write(b": sigo\n\n")
                     version = published.version
+                    del published  # no retener el frame (es grande) mientras se espera la foto siguiente
                     self.wfile.flush()
             except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
                 pass  # el navegador cerró la pestaña

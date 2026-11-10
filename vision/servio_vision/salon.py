@@ -275,8 +275,10 @@ class SalonFeed:
         return result
 
     def payload(self, published: Published, with_video: bool) -> bytes:
-        """La foto de esa publicación como JSON, armado una vez por lectura para todos
-        los suscriptos. Con `with_video`, con el frame de esa misma publicación en
+        """La foto de esa publicación como JSON. Con `with_video`, armado una vez por
+        lectura para todos los suscriptos (es lo pesado); sin video, cada suscripto
+        puede serializarlo una vez (es chico y no vale un candado). Con `with_video`,
+        con el frame de esa misma publicación en
         base64 (`frame_jpeg`), o `frame_error` si no se pudo codificar: imagen y datos
         viajan juntos, nunca se desfasan. Una publicación vieja (un suscripto que
         despertó tarde) se arma igual, sin guardarse: es su foto, y pasa poco."""

@@ -601,8 +601,8 @@ function keepFocus(draw) {
 function render() {
   pickTable();
   keepFocus(() => {
-    if ($("floor").hasAttribute("hidden")) dirty.floor = true; else { renderFloor(); dirty.floor = false; }
-    if ($("video").hasAttribute("hidden")) dirty.video = true; else { renderVideo(); dirty.video = false; }
+    if (isHidden($("floor"))) dirty.floor = true; else { renderFloor(); dirty.floor = false; }
+    if (isHidden($("overlay"))) dirty.video = true; else { renderVideo(); dirty.video = false; }
   });
   renderSide();
 }
@@ -682,13 +682,20 @@ for (const id of ["floor", "overlay"]) {
 // frame con cada foto (`?video=1`); en reconstrucción (el modo por defecto de la pantalla
 // fija) no, así no baja imágenes que no muestra. Se reconecta solo al cambiar de modo.
 let events = null, eventsVideo = null;  // la suscripción y si pide el frame
+let retryAt = 0, retryWait = 1000;  // una SSE que el navegador dio por cerrada se reabre con espera creciente (hasta 30 s)
 function connect() {
   const withVideo = snap ? mode === "video" : wanted === "video";
-  if (events && eventsVideo === withVideo && events.readyState !== EventSource.CLOSED) return;  // ya está la que hace falta (y viva)
+  const alive = events && events.readyState !== EventSource.CLOSED;
+  if (events && eventsVideo === withVideo && alive) return;  // ya está la que hace falta (y viva)
+  if (events && !alive && eventsVideo === withVideo) {
+    if (Date.now() < retryAt) return;  // todavía no toca reintentar
+    retryWait = Math.min(retryWait * 2, 30000);
+  } else retryWait = 1000;
+  retryAt = Date.now() + retryWait;
   if (events) events.close();
   eventsVideo = withVideo;
   events = new EventSource(base + "/eventos" + (withVideo ? "?video=1" : ""));
-  events.onopen = () => { connected = everConnected = true; renderStatus(); };
+  events.onopen = () => { connected = everConnected = true; retryWait = 1000; renderStatus(); };
   events.onmessage = e => { connected = everConnected = true; apply(JSON.parse(e.data)); };
   events.onerror = () => { connected = false; renderStatus(); };
 }
