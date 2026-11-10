@@ -684,7 +684,7 @@ for (const id of ["floor", "overlay"]) {
 let events = null, eventsVideo = null;  // la suscripción y si pide el frame
 function connect() {
   const withVideo = snap ? mode === "video" : wanted === "video";
-  if (events && eventsVideo === withVideo) return;  // ya está la que hace falta
+  if (events && eventsVideo === withVideo && events.readyState !== EventSource.CLOSED) return;  // ya está la que hace falta (y viva)
   if (events) events.close();
   eventsVideo = withVideo;
   events = new EventSource(base + "/eventos" + (withVideo ? "?video=1" : ""));

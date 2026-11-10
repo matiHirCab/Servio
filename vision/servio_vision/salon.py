@@ -229,6 +229,7 @@ class SalonFeed:
         self._encoded: EncodedFrame | None = None
         self._payloads: dict[bool, tuple[int, bytes]] = {}
         self._encode_lock = threading.Lock()  # un solo navegador codifica por vez
+        self._broken: set[int] = set()  # la versión cuyo frame roto ya se avisó
 
     def encode(self, published: Published) -> EncodedFrame | None:
         """El frame de esa publicación como JPEG. Se codifica la primera vez que se
@@ -246,21 +247,34 @@ class SalonFeed:
             return encoded  # ya resuelto: sale sin esperar a nadie
         # el pipeline nunca espera este candado: `on_reading` solo toma `_changed`
         with self._encode_lock:
-            with self._changed:  # otro pudo codificarlo mientras esperaba
-                encoded = self._encoded
-            if encoded is not None and encoded.version == version:
-                return encoded
-            try:
-                result = EncodedFrame(to_jpeg(display_size(published.frame)), version)
-            except (ValueError, cv2.error) as e:
+            return self._encode_locked(published)
+
+    def _encode_locked(self, published: Published) -> EncodedFrame | None:
+        """`encode` con `_encode_lock` ya tomado (también lo usa `payload`)."""
+        if published.frame is None:
+            return None
+        version = published.version
+        with self._changed:  # otro pudo codificarlo mientras esperaba
+            encoded = self._encoded
+        if encoded is not None and encoded.version == version:
+            return encoded
+        try:
+            result = EncodedFrame(to_jpeg(display_size(published.frame)), version)
+        except (ValueError, cv2.error) as e:
+            if (
+                version not in self._broken
+            ):  # se avisa una vez por lectura, aunque lo pidan después
                 logger.warning("No se pudo codificar el frame para la vista: %s", e)
-                result = EncodedFrame(None, version)
-            with self._changed:
-                if (
-                    encoded is None or encoded.version <= version
-                ):  # una vieja no pisa una nueva
-                    self._encoded = result
-            return result
+                self._broken = {
+                    version
+                }  # con el candado tomado; alcanza recordar la última
+            result = EncodedFrame(None, version)
+        with self._changed:
+            if (
+                encoded is None or encoded.version <= version
+            ):  # una vieja no pisa una nueva
+                self._encoded = result
+        return result
 
     def payload(self, published: Published, with_video: bool) -> bytes:
         """La foto de esa publicación como JSON, armado una vez por lectura para todos
@@ -272,21 +286,30 @@ class SalonFeed:
             cached = self._payloads.get(with_video)
         if cached is not None and cached[0] == version:
             return cached[1]
-        snapshot = published.snapshot
-        if with_video and snapshot is not None:
-            found = self.encode(published)
-            if found is not None:
-                snapshot = dict(snapshot)
-                if found.jpeg is not None:
-                    snapshot["frame_jpeg"] = base64.b64encode(found.jpeg).decode()
-                else:
-                    snapshot["frame_error"] = BROKEN_FRAME
-        data = json.dumps(snapshot, ensure_ascii=False).encode()
-        with self._changed:
-            cached = self._payloads.get(with_video)
-            if cached is None or cached[0] <= version:  # una vieja no pisa una nueva
-                self._payloads[with_video] = (version, data)
-        return data
+        # todos los suscriptos se despiertan juntos: el primero arma, los demás esperan
+        # y encuentran el suyo hecho
+        with self._encode_lock:
+            with self._changed:
+                cached = self._payloads.get(with_video)
+            if cached is not None and cached[0] == version:
+                return cached[1]
+            snapshot = published.snapshot
+            if with_video and snapshot is not None:
+                found = self._encode_locked(published)
+                if found is not None:
+                    snapshot = dict(snapshot)
+                    if found.jpeg is not None:
+                        snapshot["frame_jpeg"] = base64.b64encode(found.jpeg).decode()
+                    else:
+                        snapshot["frame_error"] = BROKEN_FRAME
+            data = json.dumps(snapshot, ensure_ascii=False).encode()
+            with self._changed:
+                cached = self._payloads.get(with_video)
+                if (
+                    cached is None or cached[0] <= version
+                ):  # una vieja no pisa una nueva
+                    self._payloads[with_video] = (version, data)
+            return data
 
     def frame_jpeg(self) -> EncodedFrame | None:
         """El frame de la última lectura, codificado (`frame.jpg`); `None` sin frame."""
