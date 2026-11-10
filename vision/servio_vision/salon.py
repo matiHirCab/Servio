@@ -20,6 +20,8 @@ por lectura: la página en modo video lo recibe dentro de la misma foto por SSE
 Coordenadas: todo normalizado 0–1 en la imagen de la cámara ([x, y, w, h]).
 """
 
+import base64
+import json
 import logging
 import threading
 from collections import Counter
@@ -41,6 +43,8 @@ if TYPE_CHECKING:
     from servio_vision.pipeline import Pipeline
 
 logger = logging.getLogger("servio")
+
+BROKEN_FRAME = "El frame de esta lectura no se pudo codificar (ver el log)"
 
 PLATE_STATES = ("lleno", "comiendo", "por_terminar", "vacio")
 Box = tuple[float, float, float, float]
@@ -219,57 +223,74 @@ class SalonFeed:
         self._version = 0
         self._changed = threading.Condition()
         self._frame: np.ndarray | None = None  # el de la última foto publicada
-        # el frame ya codificado para la foto `version`, o con None si falló
+        # lo último que se armó para los navegadores: el frame codificado (o con
+        # None si falló) y el JSON de la foto, con y sin frame; una sola caché, de la
+        # publicación más nueva que alguien haya pedido
         self._encoded: EncodedFrame | None = None
+        self._payloads: dict[bool, tuple[int, bytes]] = {}
         self._encode_lock = threading.Lock()  # un solo navegador codifica por vez
 
     def encode(self, published: Published) -> EncodedFrame | None:
         """El frame de esa publicación como JPEG. Se codifica la primera vez que se
-        pide, una vez por lectura aunque lo pidan varios navegadores. `None`: sin
-        frame (modo video apagado o sin lecturas), o una publicación que ya no es la
-        actual: un frame viejo no se codifica (nadie lo cachea y haría esperar a los
-        demás); la foto va sin imagen y la lectura siguiente trae la suya. Un frame
-        que no se pudo codificar vuelve con `jpeg=None` (queda logueado una vez; la
-        vista sigue sin imagen, el pipeline sigue)."""
+        pide, una vez por lectura aunque lo pidan varios navegadores; el resultado
+        queda para su versión (si es la más nueva pedida). `None`: sin frame (modo
+        video apagado o sin lecturas). Un frame que no se pudo codificar vuelve con
+        `jpeg=None` (queda logueado una vez; la vista sigue sin imagen, el pipeline
+        sigue)."""
         if published.frame is None:
             return None
         version = published.version
         with self._changed:
-            encoded, current = self._encoded, self._version
+            encoded = self._encoded
         if encoded is not None and encoded.version == version:
             return encoded  # ya resuelto: sale sin esperar a nadie
-        if version != current:
-            return None
         # el pipeline nunca espera este candado: `on_reading` solo toma `_changed`
         with self._encode_lock:
-            with (
-                self._changed
-            ):  # otro pudo codificarlo mientras esperaba, o hay otra lectura
-                encoded, current = self._encoded, self._version
+            with self._changed:  # otro pudo codificarlo mientras esperaba
+                encoded = self._encoded
             if encoded is not None and encoded.version == version:
                 return encoded
-            if version != current:
-                return None
             try:
                 result = EncodedFrame(to_jpeg(display_size(published.frame)), version)
             except (ValueError, cv2.error) as e:
                 logger.warning("No se pudo codificar el frame para la vista: %s", e)
                 result = EncodedFrame(None, version)
             with self._changed:
-                if self._version == version:  # si no, ya hay otra lectura: no se guarda
+                if (
+                    encoded is None or encoded.version <= version
+                ):  # una vieja no pisa una nueva
                     self._encoded = result
             return result
 
-    def frame_jpeg(self) -> EncodedFrame | None:
-        """El frame de la última lectura, codificado (`frame.jpg`). Si justo llega
-        otra lectura mientras se codifica, va por la nueva; `None` solo si no hay
-        frame."""
-        for _ in range(3):
-            published = self.published()
+    def payload(self, published: Published, with_video: bool) -> bytes:
+        """La foto de esa publicación como JSON, armado una vez por lectura para todos
+        los suscriptos. Con `with_video`, con el frame de esa misma publicación en
+        base64 (`frame_jpeg`), o `frame_error` si no se pudo codificar: imagen y datos
+        viajan juntos, nunca se desfasan."""
+        version = published.version
+        with self._changed:
+            cached = self._payloads.get(with_video)
+        if cached is not None and cached[0] == version:
+            return cached[1]
+        snapshot = published.snapshot
+        if with_video and snapshot is not None:
             found = self.encode(published)
-            if found is not None or published.frame is None:
-                return found
-        return None  # tres lecturas seguidas en el medio: no pasa con cadencias reales
+            if found is not None:
+                snapshot = dict(snapshot)
+                if found.jpeg is not None:
+                    snapshot["frame_jpeg"] = base64.b64encode(found.jpeg).decode()
+                else:
+                    snapshot["frame_error"] = BROKEN_FRAME
+        data = json.dumps(snapshot, ensure_ascii=False).encode()
+        with self._changed:
+            cached = self._payloads.get(with_video)
+            if cached is None or cached[0] <= version:  # una vieja no pisa una nueva
+                self._payloads[with_video] = (version, data)
+        return data
+
+    def frame_jpeg(self) -> EncodedFrame | None:
+        """El frame de la última lectura, codificado (`frame.jpg`); `None` sin frame."""
+        return self.encode(self.published())
 
     def on_reading(
         self,

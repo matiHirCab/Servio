@@ -22,9 +22,7 @@ abre desde el celular o la tablet en la misma red. No tiene usuarios ni contrase
 no la expongas a internet.
 """
 
-import base64
 import ipaddress
-import json
 import logging
 import threading
 from http import HTTPStatus
@@ -32,13 +30,12 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, quote, unquote, urlsplit
 
-from servio_vision.salon import Published, SalonFeed
+from servio_vision.salon import BROKEN_FRAME, SalonFeed
 
 logger = logging.getLogger("servio")
 
 PAGE = Path(__file__).with_name("static") / "salon.html"
 KEEPALIVE_S = 15.0  # un comentario SSE cada tanto, para que no se corte la conexión
-BROKEN_FRAME = "El frame de esta lectura no se pudo codificar (ver el log)"
 
 
 class SalonServer:
@@ -66,8 +63,18 @@ class SalonServer:
 
     @property
     def url(self) -> str:
-        # con `0.0.0.0` (todas las interfaces) la dirección que sirve es la de esta máquina
-        host = "localhost" if self.host in ("0.0.0.0", "") else self.host
+        """La dirección para abrirla desde esta máquina."""
+        return self._url("localhost" if self.host in ("0.0.0.0", "") else self.host)
+
+    @property
+    def reachable_url(self) -> str:
+        """La dirección que usan los demás equipos de la red (con todas las
+        interfaces no hay una sola: la IP de esta máquina)."""
+        return self._url(
+            "<IP de esta PC>" if self.host in ("0.0.0.0", "") else self.host
+        )
+
+    def _url(self, host: str) -> str:
         return f"http://{host}:{self.port}/{quote(self.feed.local_id)}/salon"
 
     def start(self) -> "SalonServer":
@@ -94,10 +101,6 @@ def _is_loopback(host: str) -> bool:
 
 def _handler(server: SalonServer) -> type[BaseHTTPRequestHandler]:
     feed = server.feed
-    # el JSON de la última publicación, con y sin video: se arma una vez por lectura
-    # y lo mandan todos los navegadores suscriptos (una publicación vieja no se guarda)
-    payloads: dict[bool, tuple[int, bytes]] = {}
-    payloads_lock = threading.Lock()
 
     class Handler(BaseHTTPRequestHandler):
         protocol_version = "HTTP/1.1"
@@ -121,38 +124,13 @@ def _handler(server: SalonServer) -> type[BaseHTTPRequestHandler]:
             # de siempre, y una sola en la caché)
             with_video = feed.video and parse_qs(url.query).get("video", [""])[0] == "1"
             if rest == ["estado"]:
-                body = self._payload(feed.published(), with_video)
+                body = feed.payload(feed.published(), with_video)
                 return self._send(HTTPStatus.OK, body, "application/json")
             if rest == ["eventos"]:
                 return self._events(with_video)
             if rest == ["frame.jpg"]:
                 return self._frame()
             return self._send(HTTPStatus.NOT_FOUND, b"No existe", "text/plain")
-
-        def _payload(self, published: Published, with_video: bool) -> bytes:
-            """La foto como JSON. Con `with_video` (y el modo video prendido), con el
-            frame de esa misma publicación en base64 (`frame_jpeg`), o `frame_error`
-            si no se pudo codificar: imagen y datos viajan juntos, nunca se desfasan.
-            Se serializa una vez por lectura, para todos los suscriptos."""
-            with payloads_lock:
-                cached = payloads.get(with_video)
-            if cached is not None and cached[0] == published.version:
-                return cached[1]
-            snapshot = published.snapshot
-            if with_video and snapshot is not None:
-                found = feed.encode(published)
-                if found is not None:
-                    snapshot = dict(snapshot)
-                    if found.jpeg is not None:
-                        snapshot["frame_jpeg"] = base64.b64encode(found.jpeg).decode()
-                    else:
-                        snapshot["frame_error"] = BROKEN_FRAME
-            data = json.dumps(snapshot, ensure_ascii=False).encode()
-            with payloads_lock:
-                cached = payloads.get(with_video)
-                if cached is None or cached[0] < published.version:
-                    payloads[with_video] = (published.version, data)
-            return data
 
         def _frame(self) -> None:
             if not feed.video:
@@ -218,7 +196,7 @@ def _handler(server: SalonServer) -> type[BaseHTTPRequestHandler]:
                 while not server.closing.is_set():
                     published = feed.wait_published(version, KEEPALIVE_S)
                     if published.version != version and published.snapshot is not None:
-                        data = self._payload(published, with_video)
+                        data = feed.payload(published, with_video)
                         self.wfile.write(b"data: " + data + b"\n\n")
                     else:
                         self.wfile.write(b": sigo\n\n")

@@ -292,12 +292,13 @@ function plate(p, x, y, r, changed) {
 // Una etiqueta de color (el aviso de una mesa, el nombre de un plato). El ancho se
 // estima por la cantidad de letras; `fitTags` lo ajusta al texto real ya dibujado.
 const tagWidth = text => text.length * 7.2 + 22;  // estimado; `fitTags` lo ajusta al texto real
-function tag(x, y, text, col, opacity = 1, anchor = "start", age = null, alt = null) {
+function tag(x, y, text, col, opacity = 1, anchor = "start", age = null, alt = null, flip = null) {
   // `age` (ISO): la etiqueta termina en « · HACE X» y se actualiza cada segundo (refreshAges).
   // `alt`: otra `y` para cuando pisa a una etiqueta ya puesta (fitTags la baja ahí).
+  // `flip`: otra `x` (con el ancla opuesta) para cuando, medida, no entra de este lado.
   if (age) text = `${text} · ${ago(age).toUpperCase()}`;
   const w = tagWidth(text), x0 = anchor === "end" ? -w : 0;
-  return `<g class="tag" data-x="${x.toFixed(1)}" data-y="${y.toFixed(1)}" data-anchor="${anchor}"${alt !== null ? ` data-alt="${alt.toFixed(1)}"` : ""}${age ? ` data-age="${esc(age)}" data-base="${esc(text.slice(0, text.lastIndexOf(" · ")))}"` : ""} transform="translate(${x.toFixed(1)} ${y.toFixed(1)})"><rect x="${x0.toFixed(0)}" y="-11" width="${w.toFixed(0)}" height="22" rx="11" fill="${col}" fill-opacity="${opacity}"/><text x="${(x0 + w / 2).toFixed(0)}" y="4" text-anchor="middle" class="svg-tag">${esc(text)}</text></g>`;
+  return `<g class="tag" data-x="${x.toFixed(1)}" data-y="${y.toFixed(1)}" data-anchor="${anchor}"${alt !== null ? ` data-alt="${alt.toFixed(1)}"` : ""}${flip !== null ? ` data-flip="${flip.toFixed(1)}"` : ""}${age ? ` data-age="${esc(age)}" data-base="${esc(text.slice(0, text.lastIndexOf(" · ")))}"` : ""} transform="translate(${x.toFixed(1)} ${y.toFixed(1)})"><rect x="${x0.toFixed(0)}" y="-11" width="${w.toFixed(0)}" height="22" rx="11" fill="${col}" fill-opacity="${opacity}"/><text x="${(x0 + w / 2).toFixed(0)}" y="4" text-anchor="middle" class="svg-tag">${esc(text)}</text></g>`;
 }
 const isHidden = el => el.closest("[hidden]") !== null;  // o un ancestro
 // Mide cada etiqueta con la fuente real y la corre para que no se salga del svg (a los
@@ -311,18 +312,26 @@ function fitTags(svg, only = null) {
   for (const g of tags) {
     const t = g.querySelector("text"), r = g.querySelector("rect");
     if (!t.getComputedTextLength) continue;
-    const w = t.getComputedTextLength() + 22, x0 = g.dataset.anchor === "end" ? -w : 0;
-    r.setAttribute("width", w.toFixed(0)); r.setAttribute("x", x0.toFixed(0)); t.setAttribute("x", (x0 + w / 2).toFixed(0));
+    const w = t.getComputedTextLength() + 22;
     // la `y` de partida: la del dibujo, o la ya decidida (`alt`) si solo se vuelve a medir
     const y = +(only && g.dataset.fy !== undefined ? g.dataset.fy : g.dataset.y);
     g.setAttribute("transform", `translate(${g.dataset.x} ${y})`);
     const m = ctmInto(svg, g);
-    const absX = (m ? m.e : +g.dataset.x) + x0, absY = (m ? m.f : y) - 11;
+    // con el ancho real, el lado: si tiene `flip` y de este lado no entra, va del otro
+    let anchor = g.dataset.anchor, x = +g.dataset.x;
+    if (g.dataset.flip !== undefined && m) {
+      const fits = anchor === "end" ? m.e - w >= 4 : m.e + w <= vw - 4;
+      if (!fits) { anchor = anchor === "end" ? "start" : "end"; x = +g.dataset.flip; g.setAttribute("transform", `translate(${x} ${y})`); }
+    }
+    const x0 = anchor === "end" ? -w : 0;
+    r.setAttribute("width", w.toFixed(0)); r.setAttribute("x", x0.toFixed(0)); t.setAttribute("x", (x0 + w / 2).toFixed(0));
+    const m2 = anchor === g.dataset.anchor ? m : ctmInto(svg, g);
+    const absX = (m2 ? m2.e : x) + x0, absY = (m2 ? m2.f : y) - 11;
     let dx = Math.min(0, vw - w - 4 - absX);  // que no se corte contra el borde derecho
     if (absX + dx < 4) dx = 4 - absX;         // ni contra el izquierdo
     let dy = Math.min(0, vh - 22 - 4 - absY);  // ni abajo
     if (absY + dy < 4) dy = 4 - absY;          // ni arriba
-    g.dataset.fx = (+g.dataset.x + dx).toFixed(1); g.dataset.fy = (y + dy).toFixed(1);  // donde quedó
+    g.dataset.fx = (x + dx).toFixed(1); g.dataset.fy = (y + dy).toFixed(1);  // donde quedó
     if (dx || dy) g.setAttribute("transform", `translate(${g.dataset.fx} ${g.dataset.fy})`);
   }
   if (only) return;
@@ -488,9 +497,9 @@ function renderVideo() {
       const st = stateOf(p), col = COLOR[st], R = r + 6;
       out += `<g transform="translate(${px.toFixed(1)} ${py.toFixed(1)})"><g class="${pending.video.has(p.id) ? "changed" : ""}">` + ring(p, R, R + 10, 2.5, "v", .8);
       const label = `${dishName(p)} · ${STATE_NAME[st].toUpperCase()}`;
-      const left = px + R + 8 + tagWidth(label) > VW;  // a la izquierda si a la derecha no entra
-      // arriba del anillo; si ahí pisa la etiqueta de un plato vecino, fitTags la baja (`alt`)
-      out += `</g>` + tag(left ? -(R + 8) : R + 8, -(R - 2), label, col, 1, left ? "end" : "start", null, R + 14) + `</g>`;
+      // a la derecha del anillo; si medida no entra, fitTags la pasa a la izquierda (`flip`);
+      // arriba; si ahí pisa la etiqueta de un plato vecino, la baja (`alt`)
+      out += `</g>` + tag(R + 8, -(R - 2), label, col, 1, "start", null, R + 14, -(R + 8)) + `</g>`;
     }
     out += `</g>`;
   }

@@ -153,8 +153,8 @@ def test_events_carry_the_frame_of_their_own_reading_when_asked(video_server):
 
 def test_payload_encodes_the_frame_of_its_own_publication():
     """Foto y frame se toman juntos: el JSON nunca lleva el frame de otra foto. Una
-    publicación que ya no es la actual no se codifica (va sin imagen; la lectura
-    siguiente trae la suya) y no pisa la caché."""
+    publicación que ya no es la actual se codifica igual (su frame es el suyo) y
+    no pisa en la caché a una más nueva."""
     feed = SalonFeed("casa-1", video=True)
     pipeline = Pipeline(
         FakeClassifier(), ZONES, lambda o: None, on_reading=feed.on_reading
@@ -162,11 +162,18 @@ def test_payload_encodes_the_frame_of_its_own_publication():
     pipeline.process_frame(FRAME, T0)
     first = feed.published()
     pipeline.process_frame(FRAME + 200, T0)  # otra lectura antes de codificar
-    assert feed.encode(first) is None  # vieja: sin imagen, sin codificar
+    old = feed.encode(first)
+    assert old is not None and old.version == 1 and old.jpeg is not None
     new = feed.frame_jpeg()
-    assert new is not None and new.version == 2 and new.jpeg is not None
+    assert new is not None and new.version == 2 and new.jpeg != old.jpeg
     assert feed.frame_jpeg() is new  # la caché es la de la lectura actual
-    assert feed.encode(first) is None  # y la vieja sigue sin codificarse
+    assert (
+        feed.encode(first).version == 1
+    )  # la vieja se vuelve a dar, sin pisar la nueva
+    assert feed.frame_jpeg() is new
+    plain = json.loads(feed.payload(first, True))
+    assert plain["version"] == 1 and "frame_jpeg" in plain  # su propio frame
+    assert json.loads(feed.payload(feed.published(), True))["version"] == 2
 
 
 def test_events_without_web_video_ignore_the_video_flag(server):
@@ -224,6 +231,7 @@ def test_a_broken_frame_is_a_503_and_an_error_in_the_event(video_server):
 def test_server_says_whether_it_is_exposed_to_the_network(server):
     # sin escuchar en 0.0.0.0 desde un test (el firewall de Windows pregunta)
     assert server.exposed is False and server.url.startswith("http://127.")
+    assert server.reachable_url == server.url  # escucha en una sola dirección
     assert _is_loopback("127.0.0.1") and _is_loopback("::1")
     assert not _is_loopback("0.0.0.0") and not _is_loopback("192.168.0.5")
     assert not _is_loopback("raro")  # algo que no es una IP cuenta como expuesto

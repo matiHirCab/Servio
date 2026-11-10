@@ -280,10 +280,7 @@ def build_pipeline(settings: Settings) -> Pipeline | None:
             logger.warning(
                 "Modo video (--web-video): la imagen de la cámara, difuminada, se "
                 "sirve en %s/frame.jpg %s. Apagalo después de armar la cámara",
-                # expuesto: la dirección que usan los demás equipos, no localhost
-                server.url.replace("//localhost:", "//<IP de esta PC>:")
-                if server.exposed
-                else server.url,
+                server.reachable_url if server.exposed else server.url,
                 f"a cualquiera en la red (--web-host {settings.web_host})"
                 if server.exposed
                 else "(solo en esta máquina)",
