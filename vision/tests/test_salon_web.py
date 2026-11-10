@@ -121,9 +121,9 @@ def test_frame_is_served_with_web_video_once_there_is_a_reading(video_server):
     assert get(f"{base}/frame.jpg?v=1")[0] == 200
     code, text = status_of(f"{base}/frame.jpg?v=2")
     assert code == 404 and "esa lectura" in text
-    assert (
-        get(f"{base}/frame.jpg?v=rara")[0] == 200
-    )  # un `v` que no es número se ignora
+    # un `v` que no es un número normal se ignora (%C2%B2 es ²: isdigit() pero int() no)
+    for odd in ("rara", "%C2%B2", "9" * 40):
+        assert get(f"{base}/frame.jpg?v={odd}")[0] == 200
 
 
 def test_frame_is_encoded_once_per_reading_and_follows_the_snapshot():
@@ -156,6 +156,16 @@ def test_a_frame_that_cannot_be_encoded_is_logged_once_and_not_served(caplog):
     assert feed.frame_jpeg() is not None
 
 
+def test_server_says_whether_it_is_exposed_to_the_network():
+    for host, exposed in (("127.0.0.1", False), ("0.0.0.0", True)):
+        srv = SalonServer(SalonFeed("casa-1"), host, 0)
+        try:
+            assert srv.exposed is exposed
+            assert srv.url.startswith("http://localhost" if exposed else "http://127.")
+        finally:
+            srv.httpd.server_close()
+
+
 def test_snapshot_carries_the_real_frame_size():
     """Las zonas pueden venir de un video de otra proporción: la página dibuja las
     cajas (normalizadas) sobre la imagen que llega, con el tamaño real del frame."""
@@ -167,3 +177,5 @@ def test_snapshot_carries_the_real_frame_size():
     )
     pipeline.process_frame(np.zeros((300, 400, 3), np.uint8), T0)
     assert feed.snapshot()["frame"] == [400, 300]
+    feed.on_reading(pipeline, [], T0, np.zeros((0, 0, 3), np.uint8))
+    assert feed.snapshot()["frame"] == [200, 100]  # un frame vacío: las zonas

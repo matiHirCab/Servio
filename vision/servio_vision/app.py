@@ -277,13 +277,12 @@ def build_pipeline(settings: Settings) -> Pipeline | None:
             return None
         logger.info("Salón en vivo: %s", server.url)
         if feed.video:
-            exposed = settings.web_host not in ("127.0.0.1", "localhost", "::1")
             logger.warning(
                 "Modo video (--web-video): la imagen de la cámara, difuminada, se "
                 "sirve en %s/frame.jpg %s. Apagalo después de armar la cámara",
                 server.url,
                 f"a cualquiera en la red (--web-host {settings.web_host})"
-                if exposed
+                if server.exposed
                 else "(solo en esta máquina)",
             )
     if live:

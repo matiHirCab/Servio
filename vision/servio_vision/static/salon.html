@@ -291,11 +291,12 @@ function plate(p, x, y, r, changed) {
 
 // Una etiqueta de color (el aviso de una mesa, el nombre de un plato). El ancho se
 // estima por la cantidad de letras; `fitTags` lo ajusta al texto real ya dibujado.
+const tagWidth = text => text.length * 7.2 + 22;  // estimado; `fitTags` lo ajusta al texto real
 function tag(x, y, text, col, opacity = 1, anchor = "start", age = null, alt = null) {
   // `age` (ISO): la etiqueta termina en « · HACE X» y se actualiza cada segundo (refreshAges).
   // `alt`: otra `y` para cuando pisa a una etiqueta ya puesta (fitTags la baja ahí).
   if (age) text = `${text} · ${ago(age).toUpperCase()}`;
-  const w = text.length * 7.2 + 22, x0 = anchor === "end" ? -w : 0;
+  const w = tagWidth(text), x0 = anchor === "end" ? -w : 0;
   return `<g class="tag" data-x="${x.toFixed(1)}" data-y="${y.toFixed(1)}" data-anchor="${anchor}"${alt !== null ? ` data-alt="${alt.toFixed(1)}"` : ""}${age ? ` data-age="${esc(age)}" data-base="${esc(text.slice(0, text.lastIndexOf(" · ")))}"` : ""} transform="translate(${x.toFixed(1)} ${y.toFixed(1)})"><rect x="${x0.toFixed(0)}" y="-11" width="${w.toFixed(0)}" height="22" rx="11" fill="${col}" fill-opacity="${opacity}"/><text x="${(x0 + w / 2).toFixed(0)}" y="4" text-anchor="middle" class="svg-tag">${esc(text)}</text></g>`;
 }
 const isHidden = el => el.closest("[hidden]") !== null;  // o un ancestro
@@ -437,7 +438,8 @@ function renderVideo() {
   if (!snap) { svg.innerHTML = ""; return; }
   // la proporción es la de la imagen que llegó (si ya cargó), no la de las zonas: las cajas
   // vienen normalizadas y se dibujan sobre la imagen aunque la cámara tenga otra proporción
-  const cam = $("cam"), [fw, fh] = cam.naturalWidth && !cam.hidden ? [cam.naturalWidth, cam.naturalHeight] : snap.frame;
+  const cam = $("cam"), size = cam.naturalWidth && !cam.hidden ? [cam.naturalWidth, cam.naturalHeight] : snap.frame;
+  const [fw, fh] = size[0] > 0 && size[1] > 0 ? size : [4, 3];  // un tamaño roto no deja la capa en NaN
   // el viewBox no es la resolución de la cámara: una unidad es un píxel de la pantalla
   // (el ancho con que se muestra el video), así los trazos y las etiquetas miden lo mismo
   // con una webcam de 640 que con una de 1920, y en una cámara vertical angosta
@@ -464,7 +466,7 @@ function renderVideo() {
       const st = stateOf(p), col = COLOR[st], R = r + 6;
       out += `<g transform="translate(${px.toFixed(1)} ${py.toFixed(1)})"><g class="${pending.video.has(p.id) ? "changed" : ""}">` + ring(p, R, R + 10, 2.5, "v", .8);
       const label = `${dishName(p)} · ${STATE_NAME[st].toUpperCase()}`;
-      const left = px + R + 8 + label.length * 7.2 + 22 > VW;  // a la izquierda si a la derecha no entra
+      const left = px + R + 8 + tagWidth(label) > VW;  // a la izquierda si a la derecha no entra
       // arriba del anillo; si ahí pisa la etiqueta de un plato vecino, fitTags la baja (`alt`)
       out += `</g>` + tag(left ? -(R + 8) : R + 8, -(R - 2), label, col, 1, left ? "end" : "start", null, R + 14) + `</g>`;
     }
@@ -478,17 +480,21 @@ function renderVideo() {
 // pasó a otra lectura (404) la imagen anterior se queda hasta que llegue la foto siguiente,
 // así nunca hay capas de una lectura sobre la imagen de otra. Sin `<img src>`: un 404 ahí
 // deja el cuadro roto en vez de la imagen que había.
-let frameUrl = null;
+let shownUrl = null, loadingUrl = null;  // el blob que se ve y el que está cargando (se liberan: la pantalla queda prendida todo el turno)
 function loadFrame(version, drawn) {
   fetch(`${base}/frame.jpg?v=${version}`).then(r => r.ok ? r.blob() : null).then(blob => {
     if (!blob || !snap || snap.version !== version) return;  // llegó tarde: ya se dibujó otra foto
     const cam = $("cam"), url = URL.createObjectURL(blob);
+    if (loadingUrl) URL.revokeObjectURL(loadingUrl);  // uno que no terminó de cargar y ya quedó viejo
+    loadingUrl = url;
     cam.onload = () => {
-      if (frameUrl) URL.revokeObjectURL(frameUrl);
-      frameUrl = url; cam.hidden = false; $("cam-wait").hidden = true;
+      if (cam.src !== url) return;  // ya lo pisó otro
+      if (shownUrl) URL.revokeObjectURL(shownUrl);
+      shownUrl = url; loadingUrl = null; cam.hidden = false; $("cam-wait").hidden = true;
       // la cámara no tiene la proporción con que se dibujó: las capas, sobre la imagen real
       if ((cam.naturalWidth !== drawn[0] || cam.naturalHeight !== drawn[1]) && mode === "video") renderVideo();
     };
+    cam.onerror = () => { URL.revokeObjectURL(url); if (loadingUrl === url) loadingUrl = null; };  // no se pudo decodificar: queda la imagen anterior
     cam.src = url;
   }).catch(() => {});
 }
@@ -523,7 +529,7 @@ ${rows}<div class="label num" style="margin-top:10px">${esc(since)} · ${t.plate
   const tables = snap ? snap.tables : [];
   const occ = tables.filter(occupied);
   const plates = tables.reduce((n, x) => n + x.plates.length, 0);
-  const sinces = tables.map(x => x.since).filter(Boolean).map(s => (nowTs() - Date.parse(s)) / 60000);  // el promedio se calcula acá
+  const sinces = occ.map(x => x.since).filter(Boolean).map(s => (nowTs() - Date.parse(s)) / 60000);  // de las mismas mesas que «ocupadas»; el promedio se calcula acá
   const avg = sinces.length ? Math.round(sinces.reduce((a, b) => a + b, 0) / sinces.length) : null;
   $("shift-card").innerHTML = `<div class="card-h"><h2>Ahora</h2><span class="label">En el salón</span></div><div class="metrics">
 <div class="metric"><div class="label">Mesas ocupadas</div><div class="v num">${occ.length}<small>de ${tables.length}</small></div></div>

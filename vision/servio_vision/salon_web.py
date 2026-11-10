@@ -49,9 +49,15 @@ class SalonServer:
         return self.httpd.server_address[1]
 
     @property
+    def exposed(self) -> bool:
+        """Si escucha para otros equipos de la red (no solo esta máquina)."""
+        host = str(self.httpd.server_address[0])
+        return not (host.startswith("127.") or host in ("::1", "localhost"))
+
+    @property
     def url(self) -> str:
         host = str(self.httpd.server_address[0])
-        if host in ("0.0.0.0", ""):
+        if host in ("0.0.0.0", "", "::"):
             host = "localhost"
         return f"http://{host}:{self.port}/{quote(self.feed.local_id)}/salon"
 
@@ -95,8 +101,10 @@ def _handler(server: SalonServer) -> type[BaseHTTPRequestHandler]:
             if rest == ["eventos"]:
                 return self._events()
             if rest == ["frame.jpg"]:
-                wanted = parse_qs(url.query).get("v", [None])[0]
-                return self._frame(int(wanted) if wanted and wanted.isdigit() else None)
+                wanted = parse_qs(url.query).get("v", [""])[0]
+                # un `v` que no es un número normal se ignora (sin reventar el hilo)
+                ok = 0 < len(wanted) <= 12 and wanted.isascii() and wanted.isdigit()
+                return self._frame(int(wanted) if ok else None)
             return self._send(HTTPStatus.NOT_FOUND, b"No existe", "text/plain")
 
         def _frame(self, version: int | None) -> None:

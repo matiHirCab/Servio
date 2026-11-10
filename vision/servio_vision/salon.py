@@ -144,7 +144,10 @@ def build_snapshot(
         "ts": _iso(ts),
         "interval": interval,
         "video": video,
-        "frame": list(frame_size or zones.frame_size),
+        # un frame vacío (captura fallida) no sirve de proporción: van las zonas
+        "frame": list(
+            frame_size if frame_size and min(frame_size) > 0 else zones.frame_size
+        ),
         "tables": tables,
         "alerts": alerts,
         "counts": {s: counts.get(s, 0) for s in PLATE_STATES},
@@ -185,15 +188,18 @@ class SalonFeed:
         una vez; la vista sigue sin imagen, el pipeline sigue). Con `version`, solo
         si el frame guardado es el de esa foto: la página pide el de la foto que
         dibujó y, si ya hay otra lectura, se queda con la imagen que tenía."""
+        with self._changed:
+            frame, jpeg, current = self._frame, self._jpeg, self._frame_version
+        if version is not None and version != current:
+            return None
+        if frame is None or jpeg is not None:
+            return jpeg  # lo ya codificado (o nada) sale sin esperar a nadie
+        version = current
         # el pipeline nunca espera este candado: `on_reading` solo toma `_changed`
         with self._encode_lock:
-            with self._changed:
-                frame, jpeg, current = self._frame, self._jpeg, self._frame_version
-            if version is not None and version != current:
-                return None
-            if frame is None or jpeg is not None:
-                return jpeg
-            version = current
+            with self._changed:  # otro navegador pudo codificarlo mientras esperaba
+                if self._frame_version == version and self._jpeg is not None:
+                    return self._jpeg
             if self._encode_failed == version:
                 return None
             try:
