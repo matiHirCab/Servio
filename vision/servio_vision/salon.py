@@ -177,12 +177,15 @@ def display_size(frame: np.ndarray) -> np.ndarray:
 
 
 class Frame(NamedTuple):
-    """Lo que `frame_jpeg` devuelve: el JPEG de la foto `version`, o `None` con
-    `broken` si ese frame no se pudo codificar (ya quedó logueado)."""
+    """Lo que `frame_jpeg` devuelve: el JPEG de la foto `version`, o `None` si
+    ese frame no se pudo codificar (`broken`; ya quedó logueado)."""
 
     jpeg: bytes | None
     version: int
-    broken: bool
+
+    @property
+    def broken(self) -> bool:
+        return self.jpeg is None
 
 
 class SalonFeed:
@@ -211,49 +214,46 @@ class SalonFeed:
         self._encode_lock = threading.Lock()  # un solo navegador codifica por vez
         self._encode_failed = 0  # la versión cuyo frame no se pudo codificar
 
+    def _frame_state(self) -> tuple[np.ndarray | None, int, Frame | None]:
+        """Bajo el candado: el frame guardado, su versión y, si ya está resuelto
+        (codificado, o fallido), su `Frame`. Sin frame: `(None, versión, None)`."""
+        with self._changed:
+            if self._frame is None:
+                return None, self._version, None
+            done = self._jpeg is not None or self._encode_failed == self._version
+            return (
+                self._frame,
+                self._version,
+                Frame(self._jpeg, self._version) if done else None,
+            )
+
     def frame_jpeg(self) -> Frame | None:
         """El frame de la última foto como JPEG, con la versión de esa foto. Se
         codifica la primera vez que se pide, una vez por lectura aunque lo pidan
         varios navegadores. `None`: modo video apagado o sin lecturas. Un frame que
-        no se pudo codificar vuelve con `jpeg=None, broken=True` (queda logueado una
-        vez; la vista sigue sin imagen, el pipeline sigue)."""
-        with self._changed:
-            frame, jpeg, version, failed = (
-                self._frame,
-                self._jpeg,
-                self._version,
-                self._encode_failed,
-            )
-        if frame is None:
-            return None
-        if jpeg is not None or failed == version:  # resuelto: sale sin esperar a nadie
-            return Frame(jpeg, version, jpeg is None)
+        no se pudo codificar vuelve con `jpeg=None` (queda logueado una vez; la vista
+        sigue sin imagen, el pipeline sigue)."""
+        frame, version, done = self._frame_state()
+        if frame is None or done is not None:
+            return done  # resuelto (o nada): sale sin esperar a nadie
         # el pipeline nunca espera este candado: `on_reading` solo toma `_changed`
         with self._encode_lock:
-            with (
-                self._changed
-            ):  # lo de ahora: otro pudo codificarlo, o hay lectura nueva
-                frame, jpeg, version, failed = (
-                    self._frame,
-                    self._jpeg,
-                    self._version,
-                    self._encode_failed,
-                )
-            if frame is None:
-                return None
-            if jpeg is not None or failed == version:
-                return Frame(jpeg, version, jpeg is None)
+            frame, version, done = (
+                self._frame_state()
+            )  # otro pudo codificarlo, o hay lectura nueva
+            if frame is None or done is not None:
+                return done
             try:
                 jpeg = to_jpeg(display_size(frame))
             except (ValueError, cv2.error) as e:
                 logger.warning("No se pudo codificar el frame para la vista: %s", e)
                 with self._changed:
                     self._encode_failed = version
-                return Frame(None, version, True)
+                return Frame(None, version)
             with self._changed:
                 if self._version == version:  # si no, ya hay otra lectura
                     self._jpeg = jpeg
-            return Frame(jpeg, version, False)
+            return Frame(jpeg, version)
 
     def on_reading(
         self,

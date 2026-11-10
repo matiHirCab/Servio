@@ -8,10 +8,9 @@ navegador. Rutas (`<local>` es el `local_id` de la casa, `local` por defecto):
 - `/<local>/salon/eventos`  la misma foto por Server-Sent Events, cada vez que cambia
 - `/<local>/salon/frame.jpg` el último frame de la cámara, ya difuminado, para el
                             modo video de la página, con la versión de su foto
-                            en `X-Salon-Version`. Con `?v=N` espera (hasta
-                            FRAME_WAIT_S) a que la foto N exista y da su frame;
-                            si esa lectura ya pasó, 404; si el frame no se pudo
-                            codificar, 503. Solo con `--web-video`
+                            en `X-Salon-Version`. Con `?v=N`, solo si es el de la
+                            foto N (la que la página dibujó); si no, 404. Si el
+                            frame no se pudo codificar, 503. Solo con `--web-video`
                             (`SalonFeed(video=True)`), si no, 404
 - `/`                       redirige a `/<local>/salon`
 
@@ -35,7 +34,6 @@ logger = logging.getLogger("servio")
 
 PAGE = Path(__file__).with_name("static") / "salon.html"
 KEEPALIVE_S = 15.0  # un comentario SSE cada tanto, para que no se corte la conexión
-FRAME_WAIT_S = 10.0  # cuánto espera `frame.jpg?v=N` a que exista la foto N
 
 
 class SalonServer:
@@ -123,16 +121,14 @@ def _handler(server: SalonServer) -> type[BaseHTTPRequestHandler]:
             return self._send(HTTPStatus.NOT_FOUND, b"No existe", "text/plain")
 
         def _frame(self, version: int | None) -> None:
-            """El frame de la foto `version` (la que la página dibujó), esperando a
-            que exista si todavía no llegó; sin `version`, el último."""
+            """El frame de la foto `version` (la que la página dibujó); sin
+            `version`, el último."""
             if not feed.video:
                 return self._send(
                     HTTPStatus.NOT_FOUND,
                     "El modo video está apagado (--web-video)".encode(),
                     "text/plain; charset=utf-8",
                 )
-            if version is not None:
-                feed.wait(version - 1, FRAME_WAIT_S)  # hasta que haya foto >= version
             found = feed.frame_jpeg()
             if found is None or (version is not None and found.version != version):
                 return self._send(
@@ -140,7 +136,7 @@ def _handler(server: SalonServer) -> type[BaseHTTPRequestHandler]:
                     (
                         "Todavía no hay frame"
                         if found is None
-                        else "Esa lectura ya pasó; pedí el frame de la foto actual"
+                        else "Esa lectura no es la actual; pedí el frame de la foto actual"
                     ).encode(),
                     "text/plain; charset=utf-8",
                 )
@@ -176,8 +172,11 @@ def _handler(server: SalonServer) -> type[BaseHTTPRequestHandler]:
                 self.send_header(name, value)
             self.send_header("Content-Length", str(len(body)))
             self.send_header("Cache-Control", "no-store")
-            self.end_headers()
-            self.wfile.write(body)
+            try:
+                self.end_headers()
+                self.wfile.write(body)
+            except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
+                pass  # el navegador cortó (una bajada de frame.jpg que ya no quería)
 
         def _events(self) -> None:
             self.send_response(HTTPStatus.OK)

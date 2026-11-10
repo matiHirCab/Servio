@@ -128,23 +128,17 @@ def test_frame_is_served_with_web_video_once_there_is_a_reading(video_server):
     assert get_with_headers(f"{base}/frame.jpg?v=1")[1]["X-Salon-Version"] == "1"
 
 
-def test_frame_request_waits_for_its_reading(video_server, monkeypatch):
-    """`?v=N` espera a que exista la foto N: la página pide el frame de la foto
-    que dibujó y el servidor se lo da aunque la foto llegue un instante después
-    (sin eso, una conexión lenta nunca alcanzaba al frame)."""
-    from servio_vision import salon_web
-
-    monkeypatch.setattr(salon_web, "FRAME_WAIT_S", 0.3)
+def test_frame_is_served_only_for_its_reading(video_server):
+    """`?v=N`: el frame de la foto que la página dibujó, o 404. La página conoce N
+    recién después de que se publicó, así que no hace falta esperar nada."""
     base = f"http://127.0.0.1:{video_server.port}/casa-1/salon"
     pipeline = pipeline_for(video_server)
-    read(pipeline, 1)  # foto 1
-    threading.Timer(0.05, read, args=(pipeline, 1)).start()  # la foto 2, enseguida
+    read(pipeline, 2)  # fotos 1 y 2
     status, headers, _ = get_with_headers(f"{base}/frame.jpg?v=2")
     assert status == 200 and headers["X-Salon-Version"] == "2"
-    pipeline.process_frame(FRAME, T0)  # foto 3: la 2 ya pasó
-    code, text = status_of(f"{base}/frame.jpg?v=2")
-    assert code == 404 and "ya pasó" in text
-    assert status_of(f"{base}/frame.jpg?v=99")[0] == 404  # nunca llega: plazo
+    for stale in (1, 99):  # una que ya pasó, una que no existe
+        code, text = status_of(f"{base}/frame.jpg?v={stale}")
+        assert code == 404 and "no es la actual" in text
     for odd in ("rara", "%C2%B2", "9" * 40):  # un `v` raro se ignora
         assert get(f"{base}/frame.jpg?v={odd}")[0] == 200
 
