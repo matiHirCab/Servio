@@ -6,7 +6,9 @@ Levanta un servidor HTTP mínimo con las rutas de `servio_vision/dashboard.py`:
 
 y abrí http://localhost:8090/<local_id>/dashboard?rol=encargado (o ?rol=dueno).
 `--demo` carga el historial simulado (fixtures/restaurante/historial.jsonl) en la
-base, como `tools/metricas.py`, para ver números sin haber corrido la cámara.
+base, como `tools/metricas.py`, para ver números sin haber corrido la cámara: lo
+suma a las métricas de este local (el dashboard de la cámara no lo ve) y abre el
+dashboard en los días que cubre el historial.
 
 Con la cámara (`main.py --web`) el dashboard sale en el mismo servidor que el
 salón en vivo (`salon_web.py`); esta herramienta es para verlo sin cámara.
@@ -24,7 +26,7 @@ import sqlalchemy
 
 from servio_vision import settings
 from servio_vision.dashboard import Dashboard
-from servio_vision.db import Database
+from servio_vision.db import HISTORY_LOCAL, Database
 from servio_vision.metrics import HISTORY
 from servio_vision.restaurant import Restaurant
 from servio_vision.roles import DEFAULT_CONFIG, Roles
@@ -57,6 +59,18 @@ def make_handler(dashboard: Dashboard) -> type[BaseHTTPRequestHandler]:
     return Handler
 
 
+def history_days(db: Database) -> tuple[str, str] | None:
+    """Primer y último día del historial simulado, para abrir el dashboard ahí."""
+    row = db.query(
+        "SELECT MIN(servido_at) AS desde, MAX(servido_at) AS hasta"
+        " FROM platos_servidos WHERE local_id = :h",
+        {"h": HISTORY_LOCAL},
+    )[0]
+    if not row["desde"]:
+        return None
+    return row["desde"][:10], row["hasta"][:10]
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Dashboard de encargado y dueño.")
     parser.add_argument("--db", type=Path, help="un SQLite puntual")
@@ -83,15 +97,24 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     restaurant = Restaurant.load()
     db.load_restaurant(restaurant)
+    locales = None
+    period = ""
     if args.demo and HISTORY.exists():
         imported = db.import_history(HISTORY, restaurant)
         if imported:
             print(f"(historial importado a la base: {imported} avisos)")
+        locales = (cfg.local_id, HISTORY_LOCAL)
+        days = history_days(db)
+        if days:
+            period = f"&desde={days[0]}&hasta={days[1]}"
     server = ThreadingHTTPServer(
-        (args.host, args.port), make_handler(Dashboard(db, roles))
+        (args.host, args.port),
+        make_handler(Dashboard(db, roles, locales=locales)),
     )
     base = f"http://{args.host}:{args.port}/{cfg.local_id}/dashboard"
-    print(f"Encargado: {base}?rol=encargado\nDueño:     {base}?rol=dueno")
+    print(
+        f"Encargado: {base}?rol=encargado{period}\nDueño:     {base}?rol=dueno{period}"
+    )
     try:
         server.serve_forever()
     except KeyboardInterrupt:

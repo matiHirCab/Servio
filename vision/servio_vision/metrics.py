@@ -7,8 +7,12 @@ y espera del siguiente plato. Las usan `tools/metricas.py` (terminal e imagen) y
 Qué es cada una, cómo se calcula y quién la ve: docs/context/13-metricas.md.
 """
 
-from datetime import datetime, timedelta, timezone
+import re
+from collections.abc import Mapping
+from dataclasses import dataclass
+from datetime import UTC, date, datetime, timedelta, timezone
 from pathlib import Path
+from typing import Any
 
 from servio_vision import VISION_DIR
 from servio_vision.db import Database
@@ -228,6 +232,120 @@ SELECT local_id, mesa_id, abierto_at AS at, resuelto_at AS fin FROM avisos
 """
 
 
+# --- período y local (D-1b) ---
+
+# Las tablas de hechos (tienen `local_id` y una fecha): el período y el local se
+# aplican sobre estas. Las de la comanda (mesas, mozos, platos) son compartidas.
+SCOPED_TABLES = {
+    "avisos": "abierto_at",
+    "respuestas": "respondido_at",
+    "platos_servidos": "servido_at",
+}
+# `FROM avisos a` / `JOIN respuestas r` / `FROM respuestas GROUP BY …`: la tabla y,
+# si tiene, su alias (lo que sigue y no es una palabra de SQL).
+_SCOPED_FROM = re.compile(
+    r"\b(FROM|JOIN)\s+(" + "|".join(SCOPED_TABLES) + r")\b"
+    r"(\s+(?!(?:WHERE|GROUP|ORDER|JOIN|LEFT|INNER|ON|UNION|LIMIT)\b)[a-z_]\w*)?",
+    re.IGNORECASE,
+)
+
+
+@dataclass(frozen=True)
+class Scope:
+    """Qué filas cuentan para las métricas: de qué locales y entre qué días.
+
+    `desde` y `hasta` son días del salón (hora de Uruguay), los dos incluidos;
+    None en los dos = toda la historia. `locales` None = todos los locales (lo que
+    hacen `tools/metricas.py` y `/metricas`, que juntan el historial simulado).
+
+    No toca las consultas a mano: `apply()` cambia cada `FROM avisos a` por
+    `FROM (SELECT * FROM avisos WHERE <local y período>) a`, así las mismas
+    plantillas (las que se muestran con --sql) sirven filtradas o no. Las fechas
+    se comparan como texto: lo de la cámara está en UTC y termina en "Z", el
+    historial está en hora local sin zona, y cada uno se compara con sus bordes."""
+
+    locales: tuple[str, ...] | None = None
+    desde: date | None = None
+    hasta: date | None = None
+
+    def _bounds(self) -> dict[str, str]:
+        assert self.desde is not None and self.hasta is not None
+        start = datetime.combine(self.desde, datetime.min.time())
+        end = datetime.combine(self.hasta + timedelta(days=1), datetime.min.time())
+
+        def utc(at: datetime) -> str:
+            return (
+                at.replace(tzinfo=LOCAL_TZ)
+                .astimezone(UTC)
+                .strftime("%Y-%m-%dT%H:%M:%S")
+            )
+
+        # sin "Z" ni fracción: "…T03:00:00" es menor que "…T03:00:00.5Z" y que
+        # "…T03:00:00Z", así el borde de abajo incluye y el de arriba excluye
+        return {
+            "_desde": start.isoformat(),
+            "_hasta": end.isoformat(),
+            "_desde_utc": utc(start),
+            "_hasta_utc": utc(end),
+        }
+
+    def _condition(self, column: str) -> tuple[list[str], dict[str, Any]]:
+        parts: list[str] = []
+        params: dict[str, Any] = {}
+        if self.locales is not None:
+            names = [f"_local{i}" for i in range(len(self.locales))]
+            params.update(zip(names, self.locales, strict=True))
+            inside = ", ".join(f":{n}" for n in names) or "NULL"
+            parts.append(f"local_id IN ({inside})")
+        if self.desde is not None and self.hasta is not None:
+            params.update(self._bounds())
+            parts.append(
+                f"(({column} LIKE '%Z' AND {column} >= :_desde_utc"
+                f" AND {column} < :_hasta_utc)"
+                f" OR ({column} NOT LIKE '%Z' AND {column} >= :_desde"
+                f" AND {column} < :_hasta))"
+            )
+        return parts, params
+
+    def apply(self, sql: str) -> tuple[str, dict[str, Any]]:
+        """La consulta filtrada y los parámetros que agrega."""
+        extra: dict[str, Any] = {}
+
+        def scoped(m: re.Match) -> str:
+            keyword, table, alias = m.group(1), m.group(2), m.group(3)
+            parts, params = self._condition(SCOPED_TABLES[table.lower()])
+            if not parts:
+                return m.group(0)
+            extra.update(params)
+            where = " AND ".join(parts)
+            return (
+                f"{keyword} (SELECT * FROM {table} WHERE {where}){alias or ' ' + table}"
+            )
+
+        return _SCOPED_FROM.sub(scoped, sql), extra
+
+
+class ScopedDatabase:
+    """La base vista a través de un `Scope`: `query()` filtra las tablas de hechos
+    y el resto (`render`, `elapsed`, `local_id`…) es el de la base. Se le pasa a
+    `compute()` en lugar de la base."""
+
+    def __init__(self, db: Database, scope: Scope) -> None:
+        self.db = db
+        self.scope = scope
+
+    def query(self, sql: str, params: Mapping[str, Any] | None = None):
+        scoped, extra = self.scope.apply(sql)
+        return self.db.query(scoped, {**(params or {}), **extra})
+
+    def __getattr__(self, name: str):
+        return getattr(self.db, name)
+
+
+# Lo que leen las funciones de métricas: la base entera o filtrada por un Scope.
+MetricsDb = Database | ScopedDatabase
+
+
 def _time(ts: str) -> datetime:
     """Hora local del salón, sin zona: lo de la cámara (UTC, termina en "Z") se
     pasa a LOCAL_TZ; el historial (sin zona) ya está en hora local."""
@@ -242,7 +360,7 @@ def _service(at: datetime) -> tuple[str, str]:
     return at.date().isoformat(), kind
 
 
-def table_visits(db: Database) -> list[tuple[str, datetime, datetime]]:
+def table_visits(db: MetricsDb) -> list[tuple[str, datetime, datetime]]:
     """Visitas de mesa: (mesa, primer plato servido, platos retirados). Una visita
     empieza con el primer plato después del último retiro y termina con el
     retiro de la mesa terminada. Lo que queda sin retirar no cuenta: si la mesa
@@ -294,7 +412,7 @@ def rotation(visits: list[tuple[str, datetime, datetime]]) -> dict | None:
     }
 
 
-def waiter_load(db: Database, visits: list) -> list[tuple[str, float, float | None]]:
+def waiter_load(db: MetricsDb, visits: list) -> list[tuple[str, float, float | None]]:
     """Carga por mozo: mesas atendidas por servicio y minutos promedio hasta
     retirar una mesa terminada (de `SQL_ATTEND`). De la más cargada a la menos."""
     waiter = {r["mesa"]: r["mozo"] for r in db.query(SQL_TABLE_WAITER)}
@@ -309,7 +427,7 @@ def waiter_load(db: Database, visits: list) -> list[tuple[str, float, float | No
     return sorted(rows, key=lambda r: -r[1])
 
 
-def peak_hours(db: Database) -> list[tuple[str, int, float | None]]:
+def peak_hours(db: MetricsDb) -> list[tuple[str, int, float | None]]:
     """Horas pico: por franja de PEAK_SLOT_MIN, avisos y % de mesas terminadas que
     esperaron más de UNATTENDED_LIMIT_MIN. Ordenado por hora."""
     slots: dict[str, list] = {}
@@ -327,7 +445,7 @@ def peak_hours(db: Database) -> list[tuple[str, int, float | None]]:
     ]
 
 
-def operation_metrics(db: Database) -> dict:
+def operation_metrics(db: MetricsDb) -> dict:
     """Métricas de operación de M-1 que no estaban en el reporte del pitch."""
 
     def query(template: str, params: dict | None = None):
@@ -366,9 +484,12 @@ def operation_metrics(db: Database) -> dict:
     }
 
 
-def compute(db: Database, operation: bool = True) -> dict:
+def compute(db: MetricsDb, operation: bool = True, scope: Scope | None = None) -> dict:
     """Todas las métricas. `operation=False` deja afuera las de operación (la
-    imagen y el resumen de `/metricas` no las usan)."""
+    imagen y el resumen de `/metricas` no las usan). `scope`: solo las filas de
+    esos locales y ese período (el dashboard); sin scope, toda la base."""
+    if scope is not None:
+        db = ScopedDatabase(db if isinstance(db, Database) else db.db, scope)
 
     def query(template: str):
         # lo que pasó en vivo (`:local`) es solo de esta casa; el historial y los
