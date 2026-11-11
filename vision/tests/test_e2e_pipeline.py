@@ -11,15 +11,15 @@ esperados de `fixtures/pipeline/` y revisar el diff en el PR:
 
 import json
 import os
-from datetime import datetime
+import sys
 from pathlib import Path
 
-import cv2
-import numpy as np
 import pytest
 
-import main as loop
-from servio_vision.zones import TableZone, Zones, save_zones
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
+
+import eval as evaluation
+
 from tests.test_alert_engine import FIXTURES, SCENARIOS
 
 GOLDEN = FIXTURES / "pipeline"
@@ -28,90 +28,24 @@ UPDATE = os.getenv("SERVIO_UPDATE_GOLDEN", "").strip() == "1"
 # esperado en fixtures/pipeline/). Si viene con el formato del log (`event` en cada
 # línea), filtrar las observaciones antes de pasársela al fake.
 SESSIONS: list[str] = []
-SIZE = (200, 100)  # ancho × alto de las fotos sintéticas
-
-
-def write_frames(folder: Path, count: int) -> None:
-    """Una foto negra por lectura: el fake no mira la imagen."""
-    folder.mkdir()
-    frame = np.zeros((SIZE[1], SIZE[0], 3), np.uint8)
-    for n in range(count):
-        cv2.imwrite(str(folder / f"{n:04d}.png"), frame)
-
-
-def alert_events(log: Path) -> list[dict]:
-    """Los avisos del log con el formato de `fixtures/expected/`: segundos desde la
-    primera observación."""
-    events = [json.loads(line) for line in log.read_text("utf-8").splitlines()]
-    start = datetime.fromisoformat(
-        next(e["ts"] for e in events if e["event"] == "observation")
-    )
-    return [
-        {
-            "at_seconds": int(
-                (datetime.fromisoformat(e["ts"]) - start).total_seconds()
-            ),
-            "event": e["event"],
-            "type": e["type"],
-            "table_id": e["table_id"],
-        }
-        for e in events
-        if e["event"].startswith("alert_")
-    ]
 
 
 @pytest.mark.parametrize("name", SCENARIOS + SESSIONS)
-def test_pipeline_alerts_match_golden(name, tmp_path, monkeypatch):
-    fixture = FIXTURES / "observations" / f"{name}.jsonl"
-    lines = [json.loads(line) for line in fixture.read_text("utf-8").splitlines()]
-    table_ids = sorted({line["table_id"] for line in lines})
-    readings = len(lines) // len(table_ids)
-    frames = tmp_path / "frames"
-    write_frames(frames, readings)
-    # las mesas, una al lado de la otra, cubriendo la foto
-    width = SIZE[0] // len(table_ids)
-    zones = Zones(
-        frame_size=SIZE,
-        tables=[
-            TableZone(
-                table_id=table_id,
-                name=table_id,
-                polygon=[
-                    (i * width, 0),
-                    ((i + 1) * width - 1, 0),
-                    ((i + 1) * width - 1, SIZE[1] - 1),
-                    (i * width, SIZE[1] - 1),
-                ],
-            )
-            for i, table_id in enumerate(table_ids)
-        ],
-    )
-    zones_path = tmp_path / "zones.json"
-    save_zones(zones, zones_path)
-    # umbrales de producción y base SQLite junto al log de tmp_path (conftest)
-    for var in ("DEMO_MODE", "DATABASE_URL"):
-        monkeypatch.delenv(var, raising=False)
-    monkeypatch.chdir(tmp_path)
-
-    code = loop.main(
-        [
-            "--source", str(frames),
-            "--zones", str(zones_path),
-            "--classifier", "fake",
-            "--fake-mode", "replay",
-            "--fixture", str(fixture),
-            "--interval", "30",
-            "--no-telegram",
-        ]
-    )  # fmt: skip
-
-    assert code == 0
-    got = alert_events(tmp_path / "eventos.jsonl")
-    golden = GOLDEN / f"{name}.alerts.json"
+def test_pipeline_alerts_match_golden(name, tmp_path):
+    """Lo mismo que corre `tools/eval.py --all` para «escenarios que pasan»: el
+    escenario por `main.py` entero con el fake, en una carpeta temporal con sus
+    propios log y base, comparado con `fixtures/pipeline/`."""
+    result = evaluation.run_scenario(name, tmp_path)
     if UPDATE:
+        # un pipeline caído no regenera nada: el esperado quedaría vacío
+        assert result["corrida_ok"], result["diferencias"]
+        golden = GOLDEN / f"{name}.alerts.json"
         golden.parent.mkdir(exist_ok=True)
         golden.write_text(
-            "[\n" + ",\n".join("  " + json.dumps(e) for e in got) + "\n]\n", "utf-8"
+            "[\n"
+            + ",\n".join("  " + json.dumps(e) for e in result["avisos"])
+            + "\n]\n",
+            "utf-8",
         )
         pytest.fail(f"{golden.name} regenerado: revisar el diff")
-    assert got == json.loads(golden.read_text("utf-8"))
+    assert result["pasa"], result["diferencias"]

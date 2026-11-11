@@ -18,7 +18,15 @@ from typing import Any
 import cv2
 from pydantic import ValidationError
 
-from servio_vision import alerts, framing, llm, privacy, prompt, recording
+from servio_vision import (
+    alerts,
+    framing,
+    llm,
+    privacy,
+    prompt,
+    recording,
+    utf8_console,
+)
 from servio_vision.alerts.config import load_config
 from servio_vision.alerts.notify import TelegramNotifier
 from servio_vision.capture import (
@@ -633,11 +641,7 @@ def _quiet_libraries(record: logging.LogRecord) -> bool:
 def setup_logging(verbose: bool = False) -> None:
     """Terminal limpia: arranque, mesas y platos nuevos, avisos y errores.
     Con `--verbose`, todo (cada llamada a Claude, pedidos HTTP, advertencias)."""
-    # La consola de Windows (cp1252) no puede escribir los emojis de los avisos:
-    # sin esto, el aviso impreso con --no-telegram tira UnicodeEncodeError.
-    for stream in (sys.stdout, sys.stderr):
-        if hasattr(stream, "reconfigure"):
-            stream.reconfigure(encoding="utf-8", errors="replace")
+    utf8_console()
     logging.basicConfig(
         level=logging.DEBUG if verbose else logging.INFO,
         format="%(asctime)s %(levelname)s %(message)s",

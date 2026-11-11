@@ -71,7 +71,7 @@ Si el tracker le cambia el id a un plato (hereda los tiempos del anterior), sigu
 | Costo por mesa por hora | Llamadas al modelo × costo por llamada / (mesas × horas). | log de llamadas (C-2) | Define el precio mínimo. El dueño lo ve en `costos_y_configuracion`. |
 | Salud | % del servicio con cámara, modelo y conexión andando. | latido de C-4 | Un local sin Servio la mitad de la noche no mide nada. |
 
-Todas juntas van en el tablero de B-5 (`servio eval --all`).
+Todas juntas van en el tablero de números (B-3): `python tools/eval.py --all` las imprime y las guarda con fecha en `vision/out/eval/tablero-<fecha>.json`, y compara con la corrida anterior (`--comparar A B` para otras dos). Los avisos falsos por hora quedan vacíos hasta C-5; la salud (C-4) todavía no está en el tablero. Las etiquetas propias se hacen con `tools/etiquetar.py` sobre las sesiones grabadas (B-1).
 
 ## Cómo verlas
 
