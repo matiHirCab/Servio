@@ -1,6 +1,6 @@
 # fixtures/
 
-Observaciones de mesa de ejemplo y los avisos que tienen que salir, con el formato de [03-contratos.md](../docs/context/03-contratos.md). Sirven para probar las reglas y Telegram sin video ni modelo: tests del motor (MAT-3), `vision/tools/replay.py` (MAT-6) y plan B de la demo. Los valida `vision/tests/test_alert_models.py` contra `servio_vision/alerts/models.py`.
+Observaciones de mesa de ejemplo y los avisos que tienen que salir, con el formato de [03-contratos.md](../docs/context/03-contratos.md). Sirven para probar las reglas y Telegram sin video ni modelo: tests del motor (MAT-3), `vision/tools/replay.py` (MAT-6), el test de punta a punta (`vision/tests/test_e2e_pipeline.py`, A-8) y plan B de la demo. Los valida `vision/tests/test_alert_models.py` contra `servio_vision/alerts/models.py`.
 
 Dueño: Matías (ver [09-convenciones.md](../docs/context/09-convenciones.md)). Si cambiás el contrato, actualizá los fixtures en el mismo PR.
 
@@ -12,6 +12,8 @@ Una observación de mesa por línea (`table_id` arriba), una lectura cada **30 s
 |---|---|---|
 | `mesa_completa.jsonl` (T1, 27 líneas) | 0–30 s mesa vacía sin gente. A los 60 s llega gente, sin platos. 90–150 s `T1-p1` y `T1-p2` en `lleno`. 180–240 s `comiendo`. 270–330 s `por_terminar`. 360–480 s `vacio`. A los 510 s se retiran y la gente sigue (3 min). 720–780 s plato nuevo `T1-p3` en `lleno`. | `table_status`: `libre → servida → comiendo → por_terminar → terminada → libre → servida`. `por_terminar` no avisa. `mesa_terminada` se abre a los 360 s (los dos platos en `vacio`) y se resuelve a los 510 s (retiraron los platos). `plato_vacio` no se abre: los dos platos se vacían a la vez y avisa la mesa. |
 | `plato_lleno_mucho.jsonl` (T2, 31 líneas) | `T2-p1` en `lleno` todo el tiempo. Hay gente de 0 a 780 s (13 min) y no hay desde los 810 s. | `plato_lleno_mucho` se abre a los 600 s, recordatorio a los 780 s (R = 3 min) y se resuelve a los 840 s (segunda lectura seguida con `people_present: false`; una sola no lo cierra). |
+| `plato_vacio.jsonl` (T3, 21 líneas) | `T3-p1` está `comiendo` todo el tiempo. `T3-p2`: `lleno` 0–30 s, `comiendo` 60–90 s, `por_terminar` 120–150 s, `vacio` 180–420 s, y a los 450 s se lo llevan. La mesa nunca queda `terminada` (p1 sigue comiendo). | `plato_vacio` se abre a los 240 s (T1 = 60 s en `vacio`), recordatorio a los 420 s (R = 3 min) y se resuelve a los 450 s (retiraron ese plato). |
+| `mesa_terminada_recordatorios.jsonl` (T4, 27 líneas) | `T4-p1` y `T4-p2` en `lleno` 0–60 s, `comiendo` 90–150 s y `vacio` de 180 a 720 s. Nadie los retira hasta los 750 s. | `mesa_terminada` se abre a los 180 s; recordatorios a los 360 s («terminó hace 3 min») y a los 540 s («hace 6 min»), y no un tercero a los 720 s (máximo 2); se resuelve a los 750 s con «Retiraron los platos 9 min 30 s después de que terminó la mesa». |
 | `id_cambiado.jsonl` (T1, 12 líneas) | `T1-p1` (`comiendo`, `arriba-izquierda`) hasta 150 s. A los 180 s llegan **juntos** `T1-p1` (el suavizado lo retiene una lectura) y `T1-p4` en la misma posición, como en una corrida real; desde 210 s solo `T1-p4`. `T1-p2` (`abajo-derecha`) deja de venir a los 330 s (como con el suavizado, que lo retiene una lectura). | Ninguno. En `alerts/state.py`, `T1-p4` es provisional a los 180 s (no cuenta para las reglas) y a los 210 s hereda los tiempos de `T1-p1` (`first_seen` y `state_since` = 0 s). `T1-p2` se retira a los 330 s. |
 
 ## `expected/<escenario>.alerts.json`
@@ -23,3 +25,15 @@ Uno por escenario: los eventos que tiene que producir `alerts` al reproducirlo, 
 ```
 
 `event`: `alert_opened` | `alert_reminder` | `alert_resolved`. `at_seconds` se cuenta desde la primera línea del `.jsonl`.
+
+## `pipeline/<escenario>.alerts.json`
+
+Los avisos del mismo escenario cuando pasa por el **pipeline entero** (`main.py --classifier fake --fake-mode replay`): fuente, recorte, suavizado y alerts. Los compara `vision/tests/test_e2e_pipeline.py`, así que el CI falla si cambian. Mismo formato que `expected/`.
+
+Difieren de `expected/` a propósito: las observaciones ya vienen suavizadas y el pipeline las vuelve a suavizar, así que un cambio de estado se confirma una lectura más tarde (casi todos los avisos se corren 30 s; `mesa_terminada` de T4 abre 60 s después). `plato_lleno_mucho` e `id_cambiado` salen iguales.
+
+Si un cambio mueve los avisos a propósito, regenerarlos desde `vision/` y revisar el diff en el PR:
+
+```bash
+SERVIO_UPDATE_GOLDEN=1 pytest tests/test_e2e_pipeline.py
+```

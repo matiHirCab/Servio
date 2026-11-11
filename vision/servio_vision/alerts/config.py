@@ -5,9 +5,10 @@ Prioridad: flag de CLI > variable de entorno (`ALERT_T1`, `ALERT_T2`, `ALERT_REM
 > valor por defecto (producción, o `2 × interval` con `--demo`).
 """
 
-import os
 from collections.abc import Mapping
 from dataclasses import dataclass
+
+from servio_vision import settings
 
 # Producción (05-reglas-alertas.md).
 PROD_T1 = 60  # plato_vacio: plato en `vacio` hace ≥ T1
@@ -16,7 +17,7 @@ PROD_REMINDER = 3 * 60  # R: recordatorio si la condición sigue
 MAX_REMINDERS = 2
 
 # Segundos entre lecturas por defecto (`--interval` de main.py, 04-vision.md).
-DEFAULT_INTERVAL = 30
+DEFAULT_INTERVAL = settings.DEFAULT_INTERVAL  # un solo default de cadencia
 
 # El suavizado necesita 2 lecturas para aceptar un cambio: es lo mínimo observable.
 MIN_READINGS = 2
@@ -73,21 +74,30 @@ def load_config(
     reminder: int | None = None,
     env: Mapping[str, str] | None = None,
 ) -> AlertConfig:
-    """Arma la config de avisos. `demo` ya resuelto por el llamador (--demo le gana a DEMO_MODE)."""
-    env = os.environ if env is None else env
+    """Arma la config de avisos. `demo` ya resuelto por el llamador (--demo le gana a
+    DEMO_MODE). Sin `env`, los umbrales salen de la configuración (settings.py)."""
     flags = {"t1": t1, "t2": t2, "reminder": reminder}
+    if env is None:
+        cfg = settings.current()  # ya validados (enteros ≥ 1)
+        configured = {
+            "t1": cfg.alert_t1,
+            "t2": cfg.alert_t2,
+            "reminder": cfg.alert_reminder,
+        }
+    else:
+        configured = {key: _from_env(env, ENV_VARS[key]) for key in flags}
     if demo:
         defaults = dict.fromkeys(flags, MIN_READINGS * interval)
     else:
         defaults = {"t1": PROD_T1, "t2": PROD_T2, "reminder": PROD_REMINDER}
 
-    values = {}
+    values: dict[str, int] = {}
     for key, flag in flags.items():
-        from_env = _from_env(env, ENV_VARS[key])
+        from_config = configured[key]
         if flag is not None:
             values[key] = flag
-        elif from_env is not None:
-            values[key] = from_env
+        elif from_config is not None:
+            values[key] = from_config
         else:
             values[key] = defaults[key]
     return AlertConfig(interval=interval, **values)

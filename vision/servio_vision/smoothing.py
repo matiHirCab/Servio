@@ -24,19 +24,19 @@ cliente no va a comer). Después, las lecturas `por_terminar` no lo devuelven
 atrás; solo un plato que se vuelve a servir (`lleno`/`comiendo`) sale de `vacio`.
 Necesita el `ts` de cada lectura (`update(items, ts)`).
 
-Configurable por `.env` (se lee al crear el suavizado; vacío = el valor de arriba):
-`SMOOTH_READINGS` (2), `SMOOTH_HARD_READINGS` (3) y `SMOOTH_MIN_CONFIDENCE` (0.8).
-Menos lecturas o menos confianza = cambia de estado más rápido, pero una lectura
-mala pesa más. La Decisions API de OpenAI da confianzas más bajas que Claude.
+Configurable (`settings.py`: `SMOOTH_READINGS` (2), `SMOOTH_HARD_READINGS` (3) y
+`SMOOTH_MIN_CONFIDENCE` (0.8) en el `.env` o el toml; `app.py` los pasa por
+parámetro). Menos lecturas o menos confianza = cambia de estado más rápido, pero una
+lectura mala pesa más. La Decisions API de OpenAI da confianzas más bajas que Claude.
 
 Uso: un `TableSmoother` por mesa; `update()` con los ítems de cada lectura
 válida (si el clasificador devolvió `None`, no se llama).
 """
 
-import os
 from dataclasses import dataclass
 from datetime import datetime
 
+from servio_vision import settings
 from servio_vision.schemas import Item, PlateState
 
 STATE_ORDER: tuple[PlateState, ...] = ("lleno", "comiendo", "por_terminar", "vacio")
@@ -44,19 +44,6 @@ NEIGHBOR_READINGS = 2
 HARD_READINGS = 3
 HARD_MIN_CONFIDENCE = 0.8
 MISSING_TO_REMOVE = 2
-
-
-def _env_number(name: str, default: float, low: float, high: float) -> float:
-    value = (os.environ.get(name) or "").strip()
-    if not value:
-        return default
-    try:
-        number = float(value)
-    except ValueError as e:
-        raise ValueError(f"{name}={value!r} no es un número") from e
-    if not low <= number <= high:
-        raise ValueError(f"{name}={value!r} tiene que estar entre {low} y {high}")
-    return number
 
 
 def is_hard_change(current: PlateState, new: PlateState) -> bool:
@@ -78,18 +65,34 @@ class _Track:
 class TableSmoother:
     """Suaviza los platos de una mesa entre lecturas."""
 
-    def __init__(self, finished_after: float | None = None) -> None:
+    def __init__(
+        self,
+        finished_after: float | None = None,
+        *,
+        readings: int | None = None,
+        hard_readings: int | None = None,
+        min_confidence: float | None = None,
+    ) -> None:
+        """Umbrales por parámetro (los pasa `app.py`); los que faltan salen de la
+        configuración del entorno (`settings.current()`, que valida los rangos)."""
         self._tracks: dict[str, _Track] = {}
         self.finished_after = finished_after
-        self.neighbor_readings = int(
-            _env_number("SMOOTH_READINGS", NEIGHBOR_READINGS, 1, 10)
-        )
-        self.hard_readings = int(
-            _env_number("SMOOTH_HARD_READINGS", HARD_READINGS, 1, 10)
-        )
-        self.hard_min_confidence = _env_number(
-            "SMOOTH_MIN_CONFIDENCE", HARD_MIN_CONFIDENCE, 0, 1
-        )
+        if None in (readings, hard_readings, min_confidence):
+            cfg = settings.current()
+            readings = cfg.smooth_readings if readings is None else readings
+            hard_readings = (
+                cfg.smooth_hard_readings if hard_readings is None else hard_readings
+            )
+            min_confidence = (
+                cfg.smooth_min_confidence if min_confidence is None else min_confidence
+            )
+        # los tres ya tienen valor: el que faltaba salió de la configuración
+        assert readings is not None
+        assert hard_readings is not None
+        assert min_confidence is not None
+        self.neighbor_readings = int(readings)
+        self.hard_readings = int(hard_readings)
+        self.hard_min_confidence = float(min_confidence)
 
     def update(self, items: list[Item], ts: datetime | None = None) -> list[Item]:
         """Procesa una lectura y devuelve los platos suavizados de la mesa."""
@@ -118,6 +121,38 @@ class TableSmoother:
                 del self._tracks[item_id]
 
         return [track.accepted for track in self._tracks.values()]
+
+    def export_state(self) -> dict:
+        """Los platos que sigue, con lo que falta para confirmar un cambio de estado,
+        como JSON: tras un reinicio, una sola lectura dudosa no los cambia."""
+        return {
+            "tracks": {
+                item_id: {
+                    "accepted": t.accepted.model_dump(mode="json"),
+                    "candidate": t.candidate,
+                    "streak": t.streak,
+                    "missing": t.missing,
+                    "state_since": t.state_since.isoformat() if t.state_since else None,
+                    "finished": t.finished,
+                }
+                for item_id, t in self._tracks.items()
+            }
+        }
+
+    def restore_state(self, data: dict) -> None:
+        self._tracks = {
+            item_id: _Track(
+                accepted=Item.model_validate(t["accepted"]),
+                candidate=t["candidate"],
+                streak=int(t["streak"]),
+                missing=int(t["missing"]),
+                state_since=datetime.fromisoformat(t["state_since"])
+                if t["state_since"]
+                else None,
+                finished=bool(t["finished"]),
+            )
+            for item_id, t in data["tracks"].items()
+        }
 
     def remap_boxes(self, remap) -> None:
         """Pasa las cajas de los platos al recorte nuevo de la mesa (si se movió)."""
@@ -170,6 +205,8 @@ class TableSmoother:
         )
         if new != track.candidate:
             track.candidate, track.streak = new, 0
+        # un plato visible siempre trae estado (Item lo exige), y el aceptado también
+        assert current is not None and new is not None
         hard = is_hard_change(current, new)
         if hard and (item.confidence or 0) < self.hard_min_confidence:
             # para un cambio difícil, una lectura dudosa corta la racha

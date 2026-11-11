@@ -11,7 +11,10 @@
 import logging
 import os
 import statistics
+import threading
 from dataclasses import dataclass
+
+from servio_vision import settings
 
 logger = logging.getLogger(__name__)
 
@@ -64,12 +67,13 @@ class PlateDetector:
         min_rel: float = 0.35,
         device: str | None = None,
     ):
-        weights = weights or os.environ.get("YOLO_WEIGHTS") or None
+        if weights is None or device is None:
+            # lo que no vino por parámetro (app.py lo pasa) sale de la configuración
+            cfg = settings.current()
+            weights = weights or (str(cfg.yolo_weights) if cfg.yolo_weights else None)
+            device = device or cfg.yolo_device
         if weights and not os.path.exists(weights):
-            logger.warning(
-                "YOLO_WEIGHTS=%s no existe (¿corrés desde otra carpeta?), uso YOLOE",
-                weights,
-            )
+            logger.warning("YOLO_WEIGHTS=%s no existe, uso YOLOE", weights)
             weights = None
         if weights:
             from ultralytics import YOLO
@@ -86,17 +90,21 @@ class PlateDetector:
         self.imgsz = imgsz
         self.min_rel = min_rel
         # torchvision de Windows suele ser build de CPU: por defecto, CPU
-        self.device = device or os.environ.get("YOLO_DEVICE") or "cpu"
+        self.device = device or "cpu"
+        # El pipeline clasifica varias mesas a la vez en hilos y comparten este
+        # modelo: el predictor de ultralytics no es seguro entre hilos.
+        self._predict_lock = threading.Lock()
 
     def detect(self, image) -> list[Detection]:
         """`image`: PIL.Image o array RGB."""
-        r = self.model.predict(
-            image,
-            conf=self.conf,
-            imgsz=self.imgsz,
-            device=self.device,
-            verbose=False,
-        )[0]
+        with self._predict_lock:
+            r = self.model.predict(
+                image,
+                conf=self.conf,
+                imgsz=self.imgsz,
+                device=self.device,
+                verbose=False,
+            )[0]
         names = r.names
         dets = [
             Detection(tuple(box), float(c), names[int(k)])

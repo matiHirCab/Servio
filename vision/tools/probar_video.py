@@ -39,6 +39,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from servio_vision.capture import open_source
 from servio_vision.classifier import get_classifier
 from servio_vision.label_votes import LabelVotes
+from servio_vision.privacy import PrivacyError
 
 COLORS = {
     "lleno": "#2e7d32",
@@ -275,6 +276,8 @@ def main() -> None:
             )
         else:
             run_serial(classifier, frames(a.video, a.cada, a.max_frames), out, timeline)
+    except PrivacyError as e:  # sin el detector de caras no se lee ningún frame (C-3)
+        raise SystemExit(f"{e}") from e
     finally:  # aunque se corte, queda la línea de tiempo de lo que se hizo
         with open(out / "linea_de_tiempo.json", "w", encoding="utf-8") as f:
             json.dump(timeline, f, indent=2, ensure_ascii=False)

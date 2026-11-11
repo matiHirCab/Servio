@@ -1,0 +1,477 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<!-- Prototipo F-1 · vista de reconocimiento (docs/diseno-front.md). Abrirlo desde el repo
+     anda; para publicarlo como artifact se sacan las líneas de doctype/html/head/body
+     (vision/tools/publicar_prototipo.sh). La "cámara" es un SVG dibujado: ninguna imagen real
+     de un local va al repo. -->
+<title>Servio Salón</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow:wght@300;400;500;600&family=Barlow+Condensed:wght@400;500;600&display=swap">
+<style>
+/* Pantalla de auto: una sola superficie oscura, el salón grande, texto condensado en
+   mayúsculas para las etiquetas, los estados con cuatro colores fijos. Solo tema
+   oscuro, como la pantalla del salón que ya corre (salon.html): un mozo la mira de
+   reojo con luz de restaurante. */
+[hidden]{display:none!important}
+:root{
+  --bg:#07080a; --surface:#121418; --surface-2:#1a1d22; --line:rgba(255,255,255,.08);
+  --fg:#eef1f4; --fg-2:#9aa1ab; --fg-3:#5f6670; --accent:#3E8BFF;
+  --lleno:#3EE08F; --comiendo:#F2C94C; --por_terminar:#FF8A3D; --vacio:#FF4D61;
+  --f-display:"Barlow",ui-sans-serif,system-ui,sans-serif;
+  --f-label:"Barlow Condensed","Arial Narrow",ui-sans-serif,sans-serif;
+  color-scheme:dark;
+}
+*{box-sizing:border-box}
+body{background:var(--bg);color:var(--fg);font-family:var(--f-display);font-size:14px;margin:0;
+  padding-inline:max(16px,env(safe-area-inset-left,0px)) max(16px,env(safe-area-inset-right,0px));padding-block:16px 28px;
+  -webkit-font-smoothing:antialiased}
+.label{font-family:var(--f-label);font-size:12px;letter-spacing:.14em;text-transform:uppercase;color:var(--fg-3)}
+.num{font-variant-numeric:tabular-nums}
+h1,h2,h3{margin:0;font-weight:500;text-wrap:balance}
+
+/* --- barra de revisión (no es parte del producto) --- */
+.review{max-width:1440px;margin:0 auto 14px;display:flex;flex-wrap:wrap;gap:10px 18px;align-items:center;justify-content:space-between;
+  padding:10px 14px;border:1px dashed rgba(62,139,255,.45);border-radius:14px;color:var(--fg-2);font-size:13px}
+.review b{color:var(--fg);font-weight:500}
+.seg{display:inline-flex;background:var(--surface-2);border-radius:999px;padding:3px;gap:2px}
+.seg button{border:0;background:transparent;color:var(--fg-2);font:inherit;font-weight:500;padding:7px 14px;border-radius:999px;cursor:pointer;min-height:36px}
+.seg button[aria-pressed="true"]{background:var(--accent);color:#fff}
+.seg button:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+
+/* --- la pantalla --- */
+#wrap{container-type:inline-size}
+.phone-frame{max-width:414px;margin:0 auto}
+.phone-frame .screen{height:780px;overflow:auto;border:10px solid #1d2026;border-radius:38px;padding:14px 12px 18px;box-shadow:0 30px 80px rgba(0,0,0,.6)}
+.screen{max-width:1440px;margin:0 auto;display:grid;grid-template-columns:minmax(0,1fr) 360px;gap:16px;align-items:start}
+.status{grid-column:1/-1;display:flex;align-items:center;justify-content:space-between;gap:14px;flex-wrap:wrap;padding:4px 4px 0}
+.brand{display:flex;align-items:baseline;gap:14px;flex-wrap:wrap}
+.brand b{font-weight:300;font-size:26px;letter-spacing:.32em;text-transform:uppercase}
+.brand span{color:var(--fg-2)}
+.status-r{display:flex;gap:18px;align-items:center;color:var(--fg-2);flex-wrap:wrap}
+.status-r .time{color:var(--fg);font-size:22px;font-weight:300}
+.live{display:inline-flex;align-items:center;gap:8px}
+.live i{width:8px;height:8px;border-radius:50%;background:var(--por_terminar);box-shadow:0 0 0 4px rgba(255,138,61,.18)}
+.live.on i{background:var(--vacio);box-shadow:0 0 0 4px rgba(255,77,97,.18);animation:blink 2s infinite}
+.conn.off{color:var(--por_terminar)}
+@keyframes blink{50%{opacity:.35}}
+.modes{display:inline-flex;background:var(--surface-2);border-radius:999px;padding:3px}
+.modes button{border:0;background:transparent;color:var(--fg-2);font-family:var(--f-label);font-size:13px;letter-spacing:.12em;text-transform:uppercase;padding:8px 16px;border-radius:999px;cursor:pointer;min-height:36px}
+.modes button[aria-pressed="true"]{background:var(--surface);color:var(--fg);box-shadow:inset 0 0 0 1px var(--line)}
+.modes button:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+
+.stage{position:relative;border-radius:22px;overflow:hidden;background:#0c0d10;border:1px solid var(--line);min-width:0}
+.stage svg,.stage img{display:block;width:100%;height:auto}
+.stage .video{position:relative;aspect-ratio:4/3;max-width:100%;background:#000}
+.stage .video svg{position:absolute;inset:0;width:100%;height:100%}
+.stage .video .cam{filter:saturate(.85) brightness(.9)}  /* la "cámara": un dibujo, no una foto; la caja tiene la proporción del frame */
+.cap{position:absolute;left:16px;bottom:12px;display:flex;gap:10px;align-items:center}
+.cap .label{color:var(--fg-2)}
+.cap i{width:8px;height:8px;border-radius:50%;background:var(--vacio)}
+.svg-cap{font-family:var(--f-label);font-size:11px;letter-spacing:.16em;fill:#5f6670}
+.svg-label{font-family:var(--f-display);font-size:15px;font-weight:500;fill:#eef1f4}
+.svg-status{font-family:var(--f-label);font-size:13px;letter-spacing:.06em;fill:#9aa1ab}
+.svg-status.sel{fill:#3E8BFF}
+.svg-free{font-family:var(--f-label);font-size:12px;letter-spacing:.3em;fill:#5f6670}
+.svg-tag{font-family:var(--f-label);font-size:12px;letter-spacing:.08em;fill:#07080a;font-weight:600}
+.tbl{cursor:pointer}
+.tbl:focus{outline:none}
+.tbl:focus-visible .tbl-top{stroke:#3E8BFF;stroke-opacity:1}
+.changed{animation:pop 1.2s ease-out;transform-box:fill-box;transform-origin:center}
+@keyframes pop{0%{transform:scale(1.25)}100%{transform:scale(1)}}
+.mine{filter:drop-shadow(0 0 10px rgba(62,139,255,.35))}
+
+.side{display:grid;gap:14px;align-content:start;min-width:0}
+.card{background:var(--surface);border:1px solid var(--line);border-radius:20px;padding:16px 18px}
+.card.sel{border-color:rgba(62,139,255,.35)}
+.card.warn{border-color:rgba(255,138,61,.45)}
+.card-h{display:flex;justify-content:space-between;align-items:baseline;gap:12px;margin-bottom:12px}
+.card-h h2{font-size:18px}
+.card-h small{font-family:var(--f-label);font-size:12px;letter-spacing:.1em;color:var(--accent);text-transform:uppercase}
+.prow{display:grid;grid-template-columns:10px minmax(0,1fr) 92px;align-items:center;gap:10px;font-size:13px;color:var(--fg-2);padding:5px 0}
+.prow i{width:10px;height:10px;border-radius:50%}
+.prow .nm{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--fg)}
+.prow .st{text-align:right}
+.bar{grid-column:2/-1;height:3px;border-radius:2px;background:var(--surface-2);overflow:hidden;margin-top:-2px}
+.bar b{display:block;height:100%;border-radius:2px}
+.muted{color:var(--fg-2);font-size:13px;margin:0}
+.alert{display:grid;grid-template-columns:4px 1fr auto;gap:12px;padding:0 0 12px}
+.alert + .alert{border-top:1px solid var(--line);padding-top:12px}
+.alert .sev{border-radius:2px}
+.alert p{margin:0;font-size:15px;line-height:1.35}
+.alert p small{display:block;color:var(--fg-2);font-size:13px;margin-top:3px}
+.alert time{font-size:13px;color:var(--fg-3);white-space:nowrap}
+.taken{display:inline-block;margin-top:6px;font-family:var(--f-label);font-size:12px;letter-spacing:.1em;text-transform:uppercase;color:var(--lleno)}
+.metrics{display:grid;grid-template-columns:1fr 1fr;gap:16px 14px}
+.metric .v{font-size:32px;font-weight:300;line-height:1.05}
+.metric .v small{font-size:15px;color:var(--fg-2);margin-left:3px}
+
+.dock{grid-column:1/-1;display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap;
+  background:var(--surface);border:1px solid var(--line);border-radius:20px;padding:12px 18px}
+.legend{display:flex;gap:20px;flex-wrap:wrap}
+.chip{display:flex;align-items:center;gap:9px}
+.chip i{width:12px;height:12px;border-radius:50%;box-shadow:0 0 12px currentColor}
+.chip b{color:var(--fg);font-weight:500}
+.conn{color:var(--fg-2);font-size:13px}
+
+/* celular: el salón arriba, las tarjetas abajo, la barra con las mesas activas pegada al
+   fondo. Por ancho del contenedor: vale igual para un celular real y para el marco «Celular»
+   del prototipo (414 px) en una pantalla grande. */
+@media (max-width:1000px){.screen{grid-template-columns:minmax(0,1fr)}}
+@container (max-width:620px){
+  .screen{grid-template-columns:minmax(0,1fr);gap:12px}
+  .status-r{gap:12px}
+  .brand b{font-size:20px}
+  .status-r .time{font-size:18px}
+  .status-r>span:nth-child(2){display:none}
+  .dock{position:sticky;bottom:calc(8px + env(safe-area-inset-bottom,0px));flex-wrap:nowrap;overflow-x:auto;gap:12px;padding:10px 14px}
+  .legend{gap:14px;flex-wrap:nowrap}
+  .chip span{white-space:nowrap}
+  .conn{display:none}
+  .metrics{grid-template-columns:1fr 1fr 1fr 1fr}
+  .metric .v{font-size:24px}
+}
+/* en un celular de verdad el marco no se dibuja aunque esté el botón apretado */
+@media (max-width:620px){.phone-frame{max-width:none}.phone-frame .screen{height:auto;overflow:visible;border:0;border-radius:0;padding:0;box-shadow:none}}
+@media (prefers-reduced-motion:reduce){.changed,.live i{animation:none}}
+</style>
+</head>
+<body>
+
+<section class="review" aria-label="Controles de revisión">
+  <span><b>Prototipo F-1</b> · vista de reconocimiento. Lo que ve el mozo en la pantalla del salón y en su celular.</span>
+  <span class="seg" role="group" aria-label="Tamaño">
+    <button type="button" id="dev-big" aria-pressed="true">Pantalla grande</button>
+    <button type="button" id="dev-phone" aria-pressed="false">Celular</button>
+  </span>
+  <span class="seg" role="group" aria-label="Simulación">
+    <button type="button" id="sim">Simular una lectura</button>
+    <button type="button" id="sim-stale">Simular un corte</button>
+  </span>
+</section>
+
+<div id="wrap">
+<main class="screen" id="screen">
+  <header class="status">
+    <div class="brand"><b>Servio</b><span>Casa Jessica · Salón</span></div>
+    <div class="status-r">
+      <span class="live on" id="live"><i></i><span id="live-text">Cámara en vivo</span></span>
+      <span class="num" id="occupied"></span>
+      <span class="modes" role="group" aria-label="Modo">
+        <button type="button" id="mode-recon" aria-pressed="true">Reconstrucción</button>
+        <button type="button" id="mode-video" aria-pressed="false">Video</button>
+      </span>
+      <span class="time num" id="clock"></span>
+    </div>
+  </header>
+
+  <section class="stage" aria-label="Salón">
+    <svg id="floor" viewBox="0 0 1000 560" xmlns="http://www.w3.org/2000/svg" role="group" aria-label="Reconstrucción del salón"></svg>
+    <div class="video" id="video" hidden>
+      <svg class="cam" viewBox="0 0 640 480" xmlns="http://www.w3.org/2000/svg" aria-label="Imagen de la cámara con las caras difuminadas (dibujada para el prototipo)" role="img"><defs><filter id="grain"><feTurbulence type="fractalNoise" baseFrequency=".9" numOctaves="2" seed="7"/><feColorMatrix type="saturate" values="0"/><feComponentTransfer><feFuncA type="linear" slope=".18"/></feComponentTransfer></filter><radialGradient id="vig" cx="50%" cy="50%" r="75%"><stop offset=".55" stop-color="#000" stop-opacity="0"/><stop offset="1" stop-color="#000" stop-opacity=".45"/></radialGradient><pattern id="tiles" width="60" height="60" patternUnits="userSpaceOnUse"><path d="M60 0H0V60" fill="none" stroke="#34383c" stroke-width="1"/></pattern></defs><rect width="640" height="480" fill="#423e3a"/><rect width="640" height="480" fill="url(#tiles)"/><rect x="0" y="226" width="339" height="254" fill="#805e3e" stroke="#503c28" stroke-width="3"/><rect x="384" y="38" width="230" height="192" fill="#805e3e" stroke="#503c28" stroke-width="3"/><rect x="384" y="269" width="230" height="192" fill="#805e3e" stroke="#503c28" stroke-width="3"/><rect x="51" y="29" width="256" height="144" fill="#6e5a46" stroke="#503c28" stroke-width="3"/><circle cx="234" cy="396" r="40" fill="#8c8278"/><circle cx="234" cy="396" r="38" fill="#f0eeec"/><circle cx="234" cy="396" r="31" fill="#aa7846"/><circle cx="224" cy="389" r="10" fill="#6e9650"/><circle cx="64" cy="304" r="35" fill="#8c8278"/><circle cx="64" cy="304" r="33" fill="#f0eeec"/><circle cx="64" cy="304" r="19" fill="#aa7846"/><circle cx="58" cy="300" r="6" fill="#6e9650"/><circle cx="446" cy="115" r="37" fill="#8c8278"/><circle cx="446" cy="115" r="35" fill="#f0eeec"/><circle cx="446" cy="115" r="11" fill="#aa7846"/><circle cx="443" cy="113" r="3" fill="#6e9650"/><circle cx="545" cy="125" r="37" fill="#8c8278"/><circle cx="545" cy="125" r="35" fill="#f0eeec"/><ellipse cx="549" cy="128" rx="11" ry="5" transform="rotate(20 549 128)" fill="#beaa96"/><circle cx="493" cy="360" r="42" fill="#8c8278"/><circle cx="493" cy="360" r="40" fill="#f0eeec"/><circle cx="493" cy="360" r="33" fill="#aa7846"/><circle cx="482" cy="352" r="11" fill="#6e9650"/><line x1="300" y1="250" x2="330" y2="300" stroke="#c8c3bd" stroke-width="3"/><circle cx="150" cy="455" r="14" fill="none" stroke="#d2cdc8" stroke-width="2"/><rect x="200" y="184" width="20" height="20" fill="#7c6e62"/><rect x="220" y="184" width="20" height="20" fill="#8a7a6c"/><rect x="240" y="184" width="20" height="20" fill="#6e6258"/><rect x="260" y="184" width="20" height="20" fill="#94847a"/><rect x="200" y="204" width="20" height="20" fill="#94847a"/><rect x="220" y="204" width="20" height="20" fill="#7c6e62"/><rect x="240" y="204" width="20" height="20" fill="#8a7a6c"/><rect x="260" y="204" width="20" height="20" fill="#6e6258"/><rect x="200" y="224" width="20" height="20" fill="#6e6258"/><rect x="220" y="224" width="20" height="20" fill="#94847a"/><rect x="240" y="224" width="20" height="20" fill="#7c6e62"/><rect x="260" y="224" width="20" height="20" fill="#8a7a6c"/><rect x="200" y="244" width="20" height="20" fill="#8a7a6c"/><rect x="220" y="244" width="20" height="20" fill="#6e6258"/><rect x="240" y="244" width="20" height="20" fill="#94847a"/><rect x="260" y="244" width="20" height="20" fill="#7c6e62"/><rect x="30" y="188" width="20" height="20" fill="#6e6258"/><rect x="50" y="188" width="20" height="20" fill="#94847a"/><rect x="70" y="188" width="20" height="20" fill="#7c6e62"/><rect x="90" y="188" width="20" height="20" fill="#8a7a6c"/><rect x="30" y="208" width="20" height="20" fill="#8a7a6c"/><rect x="50" y="208" width="20" height="20" fill="#6e6258"/><rect x="70" y="208" width="20" height="20" fill="#94847a"/><rect x="90" y="208" width="20" height="20" fill="#7c6e62"/><rect x="30" y="228" width="20" height="20" fill="#7c6e62"/><rect x="50" y="228" width="20" height="20" fill="#8a7a6c"/><rect x="70" y="228" width="20" height="20" fill="#6e6258"/><rect x="90" y="228" width="20" height="20" fill="#94847a"/><rect x="30" y="248" width="20" height="20" fill="#94847a"/><rect x="50" y="248" width="20" height="20" fill="#7c6e62"/><rect x="70" y="248" width="20" height="20" fill="#8a7a6c"/><rect x="90" y="248" width="20" height="20" fill="#6e6258"/><rect x="430" y="-6" width="20" height="20" fill="#6e6258"/><rect x="450" y="-6" width="20" height="20" fill="#94847a"/><rect x="470" y="-6" width="20" height="20" fill="#7c6e62"/><rect x="490" y="-6" width="20" height="20" fill="#8a7a6c"/><rect x="430" y="14" width="20" height="20" fill="#8a7a6c"/><rect x="450" y="14" width="20" height="20" fill="#6e6258"/><rect x="470" y="14" width="20" height="20" fill="#94847a"/><rect x="490" y="14" width="20" height="20" fill="#7c6e62"/><rect x="430" y="34" width="20" height="20" fill="#7c6e62"/><rect x="450" y="34" width="20" height="20" fill="#8a7a6c"/><rect x="470" y="34" width="20" height="20" fill="#6e6258"/><rect x="490" y="34" width="20" height="20" fill="#94847a"/><rect x="430" y="54" width="20" height="20" fill="#94847a"/><rect x="450" y="54" width="20" height="20" fill="#7c6e62"/><rect x="470" y="54" width="20" height="20" fill="#8a7a6c"/><rect x="490" y="54" width="20" height="20" fill="#6e6258"/><rect x="520" y="188" width="20" height="20" fill="#7c6e62"/><rect x="540" y="188" width="20" height="20" fill="#8a7a6c"/><rect x="560" y="188" width="20" height="20" fill="#6e6258"/><rect x="580" y="188" width="20" height="20" fill="#94847a"/><rect x="520" y="208" width="20" height="20" fill="#94847a"/><rect x="540" y="208" width="20" height="20" fill="#7c6e62"/><rect x="560" y="208" width="20" height="20" fill="#8a7a6c"/><rect x="580" y="208" width="20" height="20" fill="#6e6258"/><rect x="520" y="228" width="20" height="20" fill="#6e6258"/><rect x="540" y="228" width="20" height="20" fill="#94847a"/><rect x="560" y="228" width="20" height="20" fill="#7c6e62"/><rect x="580" y="228" width="20" height="20" fill="#8a7a6c"/><rect x="520" y="248" width="20" height="20" fill="#8a7a6c"/><rect x="540" y="248" width="20" height="20" fill="#6e6258"/><rect x="560" y="248" width="20" height="20" fill="#94847a"/><rect x="580" y="248" width="20" height="20" fill="#7c6e62"/><rect x="370" y="317" width="20" height="20" fill="#6e6258"/><rect x="390" y="317" width="20" height="20" fill="#94847a"/><rect x="410" y="317" width="20" height="20" fill="#7c6e62"/><rect x="430" y="317" width="20" height="20" fill="#8a7a6c"/><rect x="370" y="337" width="20" height="20" fill="#8a7a6c"/><rect x="390" y="337" width="20" height="20" fill="#6e6258"/><rect x="410" y="337" width="20" height="20" fill="#94847a"/><rect x="430" y="337" width="20" height="20" fill="#7c6e62"/><rect x="370" y="357" width="20" height="20" fill="#7c6e62"/><rect x="390" y="357" width="20" height="20" fill="#8a7a6c"/><rect x="410" y="357" width="20" height="20" fill="#6e6258"/><rect x="430" y="357" width="20" height="20" fill="#94847a"/><rect x="370" y="377" width="20" height="20" fill="#94847a"/><rect x="390" y="377" width="20" height="20" fill="#7c6e62"/><rect x="410" y="377" width="20" height="20" fill="#8a7a6c"/><rect x="430" y="377" width="20" height="20" fill="#6e6258"/><rect width="640" height="480" filter="url(#grain)"/><rect width="640" height="480" fill="url(#vig)"/><text x="12" y="22" font-family="monospace" font-size="15" fill="#e6e6e6">CAM 1  2026-11-04 21:42:11</text></svg>
+      <svg id="overlay" viewBox="0 0 640 480" xmlns="http://www.w3.org/2000/svg" role="group" aria-label="Capas sobre la cámara"></svg>
+      <div class="cap"><i></i><span class="label">Cámara 1 · caras difuminadas en la computadora</span></div>
+    </div>
+  </section>
+
+  <aside class="side">
+    <div class="card sel" id="table-card"></div>
+    <div class="card warn" id="alerts-card"></div>
+    <div class="card" id="shift-card"></div>
+  </aside>
+
+  <footer class="dock">
+    <div class="legend" id="legend"></div>
+    <span class="conn" id="conn"></span>
+  </footer>
+</main>
+</div>
+
+<script>
+"use strict";
+const COLOR = {lleno:"#3EE08F", comiendo:"#F2C94C", por_terminar:"#FF8A3D", vacio:"#FF4D61"};
+const STATE_NAME = {lleno:"Lleno", comiendo:"Comiendo", por_terminar:"Por terminar", vacio:"Vacío"};
+const TABLE_STATUS = {libre:"Libre", servida:"Servida", comiendo:"Comiendo", por_terminar:"Por terminar", terminada:"Terminó"};
+const FILL = {lleno:.9, comiendo:.55, por_terminar:.18, vacio:0};  // los de salon.html
+const ALERT_TITLE = {mesa_terminada:n=>`${n} terminó`, plato_vacio:n=>`${n}: plato vacío`, plato_lleno_mucho:n=>`${n} sigue con un plato lleno`};
+const ALERT_COLOR = {mesa_terminada:COLOR.vacio, plato_vacio:COLOR.por_terminar, plato_lleno_mucho:COLOR.lleno};
+
+// Datos de ejemplo con la forma real de /<local>/salon/estado (salon.py build_snapshot):
+// fill_ratio, since/created_at en ISO **UTC** (se muestran en la hora del local), dish puede
+// ser null, alert.message con la forma de alerts/messages.py. Lo que hoy no
+// manda el servidor es `answered_by` en el aviso (quién respondió «Voy», C-5); el mozo del
+// aviso sale de su mesa (`tableOf(a.table_id).waiter`). Mesa 1 es la que
+// ve la cámara del frame; el mozo que mira es Juan (sus mesas van marcadas).
+// Coordenadas 0–1 en la imagen, también los bbox de los platos (salon.py plate_box);
+// un plato sin caja (`bbox: null`) se reparte en la mesa como en salon.html.
+const ME = "Juan";
+const NOW = Date.parse("2026-11-05T00:42:11Z");  // la hora fija del prototipo: 21:42 en Montevideo
+const TZ = "America/Montevideo";  // en la pantalla real, la zona del navegador (que es la del local)
+const snap = {
+  local:"Casa Jessica", camera:"cam-1", ts:"2026-11-05T00:42:07+00:00", interval:30, frame:[640,480],
+  tables:[
+    {id:"T1", name:"Mesa 1", waiter:"Juan", status:"servida", people:true, since:"2026-11-05T00:05:00+00:00", box:[0,.47,.53,.53],
+     plates:[{id:"T1-p1", dish:"Milanesa napolitana", state:"lleno", fill_ratio:.92, bbox:[.297,.746,.138,.159]},
+             {id:"T1-p2", dish:"Ensalada César", state:"comiendo", fill_ratio:.5, bbox:[.042,.565,.117,.138]}]},
+    {id:"T2", name:"Mesa 2", waiter:"Juan", status:"por_terminar", people:true, since:"2026-11-04T23:38:00+00:00", box:[.60,.08,.36,.40],
+     plates:[{id:"T2-p1", dish:"Risotto de hongos", state:"por_terminar", fill_ratio:.15, bbox:[.643,.16,.108,.16]},
+             {id:"T2-p2", dish:"Lomo con papas", state:"vacio", fill_ratio:0, bbox:[.798,.18,.108,.16]}]},
+    {id:"T3", name:"Mesa 3", waiter:"Sofía", status:"servida", people:true, since:"2026-11-05T00:20:00+00:00", box:[.60,.56,.36,.40],
+     plates:[{id:"T3-p1", dish:"Sorrentinos con fileto", state:"lleno", fill_ratio:.95, bbox:[.708,.66,.126,.18]},
+             {id:"T3-p2", dish:null, state:"comiendo", fill_ratio:.6, bbox:null}]},  // sin pedido cargado ni caja
+    {id:"T4", name:"Mesa 4", waiter:"Sofía", status:"libre", people:false, since:null, box:[.08,.06,.4,.3], plates:[]},
+  ],
+  alerts:[
+    {id:"a1", type:"plato_lleno_mucho", table_id:"T3", message:"❓ Mesa 3: un plato sigue lleno hace 14 min. ¿Está todo bien?", created_at:"2026-11-05T00:28:00+00:00", answered_by:null},
+    {id:"a2", type:"plato_vacio", table_id:"T2", message:"🧹 Mesa 2: hay platos vacíos para retirar.", created_at:"2026-11-05T00:38:00+00:00", answered_by:"Juan"},
+  ],
+  counts:{lleno:2, comiendo:2, por_terminar:1, vacio:1},
+};
+let selected = null;  // la elige pickTable: la del último aviso, si no la primera ocupada
+let changed = new Set();
+const $ = id => document.getElementById(id);
+const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const clamp = (v,a,b)=>Math.max(a,Math.min(b,v));
+const tableOf = id => snap.tables.find(t=>t.id===id);
+const tableName = id => { const t=tableOf(id); return t ? t.name : id; };
+const tableWaiter = id => tableOf(id)?.waiter ?? null;
+const dishName = p => p.dish ?? "Plato";
+const stateOf = p => STATE_NAME[p.state] ? p.state : "comiendo";  // como plate(): un estado raro no rompe nada
+function ago(iso){ if(!iso) return ""; const s=Math.max(0,Math.round((NOW-Date.parse(iso))/1000)); if(s<60) return `${s} s`; const m=Math.floor(s/60); return m<60?`${m} min`:`${Math.floor(m/60)} h ${m%60} min`; }
+const hhmm = iso => new Date(iso).toLocaleTimeString("es-UY",{timeZone:TZ,hour:"2-digit",minute:"2-digit",hourCycle:"h23"});
+const alertTitle = (type,name) => (ALERT_TITLE[type]||(n=>`${n}: aviso`))(name);
+const alertColor = type => ALERT_COLOR[type]||"#9aa3ad";
+const plainMessage = m => String(m??"").replace(/^[^\p{L}\p{N}]+/u,"");  // sin el emoji, como salon.html
+function hash(str){ let h=2166136261; for(const c of str) h=Math.imul(h^c.charCodeAt(0),16777619); return h>>>0; }
+function rand(seed){ return ()=>((seed=Math.imul(seed^(seed>>>15),2246822507)>>>0)%1000)/1000; }
+const alertsOf = id => snap.alerts.filter(a=>a.table_id===id);
+
+function halos(prefix){
+  let out="";
+  for (const s of Object.keys(COLOR)) out += `<radialGradient id="${prefix}halo-${s}"><stop offset=".45" stop-color="${COLOR[s]}" stop-opacity=".55"/><stop offset="1" stop-color="${COLOR[s]}" stop-opacity="0"/></radialGradient>`;
+  return out;
+}
+function defs(){
+  return `<defs><radialGradient id="floorg" cx="50%" cy="45%" r="70%"><stop offset="0" stop-color="#22262c"/><stop offset="1" stop-color="#0c0d10"/></radialGradient>
+<linearGradient id="tableg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#3a3f47"/><stop offset=".55" stop-color="#2a2e34"/><stop offset="1" stop-color="#1f2227"/></linearGradient>
+<linearGradient id="chairg" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#2c3036"/><stop offset="1" stop-color="#1a1c20"/></linearGradient>
+<radialGradient id="plateg" cx="40%" cy="35%" r="70%"><stop offset="0" stop-color="#f4f6f8"/><stop offset="1" stop-color="#b9c0c8"/></radialGradient>
+<linearGradient id="bodyg" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#a7aeb8"/><stop offset="1" stop-color="#6c737d"/></linearGradient>
+<radialGradient id="headg" cx="40%" cy="35%" r="70%"><stop offset="0" stop-color="#eef1f4"/><stop offset="1" stop-color="#b3bac3"/></radialGradient>
+<pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse"><path d="M40 0H0V40" fill="none" stroke="#ffffff" stroke-opacity=".035"/></pattern>
+<filter id="soft" x="-30%" y="-30%" width="160%" height="160%"><feGaussianBlur stdDeviation="14"/></filter>${halos("")}</defs>`;
+}
+function person(x,y,rot,s){
+  return `<g transform="translate(${x.toFixed(1)} ${y.toFixed(1)}) rotate(${rot}) scale(${(1.15*s).toFixed(2)})"><ellipse cx="0" cy="3" rx="24" ry="15" fill="#000" opacity=".35"/><path d="M-20 4 Q-20 -9 0 -9 Q20 -9 20 4 Q20 9 14 9 L-14 9 Q-20 9 -20 4Z" fill="url(#bodyg)" stroke="#ffffff" stroke-opacity=".1"/><circle cx="0" cy="1" r="8.5" fill="url(#headg)" stroke="#ffffff" stroke-opacity=".15"/></g>`;
+}
+function chair(x,y,side,s){
+  const [w,h] = side==="t"||side==="b" ? [44*s,32*s] : [32*s,44*s];
+  return `<rect x="${(x-w/2).toFixed(1)}" y="${(y-h/2).toFixed(1)}" width="${w.toFixed(1)}" height="${h.toFixed(1)}" rx="${9*s}" fill="url(#chairg)" stroke="#ffffff" stroke-opacity=".05"/>`;
+}
+// Un plato: copiado tal cual de servio_vision/static/salon.html. Anillo del color del
+// estado cuyo arco es cuánto queda, halo suave, la comida como mancha; vacío lleva el punto
+// arriba. Si cambió de estado en la última lectura, late.
+function plate(p, x, y, r, changed) {
+  const st = p.state || "comiendo";
+  const col = COLOR[st];
+  const f = p.fill_ratio ?? FILL[st];
+  const R = r + 5 * r / 17, circ = 2 * Math.PI * R;
+  let o = `<g transform="translate(${x.toFixed(1)} ${y.toFixed(1)})"><g class="${changed ? "changed" : ""}">`;
+  o += `<circle r="${(r + 16 * r / 17).toFixed(1)}" fill="url(#halo-${st})"/>`;
+  o += `<circle r="${R.toFixed(1)}" fill="none" stroke="${col}" stroke-opacity=".18" stroke-width="2"/>`;
+  if (f > 0.02) o += `<circle r="${R.toFixed(1)}" fill="none" stroke="${col}" stroke-width="2.2" stroke-linecap="round" stroke-dasharray="${(circ * f).toFixed(1)} ${circ.toFixed(1)}" transform="rotate(-90)"/>`;
+  o += `<circle r="${r.toFixed(1)}" fill="url(#plateg)" stroke="#d8dde3" stroke-opacity=".5" stroke-width=".8"/>`;
+  if (f > 0.02) {
+    const rnd = rand(hash(p.id)), rr = (r - 5 * r / 17) * Math.sqrt(f), pts = [];
+    for (let i = 0; i < 8; i++) {
+      const a = 2 * Math.PI * i / 8 + rnd() * .4, k = rr * (.75 + rnd() * .3);
+      pts.push(`${(k * Math.cos(a)).toFixed(1)},${(k * Math.sin(a)).toFixed(1)}`);
+    }
+    o += `<polygon points="${pts.join(" ")}" fill="#b98a5a" opacity=".85"/>`;
+    o += `<circle cx="${(-rr * .25).toFixed(1)}" cy="${(-rr * .2).toFixed(1)}" r="${Math.max(1.5, rr * .3).toFixed(1)}" fill="#7fa65a" opacity=".8"/>`;
+    o += `<circle r="2.3" cx="${R.toFixed(1)}" cy="0" fill="${col}" transform="rotate(${(-90 + 360 * f).toFixed(1)})"/>`;
+  } else {
+    o += `<path d="M${-6 * r / 17} ${3 * r / 17} q${4 * r / 17} ${-3 * r / 17} ${9 * r / 17} ${-1 * r / 17}" stroke="#b98a5a" stroke-opacity=".5" stroke-width="1.4" fill="none"/>`;
+    o += `<circle r="2.6" cy="${(-R).toFixed(1)}" fill="${col}"/>`;
+  }
+  return o + `</g></g>`;
+}
+function alertTag(x,y,text,col,opacity=1,anchor="start"){
+  const w=text.length*7.2+22, x0=anchor==="end"?-w:0;  // estimado; `fitTags` lo ajusta al texto real
+  return `<g class="tag" data-x="${x.toFixed(1)}" data-y="${y.toFixed(1)}" data-anchor="${anchor}" transform="translate(${x.toFixed(1)} ${y.toFixed(1)})"><rect x="${x0.toFixed(0)}" y="-11" width="${w.toFixed(0)}" height="22" rx="11" fill="${col}" fill-opacity="${opacity}"/><text x="${(x0+w/2).toFixed(0)}" y="4" text-anchor="middle" class="svg-tag">${esc(text)}</text></g>`;
+}
+function fitTags(svg){
+  for(let e=svg; e; e=e.parentElement) if(e.hasAttribute&&e.hasAttribute("hidden")) return;  // oculto (o un ancestro): no se puede medir
+  const vw=svg.viewBox&&svg.viewBox.baseVal?svg.viewBox.baseVal.width:Infinity;
+  for(const g of svg.querySelectorAll("g.tag")){ const t=g.querySelector("text"), r=g.querySelector("rect"); if(!t.getComputedTextLength) continue;
+    const w=t.getComputedTextLength()+22, x0=g.dataset.anchor==="end"?-w:0; r.setAttribute("width",w.toFixed(0)); r.setAttribute("x",x0.toFixed(0)); t.setAttribute("x",(x0+w/2).toFixed(0));
+    g.setAttribute("transform",`translate(${g.dataset.x} ${g.dataset.y})`);
+    const m=g.getCTM&&svg.getCTM?svg.getCTM().inverse().multiply(g.getCTM()):null, absX=(m?m.e:+g.dataset.x)+x0;  // dónde cae, en unidades del viewBox
+    let shift=Math.min(0, vw-w-4-absX);  // que no se corte contra el borde derecho
+    if(absX+shift<4) shift=4-absX;  // ni contra el izquierdo
+    if(shift) g.setAttribute("transform",`translate(${(+g.dataset.x+shift).toFixed(1)} ${g.dataset.y})`); }
+}
+
+function renderFloor(){
+  const svg=$("floor"); const [fw,fh]=snap.frame;
+  const T=snap.tables.map(t=>({t,x:t.box[0]*fw,y:t.box[1]*fh,w:t.box[2]*fw,h:t.box[3]*fh}));
+  if(!T.length){ svg.setAttribute("viewBox","0 0 1000 560"); svg.innerHTML=defs()+`<rect width="1000" height="560" fill="url(#floorg)"/><text x="500" y="280" text-anchor="middle" class="svg-free">La cámara no ve mesas todavía</text>`; return; }
+  const minx=Math.min(...T.map(a=>a.x)), miny=Math.min(...T.map(a=>a.y));
+  const maxx=Math.max(...T.map(a=>a.x+a.w)), maxy=Math.max(...T.map(a=>a.y+a.h));
+  const W=1000,M=110,TOP=120, k=(W-2*M)/Math.max(maxx-minx,1);
+  const H=Math.max(420,(maxy-miny)*k+TOP+M), offY=TOP+Math.max(0,(H-TOP-M-(maxy-miny)*k)/2);
+  const sides=T.map(a=>Math.min(a.w,a.h)*k).sort((a,b)=>a-b);
+  const s=clamp(sides[Math.floor(sides.length/2)]/120,.55,1.3), seat=34*s;
+  let out=defs()+`<rect width="${W}" height="${H.toFixed(0)}" fill="url(#floorg)"/><rect width="${W}" height="${H.toFixed(0)}" fill="url(#grid)"/>
+<path d="M20 20H980V${(H-20).toFixed(0)}H20Z" fill="none" stroke="#ffffff" stroke-opacity=".08" stroke-width="2"/>
+<text x="36" y="44" class="svg-cap">${esc(snap.local).toUpperCase()} · ${esc(snap.camera).toUpperCase()} · CENITAL</text><text x="964" y="44" text-anchor="end" class="svg-cap">EN VIVO · CADA ${snap.interval} s</text>`;
+  for(const a of T){
+    const t=a.t, x0=M+(a.x-minx)*k, y0=offY+(a.y-miny)*k, w=a.w*k, h=a.h*k, sel=t.id===selected, mine=t.waiter===ME;
+    // platos: con su caja de la cámara, o repartidos en la mesa si no la tienen (salon.html)
+    const n=t.plates.length, cols=Math.ceil(Math.sqrt(n||1)), rows=Math.ceil((n||1)/cols);
+    const P=t.plates.map((p,i)=>{
+      const q={...p,state:stateOf(p)};  // plate() es la de salon.html: un estado raro entra como «comiendo»
+      if(p.bbox){ const [bx,by,bw,bh]=p.bbox; return {p:q,x:M+((bx+bw/2)*fw-minx)*k,y:offY+((by+bh/2)*fh-miny)*k,r:clamp(Math.min(bw*fw,bh*fh)*k/2,9,60)}; }
+      const c=i%cols, r=Math.floor(i/cols);
+      return {p:q,x:x0+w*(c+.5)/cols,y:y0+h*(r+.5)/rows,r:clamp(Math.min(w/cols,h/rows)*.3,9,40)};
+    });
+    const people=[];
+    if(t.people) for(const q of P){
+      const d={t:q.y-y0,b:y0+h-q.y,l:q.x-x0,r:x0+w-q.x}; const side=Object.keys(d).reduce((m,key)=>d[key]<d[m]?key:m,"t");
+      const px=side==="l"?x0-seat:side==="r"?x0+w+seat:clamp(q.x,x0+18*s,x0+w-18*s);
+      const py=side==="t"?y0-seat:side==="b"?y0+h+seat:clamp(q.y,y0+18*s,y0+h-18*s);
+      if(people.some(o=>o.side===side&&Math.hypot(o.x-px,o.y-py)<46*s)) continue;
+      people.push({side,x:px,y:py,rot:{t:0,b:180,l:-90,r:90}[side]});
+    }
+    const status=TABLE_STATUS[t.status]||t.status, hasTop=people.some(o=>o.side==="t"), ly=hasTop?y0-seat-30*s:y0-14;
+    out+=`<g class="tbl${mine?" mine":""}" data-id="${t.id}" tabindex="0" role="button" aria-label="${esc(t.name)}, ${esc(status)}">`;
+    out+=`<rect x="${(x0+6).toFixed(1)}" y="${(y0+14).toFixed(1)}" width="${w.toFixed(1)}" height="${h.toFixed(1)}" rx="14" fill="#000" opacity=".55" filter="url(#soft)"/>`;
+    for(const o of people) out+=chair(o.x,o.y,o.side,s);
+    if(sel) out+=`<rect x="${(x0-seat-26*s).toFixed(1)}" y="${(y0-seat-26*s).toFixed(1)}" width="${(w+2*seat+52*s).toFixed(1)}" height="${(h+2*seat+52*s).toFixed(1)}" rx="26" fill="#3E8BFF" fill-opacity=".05" stroke="#3E8BFF" stroke-opacity=".7" stroke-width="1.5" stroke-dasharray="2 5"/>`;
+    out+=`<rect class="tbl-top" x="${x0.toFixed(1)}" y="${y0.toFixed(1)}" width="${w.toFixed(1)}" height="${h.toFixed(1)}" rx="14" fill="url(#tableg)" stroke="${mine?"#3E8BFF":"#ffffff"}" stroke-opacity="${sel?.5:mine?.35:.1}"/>`;
+    out+=`<rect x="${(x0+8).toFixed(1)}" y="${(y0+8).toFixed(1)}" width="${Math.max(0,w-16).toFixed(1)}" height="${(h*.32).toFixed(1)}" rx="10" fill="#ffffff" opacity=".035"/>`;
+    for(const q of P) out+=plate(q.p,q.x,q.y,q.r,pending.floor.has(q.p.id));
+    for(const o of people) out+=person(o.x,o.y,o.rot,s);
+    if(!P.length) out+=`<text x="${(x0+w/2).toFixed(1)}" y="${(y0+h/2+4).toFixed(1)}" text-anchor="middle" class="svg-free">LIBRE</text>`;
+    out+=`<text x="${x0.toFixed(1)}" y="${ly.toFixed(1)}" class="svg-label">${esc(t.name)}${t.waiter&&!mine?" · "+esc(t.waiter):""}</text>`;
+    out+=`<text x="${(x0+w).toFixed(1)}" y="${ly.toFixed(1)}" text-anchor="end" class="svg-status${sel?" sel":""}">${esc(status)}</text>`;
+    const al=alertsOf(t.id)[0];
+    if(al) out+=alertTag(x0, y0+h+(people.some(o=>o.side==="b")?seat+26*s:22), alertTitle(al.type,t.name).toUpperCase()+" · "+ago(al.created_at).toUpperCase(), alertColor(al.type));
+    out+=`</g>`;
+  }
+  svg.setAttribute("viewBox",`0 0 ${W} ${H.toFixed(0)}`); svg.innerHTML=out; fitTags(svg); pending.floor.clear();
+}
+
+// Modo video: la imagen de la cámara (ya difuminada) con las capas encima. Todas las
+// mesas traen su `box` en la imagen: recuadro, etiqueta y aviso abierto de cada una; por
+// plato con caja, el anillo del estado y el nombre. Un plato sin caja no se marca: solo
+// se dibuja lo que la cámara ve de verdad.
+function renderVideo(){
+  const svg=$("overlay"); const [fw,fh]=snap.frame;
+  $("video").style.aspectRatio=`${fw} / ${fh}`; svg.setAttribute("viewBox",`0 0 ${fw} ${fh}`);
+  let out=`<defs>${halos("v")}</defs>`;
+  for(const t of snap.tables){
+    const sel=t.id===selected, mine=t.waiter===ME, x0=t.box[0]*fw, y0=t.box[1]*fh, w=t.box[2]*fw, h=t.box[3]*fh;
+    const status=TABLE_STATUS[t.status]||t.status;
+    out+=`<g class="tbl${mine?" mine":""}" data-id="${t.id}" tabindex="0" role="button" aria-label="${esc(t.name)}, ${esc(status)}">`;
+    out+=`<rect x="${x0.toFixed(1)}" y="${y0.toFixed(1)}" width="${w.toFixed(1)}" height="${h.toFixed(1)}" rx="10" fill="#3E8BFF" fill-opacity="${sel?.08:.02}" stroke="${mine?"#3E8BFF":"#ffffff"}" stroke-opacity="${sel?.9:mine?.6:.35}" stroke-width="2" stroke-dasharray="${sel?"0":"6 6"}"/>`;
+    out+=alertTag(x0+8, y0+16, `${t.name}${t.waiter&&!mine?" · "+t.waiter:""} · ${status.toUpperCase()}`, "#e9edf2", .92);
+    const al=alertsOf(t.id)[0];
+    if(al) out+=alertTag(x0+8, y0+h-16, alertTitle(al.type,t.name).toUpperCase()+" · "+ago(al.created_at).toUpperCase(), alertColor(al.type));
+    for(const p of t.plates){ if(!p.bbox) continue;
+      const [bx,by,bw,bh]=p.bbox; const px=(bx+bw/2)*fw, py=(by+bh/2)*fh, r=Math.min(bw*fw,bh*fh)/2;
+      const st=stateOf(p), col=COLOR[st], R=r+6, circ=2*Math.PI*R, f=p.fill_ratio ?? FILL[st];
+      out+=`<g transform="translate(${px.toFixed(1)} ${py.toFixed(1)})"><g class="${pending.video.has(p.id)?"changed":""}"><circle r="${(R+10).toFixed(1)}" fill="url(#vhalo-${st})" opacity=".8"/><circle r="${R.toFixed(1)}" fill="none" stroke="${col}" stroke-opacity=".25" stroke-width="2.5"/>`;
+      if(f>.02) out+=`<circle r="${R.toFixed(1)}" fill="none" stroke="${col}" stroke-width="3" stroke-linecap="round" stroke-dasharray="${(circ*f).toFixed(1)} ${circ.toFixed(1)}" transform="rotate(-90)"/>`;
+      const label=`${dishName(p)} · ${STATE_NAME[st].toUpperCase()}`, left=px+R+8+label.length*7.2+22>fw;  // a la izquierda si a la derecha no entra
+      out+=`</g>`+alertTag(left?-(R+8):R+8, -(R-2), label, col, 1, left?"end":"start")+`</g>`;
+    }
+    out+=`</g>`;
+  }
+  svg.innerHTML=out; fitTags(svg); pending.video.clear();
+}
+
+function renderSide(){
+  const t=tableOf(selected)||{id:null,name:"Sin mesa",waiter:null,plates:[],since:null,people:false};  // una mesa que ya no está (zonas redibujadas)
+  const rows=t.plates.map(p=>{ const st=stateOf(p); return `<div class="prow"><i style="background:${COLOR[st]}"></i><span class="nm">${esc(dishName(p))}</span><span class="st">${STATE_NAME[st]}</span><div class="bar"><b style="width:${Math.round((p.fill_ratio ?? FILL[st])*100)}%;background:${COLOR[st]}"></b></div></div>`; }).join("")
+    || `<p class="muted">Mesa libre.</p>`;
+  $("table-card").innerHTML=`<div class="card-h"><h2>${esc(t.name)}</h2><small>${t.waiter?esc(t.waiter)+" · mozo"+(t.waiter===ME?" · tuya":""):"Sin mozo asignado"}</small></div>${rows}
+<div class="label num" style="margin-top:10px">${t.since?"Sentados desde las "+hhmm(t.since):(t.people?"Hay gente, sin platos":"Libre")} · ${t.plates.length} ${t.plates.length===1?"plato":"platos"}</div>`;
+  const A=[...snap.alerts].sort((a,b)=>Date.parse(a.created_at)-Date.parse(b.created_at));  // el más viejo arriba
+  $("alerts-card").innerHTML=`<div class="card-h"><h2>Avisos</h2><span class="label num">${A.length} ${A.length===1?"abierto":"abiertos"}</span></div>`+(A.length?"":`<p class="muted">Nada pendiente: todas las mesas atendidas.</p>`)+
+    A.map(a=>`<div class="alert"><span class="sev" style="background:${alertColor(a.type)}"></span><p>${esc(alertTitle(a.type,tableName(a.table_id)))}<small>${esc(plainMessage(a.message))}</small>${a.answered_by?`<span class="taken">Voy · ${esc(a.answered_by)}</span>`:a.answered_by===null?`<span class="taken" style="color:var(--por_terminar)">Nadie respondió${tableWaiter(a.table_id)?" · "+esc(tableWaiter(a.table_id)):""}</span>`:""}</p><time class="num">${ago(a.created_at)}</time></div>`).join("");
+  const occ=snap.tables.filter(x=>x.plates.length), plates=Object.values(snap.counts).reduce((a,b)=>a+b,0);
+  const since=snap.tables.filter(x=>x.since).map(x=>(NOW-Date.parse(x.since))/60000);  // promedio desde `since`, acá
+  const seated=since.length?Math.round(since.reduce((a,b)=>a+b,0)/since.length):null;
+  $("shift-card").innerHTML=`<div class="card-h"><h2>Ahora</h2><span class="label">En el salón</span></div><div class="metrics">
+<div class="metric"><div class="label">Mesas ocupadas</div><div class="v num">${occ.length}<small>de ${snap.tables.length}</small></div></div>
+<div class="metric"><div class="label">Platos en mesa</div><div class="v num">${plates}</div></div>
+<div class="metric"><div class="label">Avisos abiertos</div><div class="v num">${A.length}</div></div>
+<div class="metric"><div class="label">Tiempo en mesa</div><div class="v num">${seated===null?"–":seated+"<small>min</small>"}</div></div></div>`;
+  const counts=snap.counts;  // los cuenta el servidor
+  $("legend").innerHTML=Object.keys(COLOR).map(s=>`<span class="chip" style="color:${COLOR[s]}"><i style="background:${COLOR[s]}"></i><span>${STATE_NAME[s]} <b class="num">${counts[s]||0}</b></span></span>`).join("");
+  $("occupied").textContent=`${occ.length} de ${snap.tables.length} mesas ocupadas`;
+  $("clock").textContent=hhmm(new Date(NOW).toISOString());
+  const late=(NOW-Date.parse(snap.ts))/1000>3*snap.interval+10;  // la regla de salon.html
+  $("live").className="live"+(late?"":" on"); $("live-text").textContent=late?"Sin lecturas":"Cámara en vivo";
+  $("conn").className="conn"+(late?" off":""); $("conn").textContent=`${late?"Sin lecturas desde hace":"Última lectura hace"} ${ago(snap.ts)} · cada ${snap.interval} s`;
+}
+function pickTable(){
+  if(selected&&snap.tables.some(t=>t.id===selected)) return;
+  const oldest=[...snap.alerts].sort((a,b)=>Date.parse(a.created_at)-Date.parse(b.created_at))[0];  // el que hay que atender
+  selected=oldest?oldest.table_id:(snap.tables.find(t=>t.plates.length)||snap.tables[0]||{}).id||null;
+}
+let seen=new Set();
+const dirty={floor:false,video:false};  // el modo oculto se dibuja recién al mostrarlo
+const pending={floor:new Set(),video:new Set()};  // lo que tiene que latir en cada modo
+function render(){
+  pickTable();
+  const focused=document.activeElement&&document.activeElement.closest?document.activeElement.closest(".tbl"):null;
+  const focusedSvg=focused?focused.closest("svg"):null;  // antes de redibujar: después el nodo ya no está en el documento
+  const ids=new Set(snap.tables.flatMap(t=>t.plates.map(p=>p.id)));
+  for(const id of ids) if(seen.size&&!seen.has(id)) changed.add(id);  // un plato nuevo entra latiendo
+  seen=ids;
+  for(const id of changed){ pending.floor.add(id); pending.video.add(id); }
+  if($("floor").hasAttribute("hidden")) dirty.floor=true; else renderFloor();
+  if($("video").hasAttribute("hidden")) dirty.video=true; else renderVideo();
+  renderSide();
+  if(focusedSvg){ const g=focusedSvg.querySelector(`.tbl[data-id="${selected}"]`); if(g&&g.focus) g.focus(); }
+  changed=new Set();  // late una vez: lo que cambió ya se dibujó latiendo
+}
+
+function setMode(m){ $("floor").toggleAttribute("hidden",m!=="recon"); $("video").toggleAttribute("hidden",m!=="video");
+  if(m==="recon"&&dirty.floor){ renderFloor(); dirty.floor=false; } if(m==="video"&&dirty.video){ renderVideo(); dirty.video=false; }
+  fitTags($("floor")); fitTags($("overlay"));
+  $("mode-recon").setAttribute("aria-pressed",String(m==="recon")); $("mode-video").setAttribute("aria-pressed",String(m==="video")); }
+function setDevice(phone){ $("wrap").className=phone?"phone-frame":""; $("dev-big").setAttribute("aria-pressed",String(!phone)); $("dev-phone").setAttribute("aria-pressed",String(phone));
+  try{ localStorage.setItem("f1-device",phone?"phone":"big"); }catch(e){} }
+$("mode-recon").onclick=()=>setMode("recon"); $("mode-video").onclick=()=>setMode("video");
+$("dev-big").onclick=()=>setDevice(false); $("dev-phone").onclick=()=>setDevice(true);
+for(const id of ["floor","overlay"]){ $(id).addEventListener("click",e=>{const g=e.target.closest(".tbl"); if(!g) return; selected=g.dataset.id; render();});
+  $(id).addEventListener("keydown",e=>{ if(e.key!=="Enter"&&e.key!==" ") return; const g=e.target.closest(".tbl"); if(!g) return; e.preventDefault(); selected=g.dataset.id; render(); }); }
+// "Simular una lectura": la milanesa pasa de lleno a comiendo y late; muestra la animación de cambio de estado.
+const NEXT={lleno:"comiendo",comiendo:"por_terminar",por_terminar:"vacio",vacio:"lleno"};
+// el estado de la mesa, con la regla de alerts/state.py table_status
+function tableStatus(plates){
+  const n=plates.length, c=s=>plates.filter(p=>p.state===s).length;
+  if(!n) return "libre"; if(c("vacio")===n) return "terminada";
+  if((c("por_terminar")+c("vacio"))*2>=n) return "por_terminar";
+  return c("lleno")*2>=n ? "servida" : "comiendo";
+}
+$("sim").onclick=()=>{ const t=tableOf("T1"), [p0,p1]=t.plates, p=(p0.state==="vacio"&&p1&&p1.state!=="vacio")?p1:p0; snap.counts[p.state]--; p.state=NEXT[p.state]; snap.counts[p.state]++; p.fill_ratio=FILL[p.state]; changed.add(p.id);
+  t.status=tableStatus(t.plates);
+  snap.alerts=snap.alerts.filter(a=>a.table_id!==t.id);  // el aviso de la mesa sigue a sus platos
+  if(t.status==="terminada") snap.alerts.push({id:"sim-t", type:"mesa_terminada", table_id:t.id, message:`🍽️ ${t.name}: terminó.`, created_at:new Date(NOW).toISOString(), answered_by:null});
+  else if(t.plates.some(x=>x.state==="vacio")) snap.alerts.push({id:"sim-v", type:"plato_vacio", table_id:t.id, message:`🧹 ${t.name}: hay platos vacíos para retirar.`, created_at:new Date(NOW).toISOString(), answered_by:null});
+  snap.ts=new Date(NOW).toISOString();  // una lectura nueva: ya no hay corte
+  selected="T1"; render(); };
+$("sim-stale").onclick=()=>{ snap.ts=new Date(NOW-11*60*1000).toISOString(); render(); };  // 11 min sin lecturas
+try{ if(localStorage.getItem("f1-device")==="phone") setDevice(true); }catch(e){}
+render();
+// las etiquetas se midieron con la fuente de reserva: al llegar Barlow Condensed, de nuevo
+if(document.fonts) document.fonts.ready.then(()=>{ fitTags($("floor")); fitTags($("overlay")); });
+</script>
+</body>
+</html>

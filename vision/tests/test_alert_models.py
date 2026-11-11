@@ -16,7 +16,13 @@ FIXTURES = Path(__file__).resolve().parents[2] / "fixtures"
 OBSERVATIONS = FIXTURES / "observations"
 EXPECTED = FIXTURES / "expected"
 INTERVAL = 30  # segundos entre lecturas, como el pipeline (04-vision.md)
-SCENARIOS = ["mesa_completa", "plato_lleno_mucho", "id_cambiado"]
+SCENARIOS = [
+    "mesa_completa",
+    "plato_lleno_mucho",
+    "id_cambiado",
+    "plato_vacio",
+    "mesa_terminada_recordatorios",
+]
 
 
 class ExpectedEvent(BaseModel):

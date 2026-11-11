@@ -3,7 +3,11 @@
 import pytest
 from pydantic import ValidationError
 
-from servio_vision.classifier import available_classifiers, get_classifier
+from servio_vision.classifier import (
+    ClassifierUnavailable,
+    available_classifiers,
+    get_classifier,
+)
 from servio_vision.schemas import Item, TableReport, state_from_fill_ratio
 
 
@@ -76,8 +80,10 @@ def test_unknown_classifier():
         get_classifier("nope")
 
 
-def test_not_implemented_yet():
-    with pytest.raises(NotImplementedError):
+def test_claude_needs_the_privacy_opt_in(monkeypatch):
+    """`claude` manda la mesa entera al modelo: sin CLAUDE_ALLOW_TABLE_IMAGES no arranca."""
+    monkeypatch.delenv("CLAUDE_ALLOW_TABLE_IMAGES", raising=False)
+    with pytest.raises(ClassifierUnavailable):
         get_classifier("claude")
 
 

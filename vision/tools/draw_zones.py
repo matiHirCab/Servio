@@ -24,7 +24,7 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from servio_vision.capture import open_source
+from servio_vision.capture import IMAGE_SUFFIXES, open_source
 from servio_vision.zones import (
     DEFAULT_ZONES,
     TableZone,
@@ -103,19 +103,18 @@ def render(frame: np.ndarray, editor: ZoneEditor) -> np.ndarray:
 
 
 def first_frame(source: str, at: float) -> np.ndarray:
-    if Path(source).is_file() and Path(source).suffix.lower() in {
-        ".jpg",
-        ".jpeg",
-        ".png",
-    }:
-        frame = cv2.imread(source)
-        if frame is None:
-            raise OSError(f"No se pudo leer {source}")
-        return frame
-    for i, (frame, _) in enumerate(open_source(source, interval=at or 1.0)):
-        if at == 0 or i == 1:
-            return frame
-    raise OSError(f"La fuente {source} no tiene un frame en el segundo {at}")
+    """El frame del segundo `at` (el primero con 0). Una foto suelta también vale:
+    `open_source` la lee (y difumina las caras, C-3) y es su único frame."""
+    frames = open_source(source, interval=at or 1.0)
+    first = next(frames, None)
+    if first is None:
+        raise OSError(f"La fuente {source} no tiene frames")
+    if at == 0 or Path(source).suffix.lower() in IMAGE_SUFFIXES:
+        return first[0]  # una foto no tiene segundo `at`: va la foto
+    second = next(frames, None)
+    if second is None:
+        raise OSError(f"La fuente {source} no tiene un frame en el segundo {at}")
+    return second[0]
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -125,7 +124,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--out", type=Path, default=DEFAULT_ZONES)
     args = parser.parse_args(argv)
 
-    frame = first_frame(args.source, args.at)
+    try:
+        frame = first_frame(args.source, args.at)
+    except OSError as e:  # también PrivacyError: sin el modelo no se lee nada
+        print(e, file=sys.stderr)
+        return 2
     height, width = frame.shape[:2]
     editor = ZoneEditor((width, height))
 

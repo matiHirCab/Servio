@@ -53,7 +53,7 @@ Bajar *AI Smart Restaurant Surveillance* de Roboflow a color, sin augmentación 
 
 ### TOM-3 · Claude por plato
 **hora 1–6 · 1 h**
-`servio_vision/classifiers/claude_plates.py` (o dentro de `claude.py`): una función que recibe el recorte de la mesa y los recortes de cada plato y devuelve, por plato, `fill_ratio`, `confidence` y `visible`, más `people_present`. `claude -p` o API de Anthropic según `CLAUDE_PROVIDER`; salida con el esquema `report_plates`, Pydantic con un reintento, timeout (15 s con `cli`), log de tokens y latencia. Prompt en `prompt.py` (base en `04-vision.md`).
+`servio_vision/llm/` (`PlateEstimator`, un archivo por proveedor): una función que recibe el recorte de la mesa y los recortes de cada plato y devuelve, por plato, `fill_ratio`, `confidence` y `visible`, más `people_present`. `claude -p` o API de Anthropic según `CLAUDE_PROVIDER`; salida con el esquema `report_plates`, Pydantic con un reintento, timeout (15 s con `cli`), log de tokens y latencia. Prompt en `prompt.py` (base en `04-vision.md`).
 
 **Hecho cuando:** con 3 recortes de plato devuelve un resultado válido, y un test con la API mockeada pasa.
 
