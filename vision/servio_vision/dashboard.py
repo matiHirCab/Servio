@@ -9,6 +9,12 @@ devuelve JSON con solo las métricas que ese rol ve según `config/servio.toml`
 No es tiempo real: los números se calculan con `metrics.py` y se guardan
 `REFRESH_S` (1 h); la página se recarga sola a esa misma cadencia.
 
+Período (D-1b): `?desde=AAAA-MM-DD&hasta=AAAA-MM-DD` (días del salón, los dos
+incluidos; sin nada, los últimos `DEFAULT_DAYS` días). Toda métrica se calcula
+sobre ese período y solo con lo de este local (`Scope` de `metrics.py`); los
+avisos abiertos son de ahora y no cambian con el período. La página arma los
+atajos (hoy, un día, semana, mes, a mano) y deja el período en la URL.
+
 `handle()` no depende de ningún servidor: devuelve (status, content-type, bytes)
 o None si la ruta no es suya, así lo puede montar el servidor del salón en vivo
 (`salon_web.py`) o `tools/dashboard.py` para verlo solo.
@@ -19,7 +25,7 @@ import threading
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs
@@ -30,6 +36,8 @@ from servio_vision.metrics import (
     LOCAL_TZ,
     PEAK_SLOT_MIN,
     UNATTENDED_LIMIT_MIN,
+    Scope,
+    ScopedDatabase,
     _time,
     compute,
 )
@@ -39,6 +47,7 @@ STATIC_DIR = Path(__file__).parent / "static"
 PAGE = STATIC_DIR / "dashboard.html"
 REFRESH_S = 60 * 60  # se recalcula una vez por hora
 DEFAULT_ROLE = "encargado"
+DEFAULT_DAYS = 7  # sin ?desde=&hasta=: la última semana, hoy incluido
 
 # Avisos sin cerrar de esta casa (los del historial simulado están todos cerrados),
 # con la última respuesta del mozo ("Voy", con C-5).
@@ -100,12 +109,35 @@ def _open_alerts(db: Database, now: datetime) -> list[dict]:
     return rows
 
 
-def _metrics(db: Database, now: datetime) -> dict[str, Any]:
+def today(now: datetime) -> date:
+    """El día del salón (hora de Uruguay)."""
+    return now.astimezone(LOCAL_TZ).date()
+
+
+def period(desde: str | None, hasta: str | None, now: datetime) -> tuple[date, date]:
+    """El período de la URL. Sin ninguno de los dos: los últimos DEFAULT_DAYS días;
+    con uno solo, ese día. ValueError (con el texto para el usuario) si una fecha
+    no es AAAA-MM-DD o si `hasta` es antes que `desde`."""
+    if not desde and not hasta:
+        end = today(now)
+        return end - timedelta(days=DEFAULT_DAYS - 1), end
+    try:
+        start = date.fromisoformat(desde or hasta or "")
+        end = date.fromisoformat(hasta or desde or "")
+    except ValueError:
+        raise ValueError("Las fechas van como AAAA-MM-DD (?desde=&hasta=).") from None
+    if end < start:
+        raise ValueError("«hasta» es antes que «desde».")
+    return start, end
+
+
+def _metrics(db: Database, now: datetime, scope: Scope) -> dict[str, Any]:
     """Todas las métricas que se calculan, ya en la forma que lee la página."""
-    m = compute(db)
+    m = compute(db, scope=scope)
     ops = m["ops"] or {}
-    answer = db.query(SQL_ANSWER_ALL)[0]["segundos"]
-    returned = db.query(SQL_RETURNED_ALL)[0]["vuelve"]
+    scoped = ScopedDatabase(db, scope)
+    answer = scoped.query(SQL_ANSWER_ALL)[0]["segundos"]
+    returned = scoped.query(SQL_RETURNED_ALL)[0]["vuelve"]
     forgotten = ops.get("forgotten") or []
     alerts = sum(a for _, a, _ in forgotten)
     rot = ops.get("rotation")
@@ -223,17 +255,32 @@ def _settings(roles: Roles) -> dict:
 
 
 def payload(
-    db: Database, roles: Roles, role_id: str, now: datetime | None = None
+    db: Database,
+    roles: Roles,
+    role_id: str,
+    now: datetime | None = None,
+    desde: str | None = None,
+    hasta: str | None = None,
+    locales: tuple[str, ...] | None = None,
 ) -> dict:
-    """El JSON de un rol: solo las métricas que ve, y cuáles le faltan todavía."""
+    """El JSON de un rol: solo las métricas que ve, y cuáles le faltan todavía,
+    sobre el período `desde`–`hasta` (ver `period()`) y solo con las filas de
+    `locales` (por defecto, este local)."""
     role: Role = roles.get(role_id)
     now = now or datetime.now(UTC)
-    everything = _metrics(db, now)
+    start, end = period(desde, hasta, now)
+    scope = Scope(locales or (db.local_id,), start, end)
+    everything = _metrics(db, now, scope)
     visible = role.visible_metrics()
     data = {
         "rol": role_id,
         "nombre_rol": role.nombre,
         "local": db.local_id,
+        "periodo": {
+            "desde": start.isoformat(),
+            "hasta": end.isoformat(),
+            "hoy": today(now).isoformat(),
+        },
         "actualizado": now.astimezone(LOCAL_TZ).strftime("%H:%M"),
         "refresco_s": REFRESH_S,
         "vistas": role.visible_views(),
@@ -258,7 +305,9 @@ def _json(status: int, data: dict) -> Response:
 
 
 class Dashboard:
-    """Rutas del dashboard de un local, con los números guardados `refresh_s`."""
+    """Rutas del dashboard de un local, con los números guardados `refresh_s`
+    (por rol y período). `locales`: de qué locales son las filas que cuentan; por
+    defecto solo este. `tools/dashboard.py --demo` suma el historial simulado."""
 
     def __init__(
         self,
@@ -266,21 +315,33 @@ class Dashboard:
         roles: Roles,
         refresh_s: int = REFRESH_S,
         clock: Callable[[], float] = time.monotonic,
+        locales: tuple[str, ...] | None = None,
     ) -> None:
         self.db = db
         self.roles = roles
         self.refresh_s = refresh_s
+        self.locales = locales or (db.local_id,)
         self._clock = clock
-        self._cache: dict[str, tuple[float, dict]] = {}
+        self._cache: dict[tuple, tuple[float, dict]] = {}
         self._lock = threading.Lock()
 
-    def data(self, role_id: str) -> dict:
+    def data(
+        self, role_id: str, desde: str | None = None, hasta: str | None = None
+    ) -> dict:
+        key = (role_id, desde, hasta)
         with self._lock:
-            hit = self._cache.get(role_id)
+            hit = self._cache.get(key)
             if hit and self._clock() - hit[0] < self.refresh_s:
                 return hit[1]
-            fresh = payload(self.db, self.roles, role_id)
-            self._cache[role_id] = (self._clock(), fresh)
+            fresh = payload(
+                self.db,
+                self.roles,
+                role_id,
+                desde=desde,
+                hasta=hasta,
+                locales=self.locales,
+            )
+            self._cache[key] = (self._clock(), fresh)
             return fresh
 
     def handle(self, path: str, query: str = "") -> Response | None:
@@ -292,7 +353,8 @@ class Dashboard:
             return None
         if parts[1] != "dashboard" or (len(parts) == 3 and parts[2] != "datos"):
             return None
-        role_id = (parse_qs(query).get("rol") or [DEFAULT_ROLE])[0]
+        qs = parse_qs(query)
+        role_id = (qs.get("rol") or [DEFAULT_ROLE])[0]
         try:
             allowed = self.roles.can_open(role_id, "dashboard")
         except KeyError:
@@ -301,4 +363,10 @@ class Dashboard:
             return _json(403, {"error": "Este rol no tiene dashboard."})
         if len(parts) == 2:
             return Response(200, "text/html; charset=utf-8", PAGE.read_bytes())
-        return _json(200, self.data(role_id))
+        desde = qs["desde"][0] if qs.get("desde") else None
+        hasta = qs["hasta"][0] if qs.get("hasta") else None
+        try:
+            period(desde, hasta, datetime.now(UTC))
+        except ValueError as e:
+            return _json(400, {"error": str(e)})
+        return _json(200, self.data(role_id, desde, hasta))

@@ -75,7 +75,7 @@ def test_encargado_sees_only_his_metrics(db, roles):
 
 def test_dueno_sees_everything_and_what_is_pending(db, roles):
     _service(db)
-    data = payload(db, roles, "dueno")
+    data = payload(db, roles, "dueno", now=T0 + timedelta(minutes=53))
     m = data["metricas"]
     assert m["desperdicio"]["total"] == 690
     assert m["adopcion"] == {"avisos": 1, "respondidos": 1, "no_hacia_falta": 0}
@@ -124,12 +124,13 @@ def test_routes(db, roles):
 def test_numbers_refresh_once_per_hour(db, roles):
     now = [0.0]
     dash = Dashboard(db, roles, clock=lambda: now[0])
-    first = dash.data("encargado")
+    day = ("encargado", "2026-10-18", "2026-10-18")  # 21:00 del 18 en Montevideo
+    first = dash.data(*day)
     _service(db)
     now[0] = 30 * 60
-    assert dash.data("encargado") is first  # media hora: los mismos números
+    assert dash.data(*day) is first  # media hora: los mismos números
     now[0] = 61 * 60
-    assert dash.data("encargado")["metricas"]["tiempo_respuesta"]["segundos"] == 40
+    assert dash.data(*day)["metricas"]["tiempo_respuesta"]["segundos"] == 40
 
 
 def test_tool_serves_the_dashboard(db, roles):
@@ -171,3 +172,129 @@ def test_salon_server_also_serves_the_dashboard(db, roles):
         assert e.value.code == 403
     finally:
         srv.stop()
+
+
+# --- D-1b: período y local ---
+
+import generar_historial  # tools/, en el sys.path de arriba
+
+from servio_vision.db import HISTORY_LOCAL
+from servio_vision.metrics import Scope
+
+
+@pytest.fixture
+def history(db, tmp_path):
+    """10 días de historial simulado (generar_historial): del día -10 al -1."""
+    restaurant = Restaurant.load()
+    rows = generar_historial.generate(restaurant, days=10, seed=7)
+    path = tmp_path / "historial.jsonl"
+    path.write_text("".join(json.dumps(r) + "\n" for r in rows), encoding="utf-8")
+    db.import_history(path, restaurant)
+    days = sorted({r["fecha"] for r in rows})
+    return days, rows
+
+
+def _numbers(db, roles, desde, hasta):
+    return payload(
+        db, roles, "dueno", desde=desde, hasta=hasta, locales=(HISTORY_LOCAL,)
+    )["metricas"]
+
+
+def test_same_meals_give_other_numbers_per_period(db, roles, history):
+    days, rows = history
+    all_days = _numbers(db, roles, days[0], days[-1])
+    first = _numbers(db, roles, days[0], days[0])
+    week = _numbers(db, roles, days[-7], days[-1])
+    # un día: solo las mesas de ese día (dos servicios × 4 mesas, cada comida
+    # termina con una mesa terminada)
+    ended = sum(
+        1 for r in rows if r["tipo"] == "mesa_terminada" and r["fecha"] == days[0]
+    )
+    assert first["mesa_terminada_sin_atender"]["mesas"] == ended
+    total = sum(1 for r in rows if r["tipo"] == "mesa_terminada")
+    assert all_days["mesa_terminada_sin_atender"]["mesas"] == total
+    assert first["rotacion"]["servicios"] == 2
+    assert week["rotacion"]["servicios"] == 14
+    assert all_days["rotacion"]["servicios"] == 20
+    assert first["desperdicio"]["total"] != all_days["desperdicio"]["total"]
+    # un período sin comidas: sin números, nunca un cero que parezca dato
+    empty = _numbers(db, roles, "2020-01-01", "2020-01-31")
+    assert empty["tiempo_respuesta"] is None
+    assert empty["mesa_terminada_sin_atender"] is None
+    assert empty["platos_que_vuelven"] is None
+
+
+def test_only_this_local_counts(db, roles, history, tmp_path):
+    days, _ = history
+    # el dashboard de una casa no ve el historial simulado
+    m = payload(db, roles, "dueno", desde=days[0], hasta=days[-1])["metricas"]
+    assert m["tiempo_respuesta"] is None and m["rotacion"] is None
+    # ni lo de otra casa que escribe en la misma base
+    other = Database(tmp_path / "servio.db", local_id="otra-casa")
+    try:
+        _service(other)
+        _service(db)
+        m = payload(db, roles, "dueno", desde="2026-10-18", hasta="2026-10-18")
+        assert m["metricas"]["mesa_terminada_sin_atender"]["mesas"] == 1
+        assert m["metricas"]["adopcion"]["avisos"] == 1
+    finally:
+        other.close()
+
+
+def test_camera_utc_counts_on_the_local_day(db, roles):
+    # T0 es 00:00 UTC del 19/10 = 21:00 del 18/10 en Montevideo
+    _service(db)
+    on_18 = payload(db, roles, "encargado", desde="2026-10-18", hasta="2026-10-18")
+    on_19 = payload(db, roles, "encargado", desde="2026-10-19", hasta="2026-10-19")
+    assert on_18["metricas"]["tiempo_respuesta"]["segundos"] == 40
+    assert on_19["metricas"]["tiempo_respuesta"] is None
+    # los avisos abiertos son de ahora: no dependen del período
+    assert len(on_19["metricas"]["avisos_abiertos"]) == 1
+
+
+def test_default_period_is_last_week_and_travels_in_payload(db, roles):
+    now = datetime(2026, 11, 11, 2, 0, tzinfo=UTC)  # 23:00 del 10/11 en Montevideo
+    data = payload(db, roles, "encargado", now=now)
+    assert data["periodo"] == {
+        "desde": "2026-11-04",
+        "hasta": "2026-11-10",
+        "hoy": "2026-11-10",
+    }
+    one = payload(db, roles, "encargado", now=now, desde="2026-11-01")
+    assert one["periodo"]["desde"] == one["periodo"]["hasta"] == "2026-11-01"
+
+
+def test_period_in_the_url(db, roles):
+    _service(db)
+    dash = Dashboard(db, roles)
+    res = dash.handle(
+        "/casa-tomas/dashboard/datos", "rol=dueno&desde=2026-10-18&hasta=2026-10-18"
+    )
+    data = json.loads(res.body)
+    assert data["periodo"]["desde"] == "2026-10-18"
+    assert data["metricas"]["tiempo_respuesta"]["segundos"] == 40
+    bad = dash.handle("/casa-tomas/dashboard/datos", "desde=ayer")
+    assert bad.status == 400 and "AAAA-MM-DD" in json.loads(bad.body)["error"]
+    backwards = dash.handle(
+        "/casa-tomas/dashboard/datos", "desde=2026-10-19&hasta=2026-10-18"
+    )
+    assert backwards.status == 400
+
+
+def test_scope_rewrites_fact_tables_only():
+    scope = Scope(("casa",), None, None)
+    sql, params = scope.apply(
+        "SELECT * FROM avisos a JOIN respuestas r ON r.aviso_id = a.id"
+        " JOIN mozos m ON m.id = a.mozo_id"
+        " WHERE EXISTS (SELECT 1 FROM respuestas WHERE x = 1)"
+    )
+    assert "FROM (SELECT * FROM avisos WHERE local_id IN (:_local0)) a" in sql
+    assert "JOIN (SELECT * FROM respuestas WHERE local_id IN (:_local0)) r ON" in sql
+    assert (
+        "(SELECT * FROM respuestas WHERE local_id IN (:_local0)) respuestas WHERE"
+        in sql
+    )
+    assert "JOIN mozos m" in sql
+    assert params == {"_local0": "casa"}
+    # sin scope, la consulta queda igual (tools/metricas.py y /metricas)
+    assert Scope().apply("SELECT 1 FROM avisos a") == ("SELECT 1 FROM avisos a", {})

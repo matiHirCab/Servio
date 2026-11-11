@@ -59,6 +59,16 @@ tr.hot td{color:var(--tomato);font-weight:700}
 .ax span{flex:1;text-align:center}
 .empty{color:var(--muted);font-size:14px;margin:0}
 .error{background:var(--rose);border-radius:22px;padding:16px}
+/* D-1b · selector de período */
+.periodo{display:flex;flex-direction:column;gap:8px}
+.seg{display:flex;gap:6px;overflow-x:auto;padding-bottom:2px}
+.seg button{flex:none;min-height:44px;padding:0 16px;border:0;border-radius:999px;background:#fff;color:var(--ink);font:inherit;font-size:15px;font-weight:700;cursor:pointer}
+.seg button[aria-pressed="true"]{background:var(--navy);color:#fff}
+.manual{display:flex;flex-wrap:wrap;align-items:center;gap:8px;background:#fff;border-radius:22px;padding:12px 14px;font-size:15px}
+.manual input,.manual select{font:inherit;font-size:15px;min-height:40px;border:1px solid var(--line);border-radius:12px;padding:0 10px;background:#fff;color:var(--ink)}
+.manual input[type=number]{width:72px}
+.manual button{min-height:40px;padding:0 14px;border:0;border-radius:999px;background:var(--navy);color:#fff;font:inherit;font-size:15px;font-weight:700;cursor:pointer}
+.manual .sep{flex-basis:100%;height:0}
 .top,.col,.cols{display:flex;flex-direction:column;gap:12px;min-width:0}
 .hero{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
 .hero>:first-child{grid-column:1/-1}
@@ -89,6 +99,11 @@ tr.hot td{color:var(--tomato);font-weight:700}
 // (mozos, platos) entran con textContent, nunca como HTML.
 const params = new URLSearchParams(location.search);
 const ROLE = params.get("rol") || "encargado";
+// Período (D-1b): viaja en la URL (?desde=&hasta=, días del salón, incluidos) para
+// poder compartir el link. Sin nada, el servidor da la última semana.
+let DESDE = params.get("desde") || "";
+let HASTA = params.get("hasta") || "";
+let MODE = null;  // atajo abierto: hoy, dia, semana, mes, mano (se deduce del período)
 // /<local>/dashboard (con o sin barra al final)
 let UPDATED = "–";
 const BASE = location.pathname.replace(/\/+$/, "");
@@ -127,7 +142,95 @@ function pending(label, why) {
   return tile("pending", label, el("p", "sub muted", why));
 }
 function noData(label) {
-  return tile("", label, el("p", "empty", "Sin datos todavía."));
+  return tile("", label, el("p", "empty", "Sin datos en este período."));
+}
+
+// ---- período ----
+
+// Fechas como texto AAAA-MM-DD; las cuentas en UTC para no correrse por la zona.
+function shift(iso, days, months) {
+  const [y, m, d] = iso.split("-").map(Number);
+  const t = new Date(Date.UTC(y, m - 1 - (months || 0), d + (days || 0)));
+  return t.toISOString().slice(0, 10);
+}
+function dayLabel(iso) {
+  const [y, m, d] = iso.split("-").map(Number);
+  return new Date(Date.UTC(y, m - 1, d)).toLocaleDateString("es-UY", {day: "numeric", month: "short", timeZone: "UTC"});
+}
+function presets(hoy) {
+  return {hoy: [hoy, hoy], semana: [shift(hoy, -6), hoy], mes: [shift(hoy, 1, 1), hoy]};
+}
+function modeOf(p) {
+  const pre = presets(p.hoy);
+  for (const k of ["hoy", "semana", "mes"]) if (pre[k][0] === p.desde && pre[k][1] === p.hasta) return k;
+  return p.desde === p.hasta ? "dia" : "mano";
+}
+function go(desde, hasta, mode) {
+  DESDE = desde; HASTA = hasta; MODE = mode;
+  params.set("desde", desde); params.set("hasta", hasta);
+  history.replaceState(null, "", location.pathname + "?" + params.toString());
+  load();
+}
+function input(type, value, max) {
+  const i = el("input");
+  i.type = type; i.value = value;
+  if (max) i.max = max;
+  return i;
+}
+function periodBar(data) {
+  const p = data.periodo;
+  if (!p) return null;
+  const mode = MODE || modeOf(p);
+  const box = el("section", "periodo");
+  box.setAttribute("aria-label", "Período");
+  const seg = el("div", "seg");
+  seg.setAttribute("role", "group");
+  const pre = presets(p.hoy);
+  [["hoy", "Hoy"], ["dia", "Un día"], ["semana", "Última semana"], ["mes", "Último mes"], ["mano", "A mano"]].forEach(([id, label]) => {
+    const b = el("button", null, label);
+    b.type = "button";
+    b.setAttribute("aria-pressed", String(id === mode));
+    b.addEventListener("click", () => {
+      if (pre[id]) go(pre[id][0], pre[id][1], id);
+      else { MODE = id; render(LAST); }
+    });
+    seg.appendChild(b);
+  });
+  add(box, seg);
+  if (mode === "dia") {
+    const day = input("date", p.desde, p.hoy);
+    day.setAttribute("aria-label", "Día");
+    day.addEventListener("change", () => day.value && go(day.value, day.value, "dia"));
+    add(box, add(el("div", "manual"), el("span", null, "Día"), day));
+  } else if (mode === "mano") {
+    const from = input("date", p.desde), to = input("date", p.hasta);
+    from.setAttribute("aria-label", "Desde"); to.setAttribute("aria-label", "Hasta");
+    const ok = el("button", null, "Ver");
+    ok.type = "button";
+    ok.addEventListener("click", () => {
+      if (!from.value || !to.value) return;
+      const [a, b] = from.value <= to.value ? [from.value, to.value] : [to.value, from.value];
+      go(a, b, "mano");
+    });
+    // o «últimos N días / meses» hasta hoy
+    const n = input("number", "14");
+    n.min = "1"; n.setAttribute("aria-label", "Cuántos");
+    const unit = el("select");
+    unit.setAttribute("aria-label", "Días o meses");
+    [["d", "días"], ["m", "meses"]].forEach(([v, t]) => { const o = el("option", null, t); o.value = v; unit.appendChild(o); });
+    const back = el("button", null, "Ver");
+    back.type = "button";
+    back.addEventListener("click", () => {
+      const k = Math.max(1, parseInt(n.value, 10) || 1);
+      go(unit.value === "m" ? shift(p.hoy, 1, k) : shift(p.hoy, 1 - k), p.hoy, "mano");
+    });
+    add(box, add(el("div", "manual"), el("span", null, "Del"), from, el("span", null, "al"), to, ok,
+      el("span", "sep"), el("span", null, "Últimos"), n, unit, back));
+  }
+  const days = Math.round((Date.parse(p.hasta) - Date.parse(p.desde)) / 864e5) + 1;
+  const what = p.desde === p.hasta ? dayLabel(p.desde) : dayLabel(p.desde) + " al " + dayLabel(p.hasta) + " · " + days + " días";
+  add(box, el("p", "sub muted", "Números del " + what + ". Los avisos abiertos son de ahora."));
+  return box;
 }
 
 // ---- tarjetas, una por métrica ----
@@ -362,7 +465,7 @@ function turno(m) {
 }
 function renderEncargado(data) {
   const m = data.metricas;
-  add(app, topBar(data), add(el("div", "hero"), respuesta(m, true), sinAtender(m), olvidadas(m)), turno(m));
+  add(app, topBar(data), periodBar(data), add(el("div", "hero"), respuesta(m, true), sinAtender(m), olvidadas(m)), turno(m));
 }
 function renderDueno(data) {
   const m = data.metricas;
@@ -376,7 +479,7 @@ function renderDueno(data) {
   });
   const h = id => { const n = el("h2", null, {resultados: "Resultados", carta: "Carta", turno: "Turno", config: "Configuración"}[id]); n.id = id; return n; };
   const later = pend(data, "historico", "Semana a semana");
-  add(app, topBar(data), tabs, h("resultados"),
+  add(app, topBar(data), periodBar(data), tabs, h("resultados"),
     pend(data, "antes_despues", "Antes / después con Servio"),
     add(el("div", "two four"), respuesta(m, false), sinAtender(m), olvidadas(m), vuelven(m)),
     later ? add(el("div", "hero"), later, desperdicio(m), adopcion(m))
@@ -387,19 +490,35 @@ function renderDueno(data) {
     add(el("div", "cols"), config(data)));
 }
 
+let LAST = null, TIMER = null;
+function render(data) {
+  app.replaceChildren();
+  (data.configuracion ? renderDueno : renderEncargado)(data);
+}
 async function load() {
+  clearTimeout(TIMER);
+  const q = new URLSearchParams({rol: ROLE});
+  if (DESDE) q.set("desde", DESDE);
+  if (HASTA) q.set("hasta", HASTA);
   try {
-    const res = await fetch(BASE + "/datos?rol=" + encodeURIComponent(ROLE), {cache: "no-store"});
+    const res = await fetch(BASE + "/datos?" + q.toString(), {cache: "no-store"});
     const data = await res.json();
+    if (res.status === 400 && (DESDE || HASTA)) {
+      // período mal escrito en el link: vuelve al de siempre
+      DESDE = HASTA = ""; MODE = null;
+      params.delete("desde"); params.delete("hasta");
+      history.replaceState(null, "", location.pathname + (params.toString() ? "?" + params.toString() : ""));
+      return load();
+    }
     if (!res.ok) throw new Error(data.error || res.statusText);
     UPDATED = data.actualizado;
-    app.replaceChildren();
+    LAST = data;
     document.title = "Servio · " + data.nombre_rol;
-    (data.configuracion ? renderDueno : renderEncargado)(data);
-    setTimeout(load, data.refresco_s * 1000);
+    render(data);
+    TIMER = setTimeout(load, data.refresco_s * 1000);
   } catch (e) {
     app.replaceChildren(header({local: "", nombre_rol: ROLE, actualizado: "–"}), el("p", "error", "No se pudo cargar el dashboard: " + e.message));
-    setTimeout(load, 60 * 1000);
+    TIMER = setTimeout(load, 60 * 1000);
   }
 }
 load();

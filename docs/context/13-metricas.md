@@ -81,6 +81,12 @@ python tools/metricas.py --rol encargado # sin desperdicio
 python tools/metricas.py --sql           # con las consultas
 ```
 
+`tools/metricas.py` y `/metricas` de Telegram cuentan toda la base, con el historial simulado. El dashboard (D-1) no:
+
+- **Período (D-1b).** Todo número sale de un período, que viaja en la URL: `/<local>/dashboard?rol=dueno&desde=2026-11-01&hasta=2026-11-10` (días del salón en hora de Uruguay, los dos incluidos). Sin `desde` ni `hasta`, la última semana. La página tiene los atajos hoy, un día, última semana, último mes y a mano (de tal fecha a tal fecha, o los últimos N días o meses). Los avisos abiertos son de ahora y no cambian con el período.
+- **Local.** Solo cuentan las filas del `local_id` de la casa que sirve el dashboard: ni otra casa que escribe en el mismo Postgres ni el historial simulado (`local_id` "historial"). `python tools/dashboard.py --demo` suma el historial y abre el dashboard en los días que cubre.
+- **Qué fecha cuenta.** Un aviso, por cuándo se abrió; una respuesta, por cuándo se respondió; un plato servido, por cuándo se sirvió. Una visita (rotación) cuenta si su primer plato y su retiro caen en el período. `Scope` de `metrics.py` filtra esas tres tablas sin tocar las consultas de arriba.
+
 ## Pendiente de decidir
 
 - Si los umbrales (5 min, 2 min) van a `servio.toml` para que cada local los cambie. Hoy están en el código.
