@@ -96,7 +96,23 @@ python main.py --source "..\video demo test.mp4" --classifier hybrid --demo --in
 
 Abrí `http://localhost:8000/local/salon` (`local` es el `local_id` de la casa; `/` redirige ahí). Para verla desde el celular o una tablet en la misma red, sumá `--web-host 0.0.0.0` y entrá con la IP de la PC. No tiene usuario ni contraseña: no la abras a internet. También va en el toml (`web_port = 8000`, `web_host = "0.0.0.0"`).
 
-Rutas: `/<local>/salon` (página), `/<local>/salon/estado` (la última foto en JSON) y `/<local>/salon/eventos` (la misma foto cada vez que cambia). La foto la arma `servio_vision/salon.py`; el servidor es `servio_vision/salon_web.py` (biblioteca estándar, sin dependencias nuevas) y la página `servio_vision/static/salon.html`.
+Es la **pantalla fija del encargado** (barra o cocina) y lo que se muestra en una venta; el mozo no la mira, recibe el aviso en el reloj o el celular (decisión 1 de `docs/decisiones-25-11.md`). En un celular se acomoda sola: el salón arriba, las tarjetas abajo y la barra de estados pegada al borde. Una mesa con aviso abierto lleva la etiqueta del aviso debajo; el panel lista los avisos del más viejo al más nuevo y la mesa elegida al entrar es la del aviso más viejo. El diseño está en `docs/diseno-front.md` (F-1).
+
+**Modo video.** Por defecto solo se ve la reconstrucción (mesas, sillas, personas y platos dibujados: ninguna cara en la pantalla). Con `--web-video` (o `web_video = true` en el toml) el mismo proceso manda además, con cada lectura, el frame de la cámara **ya con las caras difuminadas** (y lo sirve en `/<local>/salon/frame.jpg`), y la página muestra el segmento «Reconstrucción / Video» con las capas encima de la imagen (recuadro y estado de cada mesa, anillo y nombre de cada plato con caja). Sirve para armar la cámara y para una demo; **apagalo después** (`--no-web-video` lo apaga aunque el toml lo prenda): aunque no tenga caras, servir el frame en la red del local es un video en vivo para cualquiera en el wifi (decisión 2). El frame vive en memoria (uno solo, se pisa en cada lectura): no se graba nada a disco sin `--record`.
+
+Rutas: `/<local>/salon` (página), `/<local>/salon/estado` (la última foto en JSON), `/<local>/salon/eventos` (la misma foto cada vez que cambia) y `/<local>/salon/frame.jpg` (el último frame; solo con `--web-video`, si no 404). Con `?video=1`, `/estado` y `/eventos` llevan además el frame de esa misma lectura en base64 (`frame_jpeg`): es lo que usa el modo video de la página. La foto la arma `servio_vision/salon.py`; el servidor es `servio_vision/salon_web.py` (biblioteca estándar, sin dependencias nuevas) y la página `servio_vision/static/salon.html`.
+
+## Grabar y reproducir sesiones (B-1)
+
+```bash
+python main.py --config config/casa-jessica.toml --record out/sesiones/cena-jueves   # graba
+python main.py --source out/sesiones/cena-jueves --classifier hybrid --no-telegram      # reproduce
+python tools/comparar_sesion.py out/sesiones/cena-jueves                                # ¿mismos avisos? (lee DIR/reproduccion.jsonl)
+```
+
+`--record DIR` deja una **sesión**: un JPEG por lectura con su hora en el nombre (ya con las caras difuminadas, C-3), `sesion.json` (las reglas de la corrida: cadencia, umbrales, suavizado; zonas si eran fijas; local; clasificador) y `eventos.jsonl` con las observaciones y avisos de esa corrida. Sin `--record` no queda ninguna imagen. Cada grabación va a una carpeta nueva (una que ya tiene sesión se rechaza). Las sesiones van a la carpeta compartida del equipo, **nunca al repo** (`out/` está ignorado).
+
+`--source DIR` reproduce la sesión con cualquier clasificador: cada frame con su hora real, las reglas y las zonas de la grabación (no hace falta `--interval`, `--demo` ni `--zones`: salen de `sesion.json`; para probar otras reglas, editá ese archivo), `--speed` para ir a ritmo de reloj. Una reproducción no toca nada de verdad: no manda a Telegram y escribe los avisos en una SQLite dentro de la sesión (`reproduccion.db`), no en la base compartida. Las reglas cuentan tiempo de las observaciones, así que con el mismo clasificador salen los mismos avisos; `tools/comparar_sesion.py` compara `DIR/eventos.jsonl` (lo grabado) con `DIR/reproduccion.jsonl` (lo reproducido). Para probar las reglas sin volver a clasificar, `tools/replay.py` sigue reproduciendo el log directamente.
 
 ## Datos del restaurante y respuestas de los mozos
 

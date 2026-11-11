@@ -32,13 +32,15 @@ def configure(
     database_url: str | None = None,
     local_id: str | None = None,
     resume: bool = False,
+    mirror_log: Path | None = None,
 ) -> AlertProcessor:
     """Arranca un estado nuevo (sin mesas ni avisos abiertos) con estos umbrales;
     con `resume`, sigue con el que dejó la corrida anterior en la base (A-5), si es
     reciente. Solo vale con la base, o sea con datos del restaurante.
     `env`: token y grupo de Telegram (los pasa `app.py`); sin él, los de la
     configuración del entorno. `database_url` y `local_id`: la base compartida y
-    con qué nombre escribe esta casa (A-6); sin URL, SQLite junto al log."""
+    con qué nombre escribe esta casa (A-6); sin URL, SQLite junto al log.
+    `mirror_log`: copia del log de esta corrida sola (la sesión grabada, B-1)."""
     global _processor
     if _processor is not None:
         _processor.close()
@@ -53,10 +55,27 @@ def configure(
             url=database_url if database_url is not None else cfg.database_url,
             local_id=local_id or cfg.local_id,
         )
-    _processor = AlertProcessor(
-        config, get_notifier(telegram, env), log_path, restaurant, db, resume=resume
-    )
+    _processor = None  # el anterior ya está cerrado: que nadie lo use
+    try:
+        _processor = AlertProcessor(
+            config,
+            get_notifier(telegram, env),
+            log_path,
+            restaurant,
+            db,
+            resume=resume,
+            mirror_log=mirror_log,
+        )
+    except Exception:
+        if db is not None:
+            db.close()
+        raise
     return _processor
+
+
+def mirror_lost() -> bool:
+    """La copia del log de la corrida (sesión grabada, B-1) se perdió a mitad de camino."""
+    return _processor is not None and _processor.log.mirror_lost
 
 
 def process(observation: TableObservation) -> list[dict[str, Any]]:

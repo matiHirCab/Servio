@@ -82,6 +82,7 @@ HOUSE_KEYS = (
     "local_id",
     "web_port",
     "web_host",
+    "web_video",
 )
 
 # Secciones del toml que son de otro módulo y acá se dejan pasar sin mirar:
@@ -148,6 +149,10 @@ class Settings(BaseSettings):
     """puerto de la vista del salón en vivo (salon_web.py); sin esto, no se sirve"""
     web_host: str = Field("127.0.0.1", min_length=1, validation_alias="servio_web_host")
     """dónde escucha la vista: 0.0.0.0 para abrirla desde otro equipo de la red"""
+    web_video: bool = Field(False, validation_alias="servio_web_video")
+    """servir también el último frame (caras difuminadas) en `/<local>/salon/frame.jpg`
+    para el modo video de la vista (F-1b, decisión 2): solo para armar la cámara o
+    una demo; apagado, la vista es la reconstrucción"""
 
     # --- modelo de platos ---
     claude_provider: Provider = "cli"

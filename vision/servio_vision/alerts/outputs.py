@@ -14,6 +14,7 @@ la base (`handle(event)`); así log y base ya ven lo que puso el canal.
 - `DatabaseOutput`: platos servidos, lecturas, avisos y respuestas en `servio.db`.
 """
 
+import contextlib
 import json
 import logging
 import threading
@@ -205,19 +206,57 @@ class TelegramOutput:
 class EventLog:
     """Una línea JSON por evento, agregada al final del archivo (no se pisa)."""
 
-    def __init__(self, path: Path) -> None:
+    def __init__(self, path: Path, mirror: Path | None = None) -> None:
+        """`mirror`: una copia de esta corrida sola (se pisa), para una sesión grabada
+        (B-1): así sus eventos no hay que recortarlos del log compartido."""
         self.path = path
+        if mirror is not None and mirror.resolve() == path.resolve():
+            raise ValueError(f"la copia del log no puede ser el log mismo ({path})")
         path.parent.mkdir(parents=True, exist_ok=True)
         # Abierto una sola vez; buffering=1 baja cada línea al disco al escribirla.
-        self._file = path.open("a", encoding="utf-8", buffering=1)
+        # El espejo primero: si no se puede abrir, el log principal no queda abierto.
+        self._mirror = None
+        self.mirror_lost = (
+            False  # la copia falló a mitad de camino (la sesión queda incompleta)
+        )
+        if mirror is not None:
+            mirror.parent.mkdir(parents=True, exist_ok=True)
+            self._mirror = mirror.open("w", encoding="utf-8", buffering=1)
+        try:
+            self._file = path.open("a", encoding="utf-8", buffering=1)
+        except OSError:
+            if self._mirror is not None:
+                self._mirror.close()
+            raise
         self._lock = threading.Lock()  # también escriben las respuestas de los mozos
 
     def write(self, event: dict[str, Any]) -> None:
+        line = json.dumps(event, ensure_ascii=False) + "\n"
         with self._lock:
-            self._file.write(json.dumps(event, ensure_ascii=False) + "\n")
+            self._file.write(line)
+            if self._mirror is not None:
+                try:
+                    self._mirror.write(line)
+                except (OSError, ValueError) as e:  # ValueError: ya cerrado
+                    # la copia es auxiliar (la carpeta compartida se puede caer): los
+                    # avisos siguen, la sesión queda incompleta y se avisa una vez
+                    logger.error(
+                        "No se pudo escribir la copia del log, sigo sin ella: %s", e
+                    )
+                    with contextlib.suppress(OSError):  # el flush puede fallar igual
+                        self._mirror.close()
+                    self._mirror = None
+                    self.mirror_lost = True
 
     def close(self) -> None:
-        self._file.close()
+        try:
+            self._file.close()
+        finally:
+            if self._mirror is not None:
+                with contextlib.suppress(
+                    OSError
+                ):  # auxiliar: un flush que falla no corta
+                    self._mirror.close()
 
 
 class EventLogOutput:

@@ -1,0 +1,154 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<!-- Prototipo F-3 · notificaciones al mozo (docs/diseno-front.md). Cómo llega cada aviso al
+     reloj y al celular (Telegram) y cómo se responde. Abrirlo desde el repo anda; para
+     publicarlo como artifact, vision/tools/publicar_prototipo.sh le saca el esqueleto. -->
+<title>Servio Avisos</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow:wght@400;500;600&family=Barlow+Condensed:wght@500;600&display=swap">
+<style>
+/* El reloj manda: una línea que se lee de reojo, dos o tres respuestas de una palabra.
+   Tema único oscuro: así se ven las notificaciones en un reloj. */
+:root{
+  --bg:#0b0c0e; --surface:#15171b; --surface-2:#1e2126; --line:rgba(255,255,255,.09);
+  --fg:#f2f4f7; --fg-2:#aab2bd; --fg-3:#6f7883;
+  --vacio:#FF4D61; --por_terminar:#FF8A3D; --lleno:#3EE08F; --esc:#B388FF; --tg:#2AABEE;
+  --f:"Barlow",system-ui,sans-serif; --f-label:"Barlow Condensed","Barlow",sans-serif;
+  color-scheme:dark;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font-family:var(--f);padding-inline:16px;padding-block:14px 40px;-webkit-font-smoothing:antialiased}
+h1,h2,h3{margin:0;text-wrap:balance}
+.label{font-family:var(--f-label);text-transform:uppercase;letter-spacing:.1em;font-size:12px;color:var(--fg-3)}
+.wrap{max-width:1180px;margin:0 auto;display:grid;gap:18px}
+.review{display:flex;flex-wrap:wrap;gap:8px 14px;align-items:center;justify-content:space-between;padding:10px 14px;border:1.5px dashed #3a4150;border-radius:16px;font-size:13px;color:var(--fg-2)}
+.review b{color:var(--fg)}
+.seg{display:inline-flex;border:1px solid var(--line);border-radius:999px;overflow:hidden}
+.seg button{background:transparent;color:var(--fg-2);border:0;padding:6px 12px;font:inherit;font-size:13px;cursor:pointer}
+.seg button[aria-pressed="true"]{background:var(--fg);color:var(--bg)}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:18px;align-items:start}
+.card{background:var(--surface);border:1px solid var(--line);border-radius:20px;padding:16px;min-width:0}
+.card h2{font-size:18px;font-weight:600;margin-bottom:4px}
+.card p.why{color:var(--fg-2);font-size:14px;margin:0 0 12px;line-height:1.4}
+/* reloj: pantalla de 176×215 px (Apple Watch 41 mm, en puntos), bordes redondeados */
+.watch{width:176px;min-height:215px;border-radius:44px;background:#000;border:6px solid #2a2d33;box-shadow:0 20px 50px rgba(0,0,0,.6),inset 0 0 0 1px #111;margin:6px auto 10px;padding:14px 12px;display:flex;flex-direction:column;gap:8px;font-size:14px}  /* alto mínimo de un 41 mm; si no entra, en el reloj se scrollea */
+.watch .app{display:flex;align-items:center;gap:6px;font-size:11px;color:var(--fg-2)}
+.watch .app i{width:14px;height:14px;border-radius:50%;background:var(--tg);display:inline-block}
+.watch .msg{font-size:15px;line-height:1.25;font-weight:500}
+.watch .msg b{display:block;font-size:15px;font-weight:600}  /* en 41 mm las más largas van en dos líneas: la mesa primero, el qué después */
+.watch .msg small{display:block;color:var(--fg-2);font-size:12px;margin-top:3px}
+.watch .acts{margin-top:auto;display:grid;gap:5px}
+.watch .acts span{display:block;text-align:center;border-radius:12px;padding:7px 6px;background:var(--surface-2);font-size:14px;font-weight:600}
+.watch .acts span.go{background:var(--lleno);color:#06240f}
+.watch .acts span.sec{color:var(--fg-2)}
+/* celular: el mismo aviso en Telegram, con los botones */
+.phone{background:#0e1621;border:1px solid var(--line);border-radius:18px;padding:12px;font-size:14px}
+.bubble{background:#182533;border-radius:14px 14px 14px 4px;padding:8px 10px;max-width:100%;line-height:1.35;white-space:pre-line}
+.bubble::first-line{font-weight:600}
+.bubble .t{color:#6d8aa6;font-size:11px;text-align:right;margin-top:4px}
+.btns{display:grid;grid-template-columns:1fr 1fr;gap:5px;margin-top:6px}
+.btns span{display:block;text-align:center;border:1px solid #2a3b4d;border-radius:8px;padding:6px 4px;font-size:13px;color:var(--tg)}
+.btns span.wide{grid-column:1/-1}
+.reply{display:flex;justify-content:flex-end;margin-top:8px}
+.reply span{background:#2b5278;border-radius:14px 14px 4px 14px;padding:7px 10px}
+.flow{display:grid;gap:8px;font-size:14px;color:var(--fg-2)}
+.flow div{display:grid;grid-template-columns:28px 1fr;gap:8px;align-items:start}
+.flow b{display:inline-grid;place-items:center;width:24px;height:24px;border-radius:50%;background:var(--surface-2);color:var(--fg);font-size:12px}
+.pill{display:inline-block;border-radius:999px;padding:2px 9px;font-family:var(--f-label);font-size:12px;letter-spacing:.08em;text-transform:uppercase}
+table{border-collapse:collapse;width:100%;font-size:14px}
+th,td{text-align:left;padding:8px 6px;border-top:1px solid var(--line);vertical-align:top}
+th{color:var(--fg-3);font-weight:500;font-family:var(--f-label);letter-spacing:.08em;text-transform:uppercase;font-size:12px}
+.twrap{overflow-x:auto}
+.note{font-size:13px;color:var(--fg-2);line-height:1.45;margin:8px 0 0}
+.note a{color:var(--tg)}
+code{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:.92em;color:var(--fg-2)}
+@media (max-width:620px){.grid{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<div class="wrap">
+<section class="review" aria-label="Controles de revisión">
+  <span><b>Prototipo F-3</b> · cómo le llega el aviso al mozo (reloj y celular) y cómo responde. Canal: Telegram.</span>
+  <span class="seg" role="group" aria-label="Dónde se ve">
+    <button type="button" id="ver-reloj" aria-pressed="true">Reloj</button>
+    <button type="button" id="ver-cel" aria-pressed="false">Celular</button>
+  </span>
+</section>
+
+<section class="grid" id="avisos" aria-label="Un aviso por tarjeta"></section>
+
+<section class="card" aria-label="Cómo se responde desde el reloj">
+  <h2>Responder desde el reloj: una palabra</h2>
+  <p class="why">Suposición a probar en un reloj real: la notificación de Telegram no muestra los botones del mensaje, muestra el texto y deja contestar con las respuestas rápidas del reloj, dictado o teclado. Con eso, el bot tiene que entender <b>una palabra suelta</b> (el mensaje entero, no un prefijo), sin tocar «responder a». Es lo que le pedimos a C-5.</p>
+  <div class="flow">
+    <div><b>1</b><span>Llega «🧹 Mesa 2 · retirar platos». El mozo levanta la muñeca y lo lee de reojo: mesa y qué en la primera línea; hace cuánto, el plato y el mozo en la segunda.</span></div>
+    <div><b>2</b><span>Toca la respuesta rápida <b>Voy</b> (o lo dicta). En el grupo aparece «Voy» de Sofía, sin cita al aviso.</span></div>
+    <div><b>3</b><span>El bot busca <b>las mesas de Sofía</b> con aviso abierto. Si es una, marca sus avisos «Voy · Sofía»; si son dos (en un local real cada mozo tiene varias), pregunta «¿Mesa 2 o Mesa 3?» y acepta «2» (nunca elige solo); si la mesa tiene dos avisos distintos y la respuesta es «Listo», pregunta «¿los platos vacíos o el plato lleno?».</span></div>
+    <div><b>4</b><span>El aviso lo cierra la cámara (mesa libre o plato retirado), como hoy. «Listo» anota que el mozo dice que ya está: si a los 10 min la cámara no lo ve, le avisa una vez más y después escala. «No hacía falta» es el único cierre a mano: falso aviso, y ese plato (o esa mesa) no vuelve a avisar.</span></div>
+  </div>
+  <div class="twrap" style="margin-top:12px"><table aria-label="Palabras que entiende el bot">
+    <tr><th>Escriben</th><th>Vale como</th><th>Qué pasa con el aviso</th></tr>
+    <tr><td>voy · ya voy · 👍</td><td><span class="pill" style="background:var(--lleno);color:#06240f">Voy</span></td><td>Queda tomado por ese mozo (<code>answered_by</code>); no se repite el recordatorio.</td></tr>
+    <tr><td>listo · hecho · ya está · ✅</td><td><span class="pill" style="background:var(--tg);color:#06202b">Listo</span></td><td>Anota «ya está» (<code>done_at</code>); el cierre lo da la cámara, así las métricas de retiro no cambian. Si a los 10 min sigue igual, un aviso más y escala. En un «sigue lleno», el bot pregunta «¿Qué pasó?»; con un motivo (también «Está todo bien») el aviso no se repite más: espera a que retiren el plato.</td></tr>
+    <tr><td>no hacía falta · falso · ❌</td><td><span class="pill" style="background:var(--surface-2);color:var(--fg)">No hacía falta</span></td><td>El único cierre a mano: falso aviso (<code>close_reason: no_hacia_falta</code>, métrica de adopción). Silencia ese plato (por <code>track_id</code>) o, en «terminó», esa mesa hasta que se libere: otro plato de la misma mesa sí avisa. «No le gustaron» no es «no»: es un motivo. Mientras el grupo sea compartido, «ok», «dale» y «no» solos no cuentan: se usan para charlar.</td></tr>
+    <tr><td>visto</td><td><span class="pill" style="background:var(--esc);color:#1b0a33">Visto</span></td><td>Solo escalados: el encargado se dio por enterado; frenan sus recordatorios.</td></tr>
+    <tr><td>frío · duro · no le gustó · (texto, citando el aviso o justo después de «¿Qué pasó?»)</td><td><span class="pill" style="background:var(--por_terminar);color:#2b1200">Motivo</span></td><td>Solo con «sigue lleno»: queda como respuesta del plato (<code>alert_feedback</code>).</td></tr>
+  </table></div>
+  <p class="note">Mayúsculas, tildes y puntos no importan. Si no hay ningún aviso abierto de sus mesas, el bot contesta «No tenés avisos abiertos». Responder citando el mensaje sigue andando como hoy.</p>
+</section>
+
+<section class="card" aria-label="Qué le llega a cada rol">
+  <h2>Qué le llega a cada uno</h2>
+  <div class="twrap"><table>
+    <tr><th>Rol</th><th>Le llega</th><th>Dónde</th><th>Responde</th></tr>
+    <tr><td><b>Mozo</b></td><td>Los avisos de <b>sus mesas</b> (plato vacío, mesa terminó, sigue lleno) y sus recordatorios.</td><td>Reloj + celular. Hoy: el grupo de Telegram con mención; con C-7, chat privado por mozo.</td><td>Voy · Listo · No hacía falta · motivo</td></tr>
+    <tr><td><b>Encargado</b></td><td>Los <b>escalados</b>: un aviso sin respuesta después del segundo recordatorio, o una mesa que lleva más del límite sin atender.</td><td>Reloj + celular (grupo o chat del encargado).</td><td>Voy (lo toma él) · Visto. Sus «avisos» son los escalados (mensajes atados al aviso de la mesa); el «Voy» del mozo también lo toma.</td></tr>
+    <tr><td><b>Dueño</b> (y encargado)</td><td>El <b>resumen al cerrar</b> el servicio (D-3, todavía no existe) y nada en el momento.</td><td>Celular.</td><td>No responde.</td></tr>
+  </table></div>
+</section>
+
+<section class="card" aria-label="Por qué Telegram">
+  <h2>Canal: Telegram ahora, WhatsApp cuando esté D-6</h2>
+  <p class="why">Telegram ya es lo que corre (A-4; «Voy / Listo / No hacía falta» es C-5) y desde junio de 2026 tiene app oficial en Apple Watch y Wear OS: las notas dicen que la app del reloj contesta con texto o voz. Que la notificación se conteste sin abrir la app y que los botones del mensaje no aparezcan en el reloj son <b>suposiciones a probar</b>; con cualquiera de las dos, responder con una palabra es lo que anda seguro. WhatsApp llega con D-6 (después del 25/11) y sus notificaciones en el reloj se comportan igual (texto, respuesta rápida), así que el diseño no cambia; una app propia con push no se justifica por ahora.</p>
+  <p class="note">Fuentes: <a href="https://www.androidauthority.com/telegram-wear-os-return-3677006/">Android Authority, Telegram vuelve a Wear OS (12/6/2026)</a> · <a href="https://gadgetsandwearables.com/2026/06/12/telegram-ios-wearos/">Gadgets &amp; Wearables, Telegram en Apple Watch y Wear OS (12/6/2026)</a>. <b>Pendiente (a mano):</b> probar en un reloj real que llega y que la respuesta rápida vuelve al grupo.</p>
+</section>
+</div>
+
+<script>
+"use strict";
+// Los cuatro avisos (mesas y mozos de fixtures/restaurante/salon.json y carta.json) con el
+// texto que el diseño le pide a messages.py (dos líneas: «emoji
+// Mesa · qué» y «hace cuánto · plato · mozo»). Telegram manda el mismo texto al reloj y al
+// celular: acá se arma una sola vez (`txt`) y las dos vistas lo muestran tal cual.
+const AVISOS = [
+  {id:"vacio", color:"var(--por_terminar)", titulo:"Plato vacío", why:"Hay platos vacíos sobre la mesa: retirarlos. Es el aviso más frecuente; una palabra alcanza.",
+   txt:"🧹 Mesa 2 · retirar platos\nhace 1 min · Lomo con papas · Sofía", reloj:{acts:["Voy","Listo","No hacía falta"]},
+   cel:{reply:"Voy", btns:["Voy","Listo","No hacía falta"], nota:"Los botones son nuevos (C-5): hoy este mensaje llega sin botones.", hora:"21:38"}},
+  {id:"terminada", color:"var(--vacio)", titulo:"Mesa terminó", why:"Todos los platos vacíos y la gente sigue sentada: la mesa espera que la atiendan (cuenta, café, postre).",
+   txt:"🍽️ Mesa 1 · terminó\nrecién · 2 platos · Juan", reloj:{acts:["Voy","Listo","No hacía falta"]},
+   cel:{reply:"Listo", btns:["Voy","Listo","No hacía falta"], nota:"Los botones son nuevos (C-5): hoy este mensaje llega sin botones.", hora:"21:41"}},
+  {id:"lleno", color:"var(--lleno)", titulo:"Sigue lleno", why:"Un plato lleva demasiado sin tocarse: pasar a preguntar. La respuesta es el motivo, que alimenta la métrica de platos con problemas.",
+   txt:"❓ Mesa 3 · sin tocar\nhace 10 min · Milanesa napolitana · Martín · ¿está todo bien?", reloj:{acts:["Voy","Listo","No hacía falta"], dictar:"Tras «Listo» el bot pregunta «¿Qué pasó?» y el motivo se dicta"},
+   cel:{nota:"Los motivos del plato ya están (A-4); «Voy» y «No hacía falta» son nuevos (C-5). «Está todo bien» es un motivo (el aviso era real); «No hacía falta» es que no había plato lleno.", btns:["Voy","Está todo bien","Estaba fría","Porción muy grande","No le gustó","✏️ Otra respuesta","No hacía falta"], hora:"21:42"}},  // los de carta.json para la milanesa, como hoy
+  {id:"escalado", color:"var(--esc)", titulo:"Escalado al encargado", why:"Nadie respondió después del segundo recordatorio (tres mensajes), o la mesa pasó el límite sin atender. Le llega al encargado, no al mozo.",
+   txt:"⚠️ Mesa 2 · sin atender\nhace 9 min · Sofía no respondió a 3 mensajes", reloj:{acts:["Voy","Visto"]},
+   cel:{btns:["Voy","Visto"], reply:"Visto", nota:"Aviso nuevo (C-5): hoy el recordatorio se repite al grupo; no hay escalado.", hora:"21:47"}},
+];
+const esc = s => String(s??"").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+let vista="reloj";
+function card(a){
+  const [l1,l2]=a.txt.split("\n");
+  const reloj=()=>`<div class="watch" aria-label="Reloj"><div class="app"><i></i>Telegram · Servio</div><div class="msg"><b>${esc(l1)}</b><small>${esc(l2)}</small></div><div class="acts">${a.reloj.acts.map((x,i)=>`<span class="${i===0?"go":i===a.reloj.acts.length-1?"sec":""}">${esc(x)}</span>`).join("")}</div></div>${a.reloj.dictar?`<p class="note" style="text-align:center;margin:-4px 0 8px">${esc(a.reloj.dictar)}: las respuestas rápidas del reloj son una lista fija.</p>`:""}`;
+  const cel=()=>`<div class="phone"><div class="bubble">${esc(a.txt)}<div class="t">${esc(a.cel.hora)}</div><div class="btns">${a.cel.btns.map((x,i)=>`<span class="${a.cel.btns.length%2&&i===a.cel.btns.length-1?"wide":""}">${esc(x)}</span>`).join("")}</div></div>${a.cel.reply?`<div class="reply"><span>${esc(a.cel.reply)}</span></div>`:""}${a.cel.nota?`<p class="note">${esc(a.cel.nota)}</p>`:""}</div>`;
+  return `<article class="card" aria-label="${esc(a.titulo)}"><span class="pill" style="background:${a.color};color:#0b0c0e">${esc(a.titulo)}</span><h2 style="margin-top:8px">${esc(l1.replace(/^\S+\s/,""))}</h2><p class="why">${esc(a.why)}</p>${vista==="reloj"?reloj():cel()}</article>`;
+}
+function render(){ document.getElementById("avisos").innerHTML=AVISOS.map(card).join("");
+  document.getElementById("ver-reloj").setAttribute("aria-pressed",String(vista==="reloj")); document.getElementById("ver-cel").setAttribute("aria-pressed",String(vista==="cel")); }
+document.getElementById("ver-reloj").onclick=()=>{vista="reloj";render();}; document.getElementById("ver-cel").onclick=()=>{vista="cel";render();};
+render();
+</script>
+</body>
+</html>

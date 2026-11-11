@@ -12,11 +12,13 @@ import logging
 import sys
 import time
 import warnings
+from pathlib import Path
 from typing import Any
 
 import cv2
+from pydantic import ValidationError
 
-from servio_vision import alerts, framing, llm, privacy, prompt
+from servio_vision import alerts, framing, llm, privacy, prompt, recording
 from servio_vision.alerts.config import load_config
 from servio_vision.alerts.notify import TelegramNotifier
 from servio_vision.capture import (
@@ -35,7 +37,7 @@ from servio_vision.dish_match import DishMatcher
 from servio_vision.health import STALL_S, HealthMonitor
 from servio_vision.pipeline import Pipeline
 from servio_vision.privacy import Anonymizer
-from servio_vision.recording import FrameRecorder
+from servio_vision.recording import FrameRecorder, SessionRecorder
 from servio_vision.restaurant import DEFAULT_DIR as RESTAURANT_DIR
 from servio_vision.restaurant import Restaurant
 from servio_vision.roles import Roles
@@ -110,7 +112,24 @@ def finished_after_seconds(settings: Settings) -> float:
 def load_tables(settings: Settings) -> tuple[Zones | None, TableTracker | None]:
     """Las mesas: zonas fijas (`zones.json`) o un tracker que las detecta en cada
     lectura. `ImportError` sin ultralytics, `FileNotFoundError` sin el archivo; los
-    mensajes ya dicen qué hacer. Lo usan `build_pipeline` y el chequeo de encuadre."""
+    mensajes ya dicen qué hacer. Lo usan `build_pipeline` y el chequeo de encuadre.
+    Una sesión grabada (B-1) se reproduce con las zonas con las que se grabó, aunque
+    la config diga otras: con otras mesas no hay nada que comparar."""
+    session = session_dir(settings)
+    if session is not None:
+        recorded = recording.session_zones(session)
+        if recorded is not None:
+            if settings.zones is not None:
+                logger.info(
+                    "Sesión grabada con zonas fijas: van esas, no %s", settings.zones
+                )
+            return recorded, None
+        if settings.zones is not None:
+            logger.warning(
+                "La sesión se grabó detectando las mesas solas; con --zones %s los"
+                " avisos pueden no coincidir",
+                settings.zones,
+            )
     if settings.zones is None:
         try:
             return None, TableTracker(TableDetector())
@@ -207,9 +226,19 @@ def build_pipeline(settings: Settings) -> Pipeline | None:
         database_url=settings.database_url,
         local_id=settings.local_id,
         resume=live,
+        log_path=replay_log(
+            settings
+        ),  # reproduciendo: el log va a la sesión, no a out/
+        mirror_log=settings.record / recording.EVENTS_FILE if settings.record else None,
     )
     feed = (
-        SalonFeed(settings.local_id, processor, restaurant, settings.interval)
+        SalonFeed(
+            settings.local_id,
+            processor,
+            restaurant,
+            settings.interval,
+            video=settings.web_video,
+        )
         if settings.web_port is not None
         else None
     )
@@ -230,6 +259,11 @@ def build_pipeline(settings: Settings) -> Pipeline | None:
         state_db=processor.db,
         on_reading=feed.on_reading if feed is not None else None,
     )
+    if feed is None and settings.web_video:
+        logger.warning(
+            "--web-video sin --web: no hay vista del salón que mostrar, el modo video "
+            "no hace nada"
+        )
     if feed is not None:
         assert settings.web_port is not None
         try:
@@ -252,6 +286,15 @@ def build_pipeline(settings: Settings) -> Pipeline | None:
         logger.info("Salón en vivo: %s", server.url)
         if server.dashboard is not None:
             logger.info("Dashboard: %s", server.url.replace("/salon", "/dashboard"))
+        if feed.video:
+            logger.warning(
+                "Modo video (--web-video): la imagen de la cámara, difuminada, se "
+                "sirve en %s/frame.jpg %s. Apagalo después de armar la cámara",
+                server.reachable_url,
+                f"a cualquiera en la red (--web-host {settings.web_host})"
+                if server.exposed
+                else "(solo en esta máquina)",
+            )
     if live:
         pipeline.resume()  # los ids y el suavizado, para que sigan siendo los mismos
     return pipeline
@@ -298,17 +341,47 @@ def run(settings: Settings, limit: int | None = None) -> int:
     """El loop: abre la fuente, graba si se pidió y procesa cada lectura."""
     if not require_source(settings):
         return 2
-    assert settings.source is not None  # lo garantiza `require_source`
-    pipeline = build_pipeline(settings)
+    source = settings.source
+    assert source is not None  # lo garantiza `require_source`
+    try:
+        settings = session_settings(settings)  # una sesión grabada: sus reglas
+        replay_dir = session_dir(settings)
+        if replay_dir is not None:
+            recording.reset_replay(replay_dir)  # lo de la vez anterior
+        if settings.record:
+            recording.ensure_free(
+                settings.record, alerts.DEFAULT_LOG
+            )  # antes de escribir ahí
+        # la carpeta de grabación la crea `build_pipeline` (la copia del log va ahí): si
+        # no se puede, la cámara todavía no se abrió
+        pipeline = build_pipeline(settings)
+    except OSError as e:
+        logger.error("%s", e)
+        return 2
     if pipeline is None:
         return 2
     readings = 0
     monitor = build_health_monitor(settings)
+    # `session` no se suelta aunque falle un frame: la sesión se cierra igual, con lo
+    # que haya; `recorder` es el que graba y se apaga al primer error de disco
+    session: SessionRecorder | None = None
     try:
-        # La carpeta de grabación primero: si no se puede crear, la cámara todavía
-        # no se abrió. Después la fuente, que sale de open_source con las caras
+        # La grabación antes que la fuente, que sale de open_source con las caras
         # difuminadas (C-3): nada de lo que sigue, tampoco la grabación, ve una cara.
-        recorder = FrameRecorder(settings.record) if settings.record else None
+        session = (
+            SessionRecorder(
+                settings.record,
+                rules=session_rules(settings),
+                local_id=settings.local_id,
+                source=source,
+                classifier=settings.classifier,
+                zones=pipeline.zones if pipeline.tables is None else None,
+                live=is_live_source(source),
+            )
+            if settings.record
+            else None
+        )
+        recorder: FrameRecorder | None = session
         # El detector de caras de una cámara se arma una sola vez y antes del latido:
         # cargarlo (o bajarlo) en cada reintento, o contarlo como tiempo sin lecturas,
         # no tiene sentido. Con un archivo lo arma `open_source` después de ver que
@@ -318,14 +391,19 @@ def run(settings: Settings, limit: int | None = None) -> int:
         protect = plate_protector(pipeline)
         anonymize = (
             privacy.default_anonymizer(face_model=settings.face_model, protect=protect)
-            if is_live_source(settings.source)
+            if is_live_source(source)
             else None
         )
         if monitor is not None:
             # antes de abrir la cámara: si no abre, también hay que enterarse
             monitor.start()
         frames = _open_frames(settings, anonymize, protect)
-        logger.info("Privacidad: caras difuminadas en la captura")
+        if replay_dir is not None and recording.frames_anonymized(replay_dir):
+            logger.info(
+                "Privacidad: frames de una sesión grabada, ya sin caras según sesion.json"
+            )
+        else:
+            logger.info("Privacidad: caras difuminadas en la captura")
         for frame, ts in frames:
             if recorder is not None:
                 recorder = _record(recorder, frame, ts)
@@ -356,6 +434,14 @@ def run(settings: Settings, limit: int | None = None) -> int:
         if monitor is not None:
             monitor.stop()
         pipeline.close()
+        if session is not None:
+            # cada evento ya bajó al disco al escribirse (EventLog, buffering=1): la
+            # sesión queda completa, con sus eventos, aunque se haya cortado a mano
+            try:
+                # incompleta si se cortaron los frames o la copia de los eventos
+                session.finish(truncated=recorder is None or alerts.mirror_lost())
+            except OSError as e:
+                logger.error("No se pudo cerrar la sesión grabada: %s", e)
     logger.info("%d lecturas", readings)
     return 0 if readings else 1
 
@@ -403,6 +489,111 @@ def _open_frames(
             wait = next(waits)
             logger.warning("%s: reintento en %g s", error, wait)
             time.sleep(wait)
+
+
+# Lo que decide los avisos y va a `sesion.json` para reproducir con lo mismo.
+SESSION_RULES = (
+    "interval",
+    "demo",
+    "alert_t1",
+    "alert_t2",
+    "alert_reminder",
+    "finished_after",
+    "smooth_readings",
+    "smooth_hard_readings",
+    "smooth_min_confidence",
+    "restaurante",  # la comanda: filtra qué es un plato y qué pedido es
+    "yolo_conf",
+)
+
+
+def session_rules(settings: Settings) -> dict[str, Any]:
+    """Las reglas de esta corrida, resueltas (`finished_after` ya en segundos)."""
+    rules = {name: getattr(settings, name) for name in SESSION_RULES}
+    rules["finished_after"] = finished_after_seconds(settings)
+    # rutas absolutas y en POSIX: la sesión se reproduce desde otra carpeta o máquina
+    return {
+        k: v.resolve().as_posix() if isinstance(v, Path) else v
+        for k, v in rules.items()
+    }
+
+
+def replay_log(settings: Settings) -> Path | None:
+    """Reproduciendo una sesión, el log de `alerts` de esa corrida va a la sesión
+    (`reproduccion.jsonl`, lo que compara `tools/comparar_sesion.py`) y no al log
+    compartido de `out/`, que es el del servicio de verdad. `None`: el de siempre."""
+    session = session_dir(settings)
+    return None if session is None else session / recording.REPLAY_EVENTS_FILE
+
+
+def is_session_source(settings: Settings) -> bool:
+    return session_dir(settings) is not None
+
+
+def session_dir(settings: Settings) -> Path | None:
+    """La carpeta de la sesión grabada si la fuente es una; si no, `None`."""
+    if settings.source is None or not recording.is_session(Path(settings.source)):
+        return None
+    return Path(settings.source)
+
+
+def session_settings(settings: Settings) -> Settings:
+    """Si la fuente es una sesión grabada (B-1), se reproduce con las reglas grabadas
+    (cadencia, umbrales, suavizado): con otras, los avisos no coinciden y la
+    reproducción no reproduce nada. Para probar otras reglas, editar `sesion.json`.
+    Y sin tocar nada de verdad: ni Telegram ni la base compartida (los avisos van a
+    una SQLite dentro de la sesión). `OSError` si la sesión no se puede leer."""
+    session = session_dir(settings)
+    if session is None:
+        return settings
+    info = recording.read_info(session)
+    rules = info.get("rules")
+    if not isinstance(rules, dict):
+        raise OSError(f"{settings.source}: sesion.json sin `rules`")
+    # también los `null`: "umbral por defecto" en la grabación tiene que seguir
+    # siéndolo, aunque el toml de esta máquina diga otra cosa
+    update: dict[str, Any] = {k: v for k, v in rules.items() if k in SESSION_RULES}
+    if update.get("interval") is None:
+        raise OSError(f"{settings.source}: sesion.json sin cadencia")
+    update["telegram"] = False
+    if settings.record:  # viene del toml o del entorno: una reproducción no se graba
+        logger.info("Reproduciendo: no se graba (la sesión ya es la grabación)")
+    update["record"] = None
+    update["database_url"] = (
+        f"sqlite:///{(session / recording.REPLAY_DB).resolve().as_posix()}"
+    )
+    if update.get("restaurante") is not None and not isinstance(
+        update["restaurante"], str
+    ):
+        raise OSError(
+            f"{settings.source}: sesion.json, regla inválida: restaurante={update['restaurante']!r}"
+        )
+    if update.get("restaurante") and not Path(update["restaurante"]).exists():
+        logger.warning(
+            "La comanda de la grabación (%s) no está en esta máquina: va %s",
+            update["restaurante"],
+            settings.restaurante,
+        )
+        del update["restaurante"]
+    replay = settings.model_copy()
+    for name, value in update.items():
+        try:  # con validación: sesion.json se puede editar a mano
+            replay.__pydantic_validator__.validate_assignment(replay, name, value)
+        except ValidationError as e:
+            raise OSError(
+                f"{settings.source}: sesion.json, regla inválida: {name}={value!r} ({e})"
+            ) from e
+    changed = {
+        k: getattr(replay, k)
+        for k in update
+        if k in SESSION_RULES and getattr(settings, k) != getattr(replay, k)
+    }
+    if changed:
+        logger.info(
+            "Sesión grabada: se reproduce con sus reglas (%s)",
+            ", ".join(f"{k}={v}" for k, v in changed.items()),
+        )
+    return replay
 
 
 def _record(recorder: FrameRecorder, frame, ts) -> FrameRecorder | None:
