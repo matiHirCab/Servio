@@ -7,7 +7,8 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,400;12..96,500;12..96,700;12..96,800&display=swap">
 <style>
-/* D-1 · estilo «Pizarra» (F-2): bloques de color, números grandes, primero celular. */
+/* D-1 · estilo «Pizarra» (F-2): bloques de color, números grandes, primero celular.
+   Desde 960 px (compu, tele del local) las tarjetas van en filas y el turno en dos columnas. */
 :root{
   --bg:#F3F4F6; --card:#fff; --ink:#13223F; --muted:#4b5568; --line:#e3e6ea;
   --navy:#13223F; --tomato:#C93A1F; --butter:#FFE6A3; --mint:#CDEFDF; --rose:#FFD9CF;
@@ -58,6 +59,24 @@ tr.hot td{color:var(--tomato);font-weight:700}
 .ax span{flex:1;text-align:center}
 .empty{color:var(--muted);font-size:14px;margin:0}
 .error{background:var(--rose);border-radius:22px;padding:16px}
+.top,.col,.cols{display:flex;flex-direction:column;gap:12px;min-width:0}
+.hero{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
+.hero>:first-child{grid-column:1/-1}
+@media (min-width:960px){
+  main{max-width:1240px;padding:32px 32px 56px;gap:16px}
+  .top{display:grid;grid-template-columns:1fr minmax(280px,360px);align-items:center;gap:24px}
+  .cols{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px;align-items:start}
+  .col{gap:16px}
+  .two{gap:16px}
+  .two.four{grid-template-columns:repeat(4,minmax(0,1fr))}
+  .hero{grid-template-columns:2fr 1fr 1fr;gap:16px}
+  .hero>:first-child{grid-column:auto}
+  .tile{padding:22px}
+  .brand{font-size:30px}
+  h2{font-size:28px;margin-top:20px}
+  .huge{font-size:96px}
+  .chart{height:160px}
+}
 </style>
 </head>
 <body>
@@ -330,17 +349,20 @@ function salonButton(data) {
   i.innerHTML = '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6"/></svg>';
   return add(a, i);
 }
-function turno(m, withTiles) {
-  return [
-    withTiles ? add(el("div", "two"), sinAtender(m), olvidadas(m)) : null,
-    avisos(m), mozos(m),
-    add(el("div", "two"), rotacion(m), siguiente(m)),
-    pico(m), vuelvenLista(m), resumen(m),
-  ];
+function topBar(data) {
+  return add(el("div", "top"), header(data), salonButton(data));
+}
+function turno(m) {
+  // celular: una columna en este orden; pantalla grande: la gente a la izquierda
+  // (avisos, mozos y horas pico), los números del servicio a la derecha
+  return add(el("div", "cols"),
+    add(el("div", "col"), add(el("div", "col"), avisos(m)), mozos(m), pico(m)),
+    add(el("div", "col"), add(el("div", "two"), rotacion(m), siguiente(m)),
+      vuelvenLista(m), resumen(m)));
 }
 function renderEncargado(data) {
   const m = data.metricas;
-  add(app, header(data), salonButton(data), respuesta(m, true), ...turno(m, true));
+  add(app, topBar(data), add(el("div", "hero"), respuesta(m, true), sinAtender(m), olvidadas(m)), turno(m));
 }
 function renderDueno(data) {
   const m = data.metricas;
@@ -353,14 +375,16 @@ function renderDueno(data) {
     tabs.appendChild(a);
   });
   const h = id => { const n = el("h2", null, {resultados: "Resultados", carta: "Carta", turno: "Turno", config: "Configuración"}[id]); n.id = id; return n; };
-  add(app, header(data), tabs, salonButton(data), h("resultados"),
+  const later = pend(data, "historico", "Semana a semana");
+  add(app, topBar(data), tabs, h("resultados"),
     pend(data, "antes_despues", "Antes / después con Servio"),
-    add(el("div", "two"), respuesta(m, false), sinAtender(m), olvidadas(m), vuelven(m)),
-    pend(data, "historico", "Semana a semana"),
-    add(el("div", "two"), desperdicio(m), adopcion(m)),
+    add(el("div", "two four"), respuesta(m, false), sinAtender(m), olvidadas(m), vuelven(m)),
+    later ? add(el("div", "hero"), later, desperdicio(m), adopcion(m))
+      : add(el("div", "two"), desperdicio(m), adopcion(m)),
     h("carta"), carta(m),
-    h("turno"), ...turno(m, false),
-    h("config"), pend(data, "costos_y_configuracion", "Costo de Servio"), config(data));
+    h("turno"), turno(m),
+    h("config"), pend(data, "costos_y_configuracion", "Costo de Servio"),
+    add(el("div", "cols"), config(data)));
 }
 
 async function load() {
