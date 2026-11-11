@@ -286,6 +286,12 @@ def build_pipeline(settings: Settings) -> Pipeline | None:
         logger.info("Salón en vivo: %s", server.url)
         if server.dashboard is not None:
             logger.info("Dashboard: %s", server.url.replace("/salon", "/dashboard"))
+            if server.exposed:
+                logger.warning(
+                    "El dashboard no tiene login todavía: cualquiera en la red puede"
+                    " abrirlo con ?rol=dueno (--web-host %s)",
+                    settings.web_host,
+                )
         if feed.video:
             logger.warning(
                 "Modo video (--web-video): la imagen de la cámara, difuminada, se "

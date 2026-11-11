@@ -249,6 +249,39 @@ def waiter_reports(
     return by_waiter, wrong
 
 
+def dashboard_reports() -> dict[str, int]:
+    """Lo que devuelve el dashboard (D-1) a cada rol, con las mismas rutas que sirve
+    `--web`: la página y `/datos`. Deja `dashboard_<rol>.json` y devuelve el status
+    HTTP de cada rol (el mozo tiene que dar 403)."""
+    from servio_vision.dashboard import Dashboard
+    from servio_vision.db import Database
+    from servio_vision.roles import Roles
+    from servio_vision.settings import Settings
+
+    if not DB.exists():
+        return {}
+    db = Database(DB, local_id=Settings.load().local_id)
+    try:
+        dashboard = Dashboard(db, Roles.load())
+        base = f"/{db.local_id}/dashboard"
+        codes = {}
+        for rol in ROLES:
+            page = dashboard.handle(base, f"rol={rol}")
+            data = dashboard.handle(base + "/datos", f"rol={rol}")
+            if page is None or data is None:
+                codes[rol] = 404
+                continue
+            (TEST_DIR / f"dashboard_{rol}.json").write_bytes(data.body)
+            if page.status == data.status == 200:
+                metrics = json.loads(data.body).get("metricas") or {}
+                codes[rol] = 200 if any(v for v in metrics.values()) else 204
+            else:
+                codes[rol] = data.status
+        return codes
+    finally:
+        db.close()
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description="Levanta Servio y deja lo que ve cada rol en out/prueba_usuario/."
@@ -338,6 +371,7 @@ def main(argv: list[str] | None = None) -> int:
         for rol in ROLES
     }
     run_tool(["tools/metricas.py", "--image", str(TEST_DIR / "metricas.png")])
+    dash = dashboard_reports()
     run_tool(
         ["tools/resumen.py", "--image", str(TEST_DIR / "resumen.png")],
         TEST_DIR / "resumen.txt",
@@ -365,6 +399,9 @@ def main(argv: list[str] | None = None) -> int:
         (role_codes["mozo"] == 3, "el mozo no ve métricas"),
         (role_codes["encargado"] == 0, "el encargado ve sus métricas"),
         (role_codes["dueno"] == 0, "el dueño ve sus métricas"),
+        (dash.get("mozo") == 403, f"el mozo no abre el dashboard ({dash.get('mozo')})"),
+        (dash.get("encargado") == 200, f"el encargado abre su dashboard ({dash.get('encargado')})"),
+        (dash.get("dueno") == 200, f"el dueño abre su dashboard ({dash.get('dueno')})"),
         (len(shots) > 0, f"{len(shots)} fotos de la vista de reconocimiento"),
     ]  # fmt: skip
     if args.classifier == "fake":
@@ -390,9 +427,14 @@ def main(argv: list[str] | None = None) -> int:
             "`mozo_<nombre>.txt` (los avisos de sus mesas, como le llegarían al reloj). "
             "`metricas_mozo.txt` tiene que decir que no ve métricas."
         ),
-        "- **Encargado:** `metricas_encargado.txt`, `resumen.txt` / `resumen.png`.",
         (
-            "- **Dueño:** `metricas_dueno.txt`, `metricas.png` y la configuración en "
+            "- **Encargado:** `metricas_encargado.txt`, `dashboard_encargado.json` (lo "
+            "que pide la página de `/<local>/dashboard?rol=encargado`), `resumen.txt` / "
+            "`resumen.png`."
+        ),
+        (
+            "- **Dueño:** `metricas_dueno.txt`, `dashboard_dueno.json`, `metricas.png` y "
+            "la configuración en "
             "`config/servio.toml`."
         ),
         (
