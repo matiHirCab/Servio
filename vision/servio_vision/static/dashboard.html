@@ -1,0 +1,384 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Servio · Dashboard</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,400;12..96,500;12..96,700;12..96,800&display=swap">
+<style>
+/* D-1 · estilo «Pizarra» (F-2): bloques de color, números grandes, primero celular. */
+:root{
+  --bg:#F3F4F6; --card:#fff; --ink:#13223F; --muted:#4b5568; --line:#e3e6ea;
+  --navy:#13223F; --tomato:#C93A1F; --butter:#FFE6A3; --mint:#CDEFDF; --rose:#FFD9CF;
+}
+*{box-sizing:border-box}
+html,body{margin:0;background:var(--bg)}
+body{color:var(--ink);font-family:"Bricolage Grotesque",system-ui,sans-serif;-webkit-font-smoothing:antialiased}
+main{max-width:480px;margin:0 auto;padding:20px 16px 40px;display:flex;flex-direction:column;gap:12px}
+a{color:var(--ink)}
+.row{display:flex;align-items:center;justify-content:space-between;gap:12px}
+.brand{font-size:26px;font-weight:800;letter-spacing:-.02em}
+.sub{font-size:14px;line-height:1.4;margin:0}
+.muted{color:var(--muted)}
+.pill{display:inline-flex;align-items:center;min-height:28px;padding:0 12px;border-radius:999px;font-size:13px;font-weight:700;white-space:nowrap}
+.tile{border-radius:28px;padding:18px;display:flex;flex-direction:column;gap:8px;background:var(--card)}
+.tile.navy{background:var(--navy);color:#fff}
+.tile.tomato{background:var(--tomato);color:#fff}
+.tile.butter{background:var(--butter)}
+.tile.mint{background:var(--mint)}
+.tile.pending{background:transparent;border:2px dashed #c3c9d3}
+.lb{font-size:14px;font-weight:500;opacity:.85}
+.huge{font-size:76px;font-weight:800;line-height:.95;letter-spacing:-.03em;font-variant-numeric:tabular-nums}
+.big{font-size:44px;font-weight:800;line-height:1;letter-spacing:-.02em;font-variant-numeric:tabular-nums}
+.huge small,.big small{font-size:.32em;font-weight:700;letter-spacing:0;margin-left:4px}
+.two{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
+h2{margin:14px 0 0;font-size:24px;font-weight:800;letter-spacing:-.01em;scroll-margin-top:72px}
+h3{margin:0;font-size:20px;font-weight:800}
+.btn{display:flex;align-items:center;justify-content:space-between;min-height:56px;border-radius:999px;background:var(--navy);color:#fff;font-size:17px;font-weight:700;text-decoration:none;padding:0 8px 0 22px}
+.btn i{width:40px;height:40px;border-radius:50%;background:var(--butter);color:var(--ink);display:flex;align-items:center;justify-content:center}
+.tabs{display:flex;gap:6px;overflow-x:auto;position:sticky;top:0;background:var(--bg);padding:8px 0;z-index:1}
+.tab{flex:none;display:inline-flex;align-items:center;min-height:44px;padding:0 16px;border-radius:999px;background:#fff;color:var(--ink);font-size:15px;font-weight:700;text-decoration:none}
+.tab.on{background:var(--navy);color:#fff}
+.al{display:grid;grid-template-columns:52px 1fr auto;gap:12px;align-items:center;background:#fff;border-radius:22px;padding:12px}
+.mesa{width:52px;height:52px;border-radius:16px;display:flex;align-items:center;justify-content:center;font-size:18px;font-weight:800;text-align:center;line-height:1}
+.al p{margin:0;font-size:16px;font-weight:700;line-height:1.25}
+.al p small{display:block;font-size:13px;font-weight:400;color:var(--muted)}
+table{width:100%;border-collapse:collapse;font-size:14px;font-variant-numeric:tabular-nums}
+th{font-size:12px;font-weight:500;color:var(--muted);text-align:right;padding:0 0 8px 8px}
+td{text-align:right;padding:11px 0 11px 8px;border-top:1px solid var(--line)}
+th:first-child,td:first-child{text-align:left;padding-left:0}
+tr.hot td{color:var(--tomato);font-weight:700}
+.li{display:flex;align-items:center;justify-content:space-between;gap:12px;min-height:48px;border-top:1px solid var(--line);font-size:15px}
+.li:first-of-type{border-top:0}
+.chart{display:flex;gap:6px;align-items:flex-end;height:120px}
+.chart div{flex:1;border-radius:10px;background:#d5dbe6;min-height:4px}
+.chart div.hot{background:var(--tomato)}
+.ax{display:flex;gap:6px;font-size:11px;color:var(--muted)}
+.ax span{flex:1;text-align:center}
+.empty{color:var(--muted);font-size:14px;margin:0}
+.error{background:var(--rose);border-radius:22px;padding:16px}
+</style>
+</head>
+<body>
+<main id="app" aria-live="polite">
+  <p class="sub muted">Cargando…</p>
+</main>
+<script>
+"use strict";
+// Lee /<local>/dashboard/datos?rol=… y arma las tarjetas. Los textos de la base
+// (mozos, platos) entran con textContent, nunca como HTML.
+const params = new URLSearchParams(location.search);
+const ROLE = params.get("rol") || "encargado";
+// /<local>/dashboard (con o sin barra al final)
+let UPDATED = "–";
+const BASE = location.pathname.replace(/\/+$/, "");
+const app = document.getElementById("app");
+
+function el(tag, cls, text) {
+  const n = document.createElement(tag);
+  if (cls) n.className = cls;
+  if (text !== undefined && text !== null) n.textContent = text;
+  return n;
+}
+function add(parent, ...kids) { kids.forEach(k => k && parent.appendChild(k)); return parent; }
+function num(value, unit, cls) {
+  const n = el("div", cls || "big", value);
+  if (unit) add(n, el("small", null, unit));
+  return n;
+}
+const fmt = {
+  pct: v => v == null ? "–" : Math.round(v * 100) + " %",
+  pctNum: v => v == null ? "–" : String(Math.round(v * 100)),
+  dec: v => v == null ? "–" : v.toLocaleString("es-UY", {maximumFractionDigits: 1}),
+  pesos: v => v == null ? "–" : "$" + v.toLocaleString("es-UY", {maximumFractionDigits: 0}),
+  secs: s => {
+    if (s == null) return ["–", ""];
+    if (s < 60) return [String(Math.round(s)), "s"];
+    const m = Math.floor(s / 60), r = Math.round(s % 60);
+    return [m + ":" + String(r).padStart(2, "0"), "min"];
+  },
+};
+function tile(cls, label, ...kids) {
+  const t = el("section", "tile " + (cls || ""));
+  t.setAttribute("aria-label", label);
+  return add(t, el("span", "lb", label), ...kids);
+}
+function pending(label, why) {
+  return tile("pending", label, el("p", "sub muted", why));
+}
+function noData(label) {
+  return tile("", label, el("p", "empty", "Sin datos todavía."));
+}
+
+// ---- tarjetas, una por métrica ----
+
+function respuesta(d, hero) {
+  const v = d.tiempo_respuesta;
+  if (!v) return noData("Tiempo de respuesta");
+  const [n, u] = fmt.secs(v.segundos);
+  return tile(hero ? "navy" : "", "Tiempo de respuesta", num(n, u, hero ? "huge" : "big"),
+    el("p", "sub", "del aviso a la respuesta del mozo"));
+}
+function sinAtender(d) {
+  const v = d.mesa_terminada_sin_atender;
+  if (!v) return noData("Mesas sin atender");
+  return tile("tomato", "Sin atender > " + v.limite_min + " min", num(fmt.pctNum(v.fuera_de_tiempo), "%"),
+    el("p", "sub", "esperan " + fmt.dec(v.promedio) + " min en promedio · peor " + fmt.dec(v.peor)));
+}
+function olvidadas(d) {
+  const v = d.mesas_olvidadas;
+  if (!v) return noData("Mesas olvidadas");
+  const worst = v.por_mozo.filter(w => w.olvidadas > 0);
+  const who = worst.length === 1 ? "todas de " + worst[0].mozo
+    : worst.length ? "de " + worst.length + " mozos" : "ninguna";
+  return tile("butter", "Mesas olvidadas", num(String(v.olvidadas), "/" + v.avisos), el("p", "sub", who));
+}
+function vuelven(d) {
+  const v = d.platos_que_vuelven;
+  if (!v) return noData("Platos que vuelven");
+  return tile("mint", "Platos que vuelven", num(fmt.pctNum(v.total), "%"), el("p", "sub", "con comida en el plato"));
+}
+function avisos(d) {
+  const list = d.avisos_abiertos || [];
+  const frag = document.createDocumentFragment();
+  const head = el("div", "row");
+  head.style.marginTop = "8px";
+  add(head, el("h3", null, "Avisos abiertos"), el("span", "pill", String(list.length)));
+  head.lastChild.style.background = list.length ? "var(--tomato)" : "var(--mint)";
+  head.lastChild.style.color = list.length ? "#fff" : "var(--ink)";
+  frag.appendChild(head);
+  if (!list.length) frag.appendChild(el("p", "empty", "Nada pendiente a las " + UPDATED + "."));
+  const tint = {"Plato lleno": "var(--rose)", "Mesa terminada": "var(--mint)"};
+  list.forEach(a => {
+    const row = el("div", "al");
+    const mesa = el("span", "mesa", a.mesa);
+    mesa.style.background = tint[a.tipo] || "var(--butter)";
+    const p = el("p", null, a.tipo);
+    add(p, el("small", null, a.mozo + " · " + (a.respuesta ? "«" + a.respuesta + "»" : "sin respuesta")));
+    const t = el("span", "pill", a.minutos + " min");
+    t.style.background = mesa.style.background;
+    frag.appendChild(add(row, mesa, p, t));
+  });
+  return frag;
+}
+function mozos(d) {
+  const resp = d.tiempo_respuesta ? d.tiempo_respuesta.por_mozo : [];
+  const load = d.carga_por_mozo || [];
+  const forg = d.mesas_olvidadas ? d.mesas_olvidadas.por_mozo : [];
+  const names = [...new Set([...load.map(r => r.mozo), ...resp.map(r => r.mozo), ...forg.map(r => r.mozo)])];
+  if (!names.length) return null;
+  const t = el("section", "tile");
+  t.setAttribute("aria-label", "Mozos");
+  add(t, add(el("div", "row"), el("h3", null, "Mozos"), el("span", "sub muted", "por servicio")));
+  const table = el("table");
+  const head = el("tr");
+  ["Mozo", "Mesas", "Respuesta", "Retiro", "Olvidadas"].forEach(h => head.appendChild(el("th", null, h)));
+  add(table, add(el("thead"), head));
+  const body = el("tbody");
+  let worst = null, worstScore = -1;
+  names.forEach(n => {
+    const l = load.find(r => r.mozo === n) || {};
+    const r = resp.find(x => x.mozo === n) || {};
+    const f = forg.find(x => x.mozo === n) || {olvidadas: 0};
+    const score = (f.olvidadas || 0) * 10 + (l.minutos_retiro || 0);
+    if (score > worstScore) { worstScore = score; worst = n; }
+    const tr = el("tr");
+    tr.dataset.mozo = n;
+    add(tr, el("td", null, n), el("td", null, fmt.dec(l.mesas_por_servicio)),
+      el("td", null, fmt.secs(r.segundos).join(" ")),
+      el("td", null, l.minutos_retiro == null ? "–" : fmt.dec(l.minutos_retiro) + " min"),
+      el("td", null, String(f.olvidadas || 0)));
+    body.appendChild(tr);
+  });
+  body.querySelectorAll("tr").forEach(tr => { if (tr.dataset.mozo === worst && worstScore > 0) tr.className = "hot"; });
+  add(t, add(table, body));
+  if (worst && worstScore > 0) add(t, el("p", "sub muted", worst + " es el que más tarda: revisá cuántas mesas tiene."));
+  return t;
+}
+function rotacion(d) {
+  const v = d.rotacion;
+  if (!v) return noData("Rotación");
+  return tile("mint", "Rotación", num(fmt.dec(v.mesas_por_servicio)),
+    el("p", "sub", "mesas por servicio · " + v.minutos + " min c/u"));
+}
+function siguiente(d) {
+  const v = d.espera_siguiente_plato;
+  if (!v) return noData("Siguiente plato");
+  const veces = v.reduce((s, r) => s + r.veces, 0);
+  const min = v.reduce((s, r) => s + r.minutos * r.veces, 0) / veces;
+  return tile("", "Siguiente plato", num(fmt.dec(min), "min"), el("p", "sub", "esperaron " + veces + " mesas"));
+}
+function pico(d) {
+  const v = d.horas_pico;
+  if (!v) return noData("Horas pico");
+  const t = el("section", "tile");
+  t.setAttribute("aria-label", "Horas pico");
+  add(t, add(el("div", "row"), el("h3", null, "Horas pico"), el("span", "sub muted", "% que esperó > 5 min")));
+  const chart = el("div", "chart");
+  const max = Math.max(...v.map(s => s.tarde || 0), 0.01);
+  const top = v.reduce((a, b) => (b.tarde || 0) > (a.tarde || 0) ? b : a, v[0]);
+  chart.setAttribute("role", "img");
+  chart.setAttribute("aria-label", v.map(s => s.franja + " " + fmt.pct(s.tarde)).join(", "));
+  const ax = el("div", "ax");
+  v.forEach(s => {
+    const b = el("div", (s.tarde || 0) >= max * 0.9 ? "hot" : "");
+    b.style.height = Math.round(((s.tarde || 0) / max) * 100) + "%";
+    b.title = s.franja + " · " + s.avisos + " avisos · " + fmt.pct(s.tarde);
+    chart.appendChild(b);
+    ax.appendChild(el("span", null, s.franja));
+  });
+  add(t, chart, ax, el("p", "sub muted", "Peor franja: " + top.franja + " (" + fmt.pct(top.tarde) + ")."));
+  return t;
+}
+function vuelvenLista(d) {
+  const v = d.platos_que_vuelven;
+  if (!v) return null;
+  const t = tile("butter", "Platos que vuelven");
+  v.por_plato.slice(0, 3).forEach(p => {
+    const r = el("div", "row");
+    const txt = el("p", "sub");
+    add(txt, el("b", null, p.plato), el("br"), document.createTextNode(p.motivo && p.motivo !== "-" ? "«" + p.motivo + "»" : ""));
+    add(r, txt, num(fmt.pctNum(p.vuelve), "%"));
+    t.appendChild(r);
+  });
+  return t;
+}
+function resumen(d) {
+  if (!d.resumen_cierre) return null;
+  return tile("", "Resumen al cerrar", el("p", "sub muted", "Te llega por " + d.resumen_cierre.canal + " cuando cierra el servicio."));
+}
+function desperdicio(d) {
+  const v = d.desperdicio;
+  if (!v) return noData("Vuelve a la cocina");
+  const top = v.por_plato[0];
+  const share = top && v.total ? Math.round(top.pesos / v.total * 100) : 0;
+  const n = num(fmt.pesos(v.total));
+  n.style.fontSize = "34px";
+  return tile("butter", "Vuelve a la cocina", n,
+    el("p", "sub", (v.por_servicio != null ? fmt.pesos(v.por_servicio) + " por servicio · " : "") + (top ? share + " % es " + top.plato : "")));
+}
+function adopcion(d) {
+  const v = d.adopcion;
+  if (!v) return noData("Los mozos responden");
+  return tile("", "Los mozos responden", num(String(Math.round(v.respondidos / v.avisos * 100)), "%"),
+    el("p", "sub", v.no_hacia_falta + " «no hacía falta»"));
+}
+function carta(d) {
+  const back = d.platos_que_vuelven ? d.platos_que_vuelven.por_plato : [];
+  const pace = d.ritmo_por_plato || [], left = d.sobra_por_plato || [];
+  const names = [...new Set([...back.map(p => p.plato), ...pace.map(p => p.plato), ...left.map(p => p.plato)])];
+  if (!names.length) return noData("Por plato");
+  const t = el("section", "tile");
+  t.setAttribute("aria-label", "Por plato");
+  const table = el("table"), head = el("tr"), body = el("tbody");
+  ["Plato", "Vuelve", "Ritmo", "Sobra"].forEach(h => head.appendChild(el("th", null, h)));
+  add(table, add(el("thead"), head), body);
+  names.forEach((n, i) => {
+    const b = back.find(p => p.plato === n) || {}, p = pace.find(x => x.plato === n) || {}, l = left.find(x => x.plato === n) || {};
+    const tr = add(el("tr", i === 0 && back.length ? "hot" : ""), el("td", null, n), el("td", null, fmt.pct(b.vuelve)),
+      el("td", null, p.minutos == null ? "–" : fmt.dec(p.minutos) + "′"), el("td", null, fmt.pct(l.sobra)));
+    body.appendChild(tr);
+  });
+  add(t, table);
+  const first = back[0];
+  if (first && first.motivo && first.motivo !== "-") add(t, el("p", "sub muted", first.plato + ": «" + first.motivo + "» es lo que más responden."));
+  if (!pace.length || !left.length) add(t, el("p", "sub muted", "Ritmo y sobra salen solo con datos de la cámara."));
+  return t;
+}
+function config(d) {
+  const c = d.configuracion;
+  if (!c) return null;
+  const frag = document.createDocumentFragment();
+  const u = c.umbrales;
+  const local = el("section", "tile");
+  add(local, el("h3", null, "Local · " + d.local),
+    add(el("div", "li"), el("span", null, "Mesa sin atender"), el("span", null, u.mesa_sin_atender_min + " min")),
+    add(el("div", "li"), el("span", null, "Plato lleno sin respuesta"), el("span", null, Math.round(u.plato_lleno_sin_respuesta_s / 60) + " min")),
+    add(el("div", "li"), el("span", null, "Franja de horas pico"), el("span", null, u.franja_horas_pico_min + " min")));
+  frag.appendChild(local);
+  const team = el("section", "tile");
+  team.appendChild(el("h3", null, "Roles"));
+  c.roles.forEach(r => add(team, add(el("div", "li"), el("span", null, r.nombre),
+    el("span", "sub muted", r.vistas.length + " vistas · " + r.metricas + " métricas"))));
+  add(team, el("p", "sub muted", "Usuarios e invitaciones llegan con el login. Hoy se cambia en config/servio.toml."));
+  frag.appendChild(team);
+  return frag;
+}
+function pend(d, id, label) {
+  return d.pendientes && d.pendientes[id] ? pending(label, d.pendientes[id]) : null;
+}
+
+// ---- armado por rol ----
+
+function header(data) {
+  const h = el("header", "row");
+  const left = el("div");
+  left.style.display = "flex"; left.style.flexDirection = "column";
+  add(left, el("span", "brand", "servio"), el("span", "sub muted", data.local + " · " + data.nombre_rol.toLowerCase()));
+  const when = el("span", "pill", "Actualizado " + data.actualizado);
+  when.style.background = "var(--mint)";
+  when.title = "Se actualiza una vez por hora";
+  return add(h, left, when);
+}
+function salonButton(data) {
+  if (!data.vistas.includes("reconocimiento")) return null;
+  const a = el("a", "btn");
+  a.href = BASE.replace(/\/dashboard$/, "/salon");
+  a.appendChild(document.createTextNode("Ver el salón en vivo"));
+  const i = el("i");
+  i.innerHTML = '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6"/></svg>';
+  return add(a, i);
+}
+function turno(m, withTiles) {
+  return [
+    withTiles ? add(el("div", "two"), sinAtender(m), olvidadas(m)) : null,
+    avisos(m), mozos(m),
+    add(el("div", "two"), rotacion(m), siguiente(m)),
+    pico(m), vuelvenLista(m), resumen(m),
+  ];
+}
+function renderEncargado(data) {
+  const m = data.metricas;
+  add(app, header(data), salonButton(data), respuesta(m, true), ...turno(m, true));
+}
+function renderDueno(data) {
+  const m = data.metricas;
+  const tabs = el("nav", "tabs");
+  tabs.setAttribute("aria-label", "Secciones");
+  [["resultados", "Resultados"], ["carta", "Carta"], ["turno", "Turno"], ["config", "Config"]].forEach(([id, label], i) => {
+    const a = el("a", "tab" + (i === 0 ? " on" : ""), label);
+    a.href = "#" + id;
+    a.addEventListener("click", () => { tabs.querySelectorAll(".tab").forEach(x => x.classList.remove("on")); a.classList.add("on"); });
+    tabs.appendChild(a);
+  });
+  const h = id => { const n = el("h2", null, {resultados: "Resultados", carta: "Carta", turno: "Turno", config: "Configuración"}[id]); n.id = id; return n; };
+  add(app, header(data), tabs, salonButton(data), h("resultados"),
+    pend(data, "antes_despues", "Antes / después con Servio"),
+    add(el("div", "two"), respuesta(m, false), sinAtender(m), olvidadas(m), vuelven(m)),
+    pend(data, "historico", "Semana a semana"),
+    add(el("div", "two"), desperdicio(m), adopcion(m)),
+    h("carta"), carta(m),
+    h("turno"), ...turno(m, false),
+    h("config"), pend(data, "costos_y_configuracion", "Costo de Servio"), config(data));
+}
+
+async function load() {
+  try {
+    const res = await fetch(BASE + "/datos?rol=" + encodeURIComponent(ROLE), {cache: "no-store"});
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || res.statusText);
+    UPDATED = data.actualizado;
+    app.replaceChildren();
+    document.title = "Servio · " + data.nombre_rol;
+    (data.configuracion ? renderDueno : renderEncargado)(data);
+    setTimeout(load, data.refresco_s * 1000);
+  } catch (e) {
+    app.replaceChildren(header({local: "", nombre_rol: ROLE, actualizado: "–"}), el("p", "error", "No se pudo cargar el dashboard: " + e.message));
+    setTimeout(load, 60 * 1000);
+  }
+}
+load();
+</script>
+</body>
+</html>

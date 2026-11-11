@@ -16,6 +16,8 @@ navegador. Rutas (`<local>` es el `local_id` de la casa, `local` por defecto):
                             el navegador al armarla. Solo con `--web-video`, si no
                             404; 503 si no se pudo codificar
 - `/`                       redirige a `/<local>/salon`
+- `/<local>/dashboard`      el dashboard del encargado y del dueño, si se le pasa
+                            uno (`dashboard.py`, D-1)
 
 Por defecto escucha solo en esta máquina (127.0.0.1). Con `--web-host 0.0.0.0` se
 abre desde el celular o la tablet en la misma red. No tiene usuarios ni contraseña:
@@ -30,6 +32,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, quote, unquote, urlsplit
 
+from servio_vision.dashboard import Dashboard
 from servio_vision.salon import BROKEN_FRAME, SalonFeed
 
 logger = logging.getLogger("servio")
@@ -41,8 +44,15 @@ KEEPALIVE_S = 15.0  # un comentario SSE cada tanto, para que no se corte la cone
 class SalonServer:
     """`start()` levanta el servidor en un hilo propio; `stop()` lo apaga."""
 
-    def __init__(self, feed: SalonFeed, host: str = "127.0.0.1", port: int = 8000):
+    def __init__(
+        self,
+        feed: SalonFeed,
+        host: str = "127.0.0.1",
+        port: int = 8000,
+        dashboard: Dashboard | None = None,
+    ):
         self.feed = feed
+        self.dashboard = dashboard
         self.closing = threading.Event()
         self.httpd = ThreadingHTTPServer((host, port), _handler(self))
         self.httpd.daemon_threads = True
@@ -111,6 +121,12 @@ def _handler(server: SalonServer) -> type[BaseHTTPRequestHandler]:
         def do_GET(self) -> None:
             url = urlsplit(self.path)
             parts = [unquote(p) for p in url.path.split("/") if p]
+            if server.dashboard is not None:
+                res = server.dashboard.handle(unquote(url.path), url.query)
+                if res is not None:
+                    return self._send(
+                        HTTPStatus(res.status), res.body, res.content_type
+                    )
             if not parts:
                 return self._redirect(f"/{quote(feed.local_id)}/salon")
             if parts[0] != feed.local_id or len(parts) < 2 or parts[1] != "salon":
